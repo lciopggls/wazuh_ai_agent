@@ -89,3 +89,6 @@ class AttributionState(TypedDict):
     # 可视化展示
     mermaid_chart: str | None
     svg_chart: str | None
+
+    # 攻击调查概要（JSON dict，前端可直接渲染）
+    attack_abstract: dict[str, Any] | None

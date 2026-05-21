@@ -67,6 +67,32 @@ class SynthesizedFindings(BaseModel):
     )
 
 
+class AttackAbstractModel(BaseModel):
+    """攻击调查概要结构，用于 attack_abstract_node 的 PydanticOutputParser 解析。"""
+
+    hosts: list[str] = Field(description="涉及的主机列表，格式：主机名（Agent ID）")
+    start_time: str = Field(description="攻击起始时间，如 '2024-05-20 10:15:00'")
+    end_time: str = Field(description="攻击结束时间，如 '2024-05-20 10:45:30'")
+    duration: str = Field(description="攻击持续时长，如 '0时30分30秒'")
+    ioc_files: list[str] = Field(
+        description="涉及的文件名IOC列表（含路径），无则空列表。排除明确的系统良性文件。"
+    )
+    ioc_domains: list[str] = Field(
+        description="涉及的域名/IP IOC列表，无则空列表。排除纯内网基础设施IP。"
+    )
+    ioc_processes: list[str] = Field(
+        description="涉及的恶意/被利用进程名IOC列表，含PID等关键上下文，无则空列表。"
+    )
+    tactics: list[str] = Field(
+        description=(
+            "涉及的ATT&CK战术阶段中文名列表，仅限以下12个："
+            "初始访问、执行、持久化、权限提升、防御规避、凭证访问、"
+            "发现、横向移动、收集、数据窃取、命令与控制、影响"
+        )
+    )
+    tactics_count: int = Field(description="涉及的不同战术阶段总数")
+
+
 """
 Nodes:
 0. Planner_Node — routes between simple log query and attack attribution
@@ -79,6 +105,7 @@ Nodes:
 7. User_Input_Node
 8. Visualization_Node
 9. Simple_Log_Query_Node
+10. Attack_Abstract_Node
 """
 
 
@@ -382,7 +409,7 @@ def attribution_decision_node(
 
 def attribution_planner_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
     """
-    Node 1: Attribution Planner Node.
+    Node 2: Attribution Planner Node.
     """
     logger.info("Executing Attribution Planner Node")
 
@@ -594,7 +621,7 @@ Every query already executed against Wazuh Indexer is recorded below. Cross-chec
 
 
 def log_retrieval_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 2: Log Retrieval Node"""
+    """Node 3: Log Retrieval Node"""
     logger.info("Executing Log Retrieval Node")
 
     next_action = state.get("next_action_fromAttributionPlannerNode")
@@ -751,7 +778,7 @@ If the Planner's instruction does NOT explicitly include an Agent ID and/or a ti
 def information_synthesizer_node(
     state: AttributionState, config: RunnableConfig, model: BaseChatModel
 ):
-    """Node 3: Information Synthesizer Node."""
+    """Node 4: Information Synthesizer Node."""
     logger.info("Executing Information Synthesizer Node")
 
     raw_logs = state.get("current_raw_logs")
@@ -954,7 +981,7 @@ You MUST structure the `detailed_findings` field using the following generalized
 
 
 def mitre_expert_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 4: MITRE Expert Node ."""
+    """Node 5: MITRE Expert Node."""
     logger.info("Executing MITRE Expert Node")
 
     next_action = state.get("next_action_fromAttributionPlannerNode")
@@ -1023,7 +1050,7 @@ def mitre_expert_node(state: AttributionState, config: RunnableConfig, model: Ba
 
 
 def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 5: Reporter Node."""
+    """Node 6: Reporter Node."""
     logger.info("Executing Reporter Node: Formatting the final report...")
 
     next_action = state.get("next_action_fromAttributionPlannerNode")
@@ -1146,7 +1173,7 @@ Your task is to take the raw investigation findings provided by the Forensic Det
 
 
 def user_input_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 6: User Input Node ."""
+    """Node 7: User Input Node."""
     logger.info("Executing User Input Node (Suspending...)")
 
     next_action = state.get("next_action_fromDecisionNode")
@@ -1184,67 +1211,8 @@ def user_input_node(state: AttributionState, config: RunnableConfig, model: Base
     return {"next_action_fromDecisionNode": None}
 
 
-# def visualization_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-#     """Node 7: Visualization Node (Mermaid Flowchart)."""
-#     logger.info("Executing Visualization Node: Generating Mermaid chart...")
-
-#     final_report = state.get("final_report")
-#     if not final_report:
-#         logger.warning("No final report found. Skipping visualization.")
-#         return {
-#             "mermaid_chart": None,
-#             "messages": [AIMessage(content="[Visualizer] 缺少最终报告，无法生成攻击拓扑图。")],
-#         }
-
-
-#     human_prompt = "Here is the Upstream Forensic Report. Please locate the specific section titled '#### **ATTACK TIMELINE & EXECUTION FLOW**', extract the chronological events from that section only, and convert them into a Mermaid chart:\n\n{final_report}"
-
-#     prompt_template = ChatPromptTemplate.from_messages(
-#         [("system", visualizer_system_prompt), ("human", human_prompt)]
-#     )
-
-#     try:
-#         visualizer_chain = prompt_template | model
-#         result = visualizer_chain.invoke({"final_report": final_report})
-
-#         raw_content = result.content
-#         if isinstance(raw_content, list):
-#             # 针对大模型返回 [{"type": "text", "text": "..."}] 结构的情况
-#             text_parts = []
-#             for block in raw_content:
-#                 if isinstance(block, dict) and "text" in block:
-#                     text_parts.append(block["text"])
-#                 elif isinstance(block, str):
-#                     text_parts.append(block)
-#             raw_content = "".join(text_parts)
-#         elif not isinstance(raw_content, str):
-#             raw_content = str(raw_content)
-
-#         # 使用正则精确提取 mermaid 代码块
-#         match = re.search(r"```(?:mermaid)?\n(.*?)\n```", raw_content, re.DOTALL | re.IGNORECASE)
-#         if match:
-#             mermaid_code = match.group(1).strip()
-#         else:
-#             mermaid_code = raw_content.strip()
-
-#         mermaid_code_formatted = f"```mermaid\n{mermaid_code}\n```"
-
-#         logger.info("Mermaid chart generated successfully.")
-
-#         return {
-#             "mermaid_chart": mermaid_code_formatted,
-#             "messages": [
-#                 AIMessage(content=f"攻击链路可视化视图已生成：\n\n{mermaid_code_formatted}")
-#             ],
-#         }
-
-#     except Exception as e:
-#         logger.error("Error generating mermaid chart: %s", e)
-#         return {"messages": [AIMessage(content=f"攻击链路图生成失败，发生异常: {e}")]}
-
-
 def visualization_node(state: AttributionState, config: RunnableConfig, model):
-    """Node 7: Visualization Node (SVG Flowchart)."""
+    """Node 8: Visualization Node (SVG Flowchart)."""
     logger.info("Executing Visualization Node: Generating SVG chart...")
 
     final_report = state.get("final_report")
@@ -1258,15 +1226,16 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
     visualizer_system_prompt = """You are a Cybersecurity Visualization Agent operating as a specialized node within an automated incident response workflow. Your sole objective is to convert the `ATTACK TIMELINE & EXECUTION FLOW` section of an upstream forensic report into a highly accurate, structured SVG vector graphic representing a vertical timeline.
 
 **Instructions:**
-1. **Extract Core Elements (Zero-Loss Formatting):** Parse the input text and extract the exact Timestamp, MITRE ATT&CK Mapping (e.g., [T1059.001]), executing process, and the specific malicious action. Preserve all technical indicators (PIDs, paths, arguments) perfectly.
-2. **SVG Structure & Canvas:** Create a standalone `<svg>` tag with `xmlns="http://www.w3.org/2000/svg"`, setting `viewBox="0 0 1000 dynamically_calculated_height"` (assume 160px height per event).
-3. **Vertical Timeline Layout:** Draw a vertical connecting line down the left side (at `x="50"`). For each event, increment the `y` coordinate by 160.
-4. **Text Wrapping (CRITICAL):** Because standard SVG `<text>` does not support auto-wrapping, you MUST use `<foreignObject>` to render the text boxes. Inside `<foreignObject>`, use HTML `<div xmlns="http://www.w3.org/1999/xhtml">` with inline CSS for styling and `word-wrap: break-word`.
-5. **Visual Styling:**
+1. **Extract Core Elements (Zero-Loss Formatting):** Parse the input text and extract the exact Timestamp, MITRE ATT&CK T-code (e.g., T1059.003), executing process, and the specific malicious action. Preserve all technical indicators (PIDs, paths, arguments) perfectly.
+2. **MITRE Tag Format:** ALWAYS use the format `[T-code / English Technique]`. Example: `[T1059.003 / Windows Command Shell]`. The MITRE tag MUST be placed on its own line BELOW the timestamp line, NOT on the same line as the timestamp.
+3. **SVG Structure & Canvas:** Create a standalone `<svg>` tag with `xmlns="http://www.w3.org/2000/svg"`, setting `viewBox="0 0 1000 dynamically_calculated_height"` (assume 160px height per event).
+4. **Vertical Timeline Layout:** Draw a vertical connecting line down the left side (at `x="50"`). For each event, increment the `y` coordinate by 160.
+5. **Text Wrapping (CRITICAL):** Because standard SVG `<text>` does not support auto-wrapping, you MUST use `<foreignObject>` to render the text boxes. Inside `<foreignObject>`, use HTML `<div xmlns="http://www.w3.org/1999/xhtml">` with inline CSS for styling and `word-wrap: break-word`.
+6. **Visual Styling:**
     - Standard events: light blue/gray borders and backgrounds.
     - Malicious events: light red backgrounds and red borders.
     Apply the malicious style to nodes representing explicit malicious actions, payload downloads, or credential dumping.
-6. **Output Format:** Output strictly the raw `<svg>...</svg>` XML code block.
+7. **Output Format:** Output strictly the raw `<svg>...</svg>` XML code block.
 
 **Example Input (ATTACK TIMELINE & EXECUTION FLOW):**
 - **[2026-04-27 14:52:23.194]** - **[Execution / T1059.003]**: powershell.exe (PID: 5324) 创建 cmd.exe (PID: 5508)，触发告警。命令行: cmd.exe /c C:\\AtomicRedTeam\\atomics\\..\\ExternalPayloads\\nanodump.x64.exe --silent-process-exit "%temp%\\SilentProcessExit"
@@ -1289,9 +1258,11 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
     <circle cx="50" cy="90" r="8" class="node-dot" />
     <foreignObject x="80" y="50" width="850" height="120">
         <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow: hidden;">
-            <div style="margin-bottom: 8px;">
+            <div style="margin-bottom: 6px;">
                 <span style="font-family: monospace; color: #64748b; font-size: 13px;">[2026-04-27 14:52:23.194]</span>
-                <strong style="color: #0f172a; font-size: 14px; margin-left: 12px;">[Execution / T1059.003]</strong>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <strong style="color: #0f172a; font-size: 14px;">[T1059.003 / Windows Command Shell]</strong>
             </div>
             <div style="font-size: 14px; color: #334155; margin-bottom: 6px; line-height: 1.4;">powershell.exe (PID: 5324) 创建 cmd.exe (PID: 5508)，触发告警。</div>
             <div style="font-family: monospace; font-size: 12px; color: #64748b; word-wrap: break-word; background: #e2e8f0; padding: 4px 8px; border-radius: 4px;">命令行: cmd.exe /c C:\\AtomicRedTeam\atomics\\..\\ExternalPayloads\nanodump.x64.exe --silent-process-exit "%temp%\\SilentProcessExit"</div>
@@ -1302,9 +1273,11 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
     <circle cx="50" cy="250" r="8" class="node-dot-malicious" />
     <foreignObject x="80" y="210" width="850" height="120">
         <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 2px solid #ef4444; background: #fee2e2; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow: hidden;">
-            <div style="margin-bottom: 8px;">
+            <div style="margin-bottom: 6px;">
                 <span style="font-family: monospace; color: #64748b; font-size: 13px;">[2026-04-27 14:52:23.195]</span>
-                <strong style="color: #991b1b; font-size: 14px; margin-left: 12px;">[Credential Access / T1003.001]</strong>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <strong style="color: #991b1b; font-size: 14px;">[T1003.001 / LSASS Memory]</strong>
             </div>
             <div style="font-size: 14px; color: #7f1d1d; line-height: 1.4;">cmd.exe 启动 nanodump.x64.exe (PID: 13116) 转储 LSASS 内存。</div>
         </div>
@@ -1359,7 +1332,7 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
 
 
 def simple_log_query_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Simple log query node — directly queries Wazuh indexer and returns raw results
+    """Node 9: Simple log query node — directly queries Wazuh indexer and returns raw results
     without going through the full attribution pipeline.
 
     Designed for user requests like:
@@ -1434,3 +1407,79 @@ def simple_log_query_node(state: AttributionState, config: RunnableConfig, model
         "messages": [AIMessage(content=reply or "日志查询未返回结果。")],
         "next_action_fromDecisionNode": None,
     }
+
+
+def attack_abstract_node(state: AttributionState, config: RunnableConfig, model):
+    """Node 10: Attack Abstract Node — 从最终报告中提取攻击调查概要。"""
+    logger.info("Executing Attack Abstract Node: Generating investigation abstract...")
+
+    final_report = state.get("final_report")
+    if not final_report:
+        logger.warning("No final report found. Skipping abstract generation.")
+        return {"attack_abstract": None}
+
+    parser = PydanticOutputParser(pydantic_object=AttackAbstractModel)
+
+    abstract_system_prompt = """You are a Cybersecurity Intelligence Summarizer. Read the Attack Attribution Investigation Report and output a structured JSON object.
+
+**LANGUAGE RULE (CRITICAL)**: All string values MUST be in Simplified Chinese. The ONLY exceptions are technical identifiers: file paths, process names, domain names, IP addresses, command-line arguments. All descriptions, annotations, and array elements MUST be in Chinese.
+
+**Extraction Rules:**
+
+1. **hosts**: List ALL host identifiers in the format "主机名（Agent ID）". Example: "WEB-SRV01（Agent 005）". If the report uses Agent IDs like "005", "001" etc., include them. If a host only has an IP, use "IP地址（Agent ID 未明确）". Skip duplicates. Keep the list ordered by first appearance in the attack chain.
+
+2. **start_time / end_time / duration**: Extract from the ATTACK TIMELINE section. Format start_time/end_time as "YYYY-MM-DD HH:MM:SS". Calculate duration as "X时X分X秒".
+
+3. **ioc_files / ioc_domains / ioc_processes**: Extract real IOCs from the report:
+   - ioc_files: Suspicious file paths. Exclude benign system files (svchost.exe, cmd.exe) UNLESS used maliciously. Empty list if none.
+   - ioc_domains: External C2/IPs/exfil endpoints. Exclude internal infrastructure IPs. Empty list if none.
+   - ioc_processes: Malicious/exploited process names with key context (e.g., PID, behavior). Empty list if none.
+   - Filter out benign system noise. Each entry must be traceable to the report. Use empty list [], not a placeholder string.
+
+4. **tactics / tactics_count**: Identify distinct ATT&CK Tactics from the report. tactics must ONLY contain Chinese names from this closed set: ["初始访问", "执行", "持久化", "权限提升", "防御规避", "凭证访问", "发现", "横向移动", "收集", "数据窃取", "命令与控制", "影响"]. NO TA numbers, NO English. tactics_count is len(tactics).
+
+{format_instructions}
+
+**Example output:**
+```json
+{{
+  "hosts": ["WEB-SRV01（Agent 005）", "DB-SRV02（Agent 003）"],
+  "start_time": "2024-05-20 10:15:00",
+  "end_time": "2024-05-20 10:45:30",
+  "duration": "0时30分30秒",
+  "ioc_files": ["C:\\\\Windows\\\\Temp\\\\mimikatz.exe", "C:\\\\Users\\\\Public\\\\Documents\\\\reverse.dll"],
+  "ioc_domains": ["185.xx.xx.xx:4444（C2 服务器）", "evil.exfil.com（数据外传端点）"],
+  "ioc_processes": ["powershell.exe（TCP 反弹 Shell, PID: 1234）", "rundll32.exe（通过 comsvcs.dll 转储 LSASS, PID: 5678）", "PsExec.exe（横向移动, PID: 9012）"],
+  "tactics": ["初始访问", "执行", "凭证访问", "横向移动", "命令与控制"],
+  "tactics_count": 5
+}}
+```"""
+
+    human_prompt = (
+        "Please read the following Attack Attribution Investigation Report and extract "
+        "a structured JSON abstract according to the format_instructions.\n\n"
+        "### ATTACK ATTRIBUTION INVESTIGATION REPORT\n\n"
+        "{final_report}"
+    )
+
+    prompt_template = ChatPromptTemplate.from_messages(
+        [("system", abstract_system_prompt), ("human", human_prompt)]
+    )
+
+    try:
+        abstract_chain = prompt_template | model | parser
+        abstract_model: AttackAbstractModel = abstract_chain.invoke(
+            {
+                "final_report": final_report,
+                "format_instructions": parser.get_format_instructions(),
+            }
+        )
+        abstract_dict = abstract_model.model_dump()
+
+        logger.info("Attack abstract generated successfully: %s", abstract_dict)
+
+        return {"attack_abstract": abstract_dict}
+
+    except Exception as e:
+        logger.error("Error generating attack abstract: %s", e)
+        return {"attack_abstract": None}
