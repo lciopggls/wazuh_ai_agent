@@ -1483,3 +1483,166 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
     except Exception as e:
         logger.error("Error generating attack abstract: %s", e)
         return {"attack_abstract": None}
+
+
+def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
+    """Node 11: Attack Graph Node — 生成攻击实体关系网状图 Mermaid 语法。"""
+    logger.info("Executing Attack Graph Node: Generating entity relationship graph (Mermaid)...")
+
+    final_report = state.get("final_report")
+    if not final_report:
+        logger.warning("No final report found. Skipping attack graph generation.")
+        return {
+            "attack_graph": None,
+            "messages": [AIMessage(content="[Attack Graph] 缺少最终报告，无法生成攻击实体关系图。")],
+        }
+
+    graph_system_prompt = """You are a Cybersecurity Graph Visualization Agent. Your sole objective is to convert the entire upstream forensic report into a **Mermaid graph** (flowchart LR) showing attack entity relationships.
+
+Output **Mermaid flowchart LR** syntax. Use the `graph LR` directive so nodes flow left-to-right chronologically.
+
+---
+
+### MERMAID FORMAT
+
+Output a `graph LR` flowchart. Use Mermaid's native syntax.
+
+**Node format:** `A["name PID:xxx<br/>Txxxx Technique Name"]` — entity name + key info before `<br/>`, MITRE ID + English technique name after.
+**Edge format:** `A -->|中文标签| B` — labels MUST be in Chinese: 创建进程, 写入文件, 连接, 修改注册表, 注入, 加载DLL, 执行
+
+Parse the report and classify every entity into one of these Mermaid node styles:
+
+- **PROCESS (malicious)**: use `:::red` class
+- **FILE**: use `:::orange` class
+- **NETWORK**: use `:::blue` class
+- **REGISTRY**: use `:::green` class
+- **NOISE** (any entity judged benign/system noise): use `:::noise` class, gray styling
+
+Define classes once at the bottom:
+```
+classDef red fill:#fee2e2,stroke:#ef4444,color:#991b1b,stroke-width:2px
+classDef orange fill:#fff7ed,stroke:#f97316,color:#9a3412,stroke-width:2px,stroke-dasharray:5
+classDef blue fill:#eff6ff,stroke:#3b82f6,color:#1e40af,stroke-width:2px,stroke-dasharray:5
+classDef green fill:#f0fdf4,stroke:#22c55e,color:#166534,stroke-width:2px,stroke-dasharray:5
+classDef noise fill:#f1f5f9,stroke:#94a3b8,color:#64748b,stroke-width:1px
+```
+
+**Noise rule:** Any entity the report identifies as benign background noise MUST use `:::noise` class.
+**File display rule:** Use only the filename (e.g., `svchost.exe`), not the full path.
+
+### MITRE TECHNIQUE DISPLAY (CRITICAL — NOT standalone nodes)
+
+**MITRE display:** Embed MITRE ID + English technique name inside the node label text (e.g., `<br/>T1059.003 Windows Command Shell`), NOT as separate nodes. You MUST include both the T-code and the English name.
+
+### EDGE LABELS
+
+Use Chinese labels on edges:
+
+- Process spawns child → `A -->|创建进程| B`
+- Process creates/writes file → `A -->|写入文件| B`
+- Process connects to network → `A -->|连接| B`
+- Process modifies registry → `A -->|修改注册表| B`
+- Process injects into another → `A -->|注入| B`
+- Process loads DLL → `A -->|加载DLL| B`
+- File executed as process → `A -->|执行| B`
+
+---
+
+### LAYOUT
+
+Mermaid's `graph LR` engine handles all positioning automatically. No manual coordinates needed. Nodes will flow left-to-right chronologically by the order you declare edges.
+
+---
+
+### CRITICAL RULES
+
+1. Read the WHOLE report, extract all entities and relationships.
+2. NO hallucination — everything must be traceable to the report.
+3. Every node (except entry point) must have at least one incoming edge.
+4. MITRE IDs + English names go INSIDE node labels (after `<br/>`), never as standalone nodes.
+5. Use `graph LR` for left-to-right chronological flow.
+6. Edge labels MUST be in Chinese.
+7. **URL escaping (CRITICAL):** In node labels, replace `:` in `http://` with `&#58;` to prevent Markdown auto-linking. Write `http&#58;//evil.com/path` instead of `http://evil.com/path`. The browser renders `&#58;` as `:` so it displays correctly but won't trigger link detection.
+8. Output ONLY the Mermaid code block inside triple backticks. No other text.
+
+---
+
+### Example Output
+
+```mermaid
+graph LR
+    A["winword.exe PID:4216<br/>T1566.001 Spearphishing Attachment"]:::red
+    B["powershell.exe PID:8852<br/>T1059.001 PowerShell"]:::red
+    C["svchost.exe PID:9936<br/>T1547.001 Registry Run Keys / T1071.001 Application Layer Protocol"]:::red
+    D["svchost.exe"]:::orange
+    E["HKLM\\...\\Run\\Updater"]:::green
+    F["evil.c2.net:443"]:::blue
+    G["explorer.exe"]:::noise
+
+    A -->|创建进程| B
+    B -->|写入文件| D
+    B -->|创建进程| C
+    C -->|修改注册表| E
+    C -->|连接| F
+    G -->|创建进程| B
+
+    classDef red fill:#fee2e2,stroke:#ef4444,color:#991b1b,stroke-width:2px
+    classDef orange fill:#fff7ed,stroke:#f97316,color:#9a3412,stroke-width:2px,stroke-dasharray:5
+    classDef blue fill:#eff6ff,stroke:#3b82f6,color:#1e40af,stroke-width:2px,stroke-dasharray:5
+    classDef green fill:#f0fdf4,stroke:#22c55e,color:#166534,stroke-width:2px,stroke-dasharray:5
+    classDef noise fill:#f1f5f9,stroke:#94a3b8,color:#64748b,stroke-width:1px
+```
+"""
+
+    human_prompt = (
+        "Here is the complete forensic report. Parse EVERY section to extract all entities "
+        "(processes, files, network indicators, registry keys) and their relationships, "
+        "then output a Mermaid graph (graph LR):\n\n"
+        "{final_report}"
+    )
+
+    prompt_template = ChatPromptTemplate.from_messages(
+        [("system", graph_system_prompt), ("human", human_prompt)]
+    )
+
+    try:
+        graph_chain = prompt_template | model
+        result = graph_chain.invoke({"final_report": final_report})
+
+        raw_content = result.content
+        if isinstance(raw_content, list):
+            text_parts = []
+            for block in raw_content:
+                if isinstance(block, dict) and "text" in block:
+                    text_parts.append(block["text"])
+                elif isinstance(block, str):
+                    text_parts.append(block)
+            raw_content = "".join(text_parts)
+        elif not isinstance(raw_content, str):
+            raw_content = str(raw_content)
+
+        mermaid_match = re.search(r"```(?:mermaid)?\s*\n(.*?)```", raw_content, re.DOTALL | re.IGNORECASE)
+        if mermaid_match:
+            mermaid_code = mermaid_match.group(1).strip()
+        else:
+            mermaid_code = re.sub(
+                r"^```(?:mermaid)?\n|\n```$", "", raw_content.strip(), flags=re.MULTILINE
+            )
+
+        logger.info("Attack graph Mermaid generated successfully.")
+
+        return {
+            "attack_graph": mermaid_code,
+            "messages": [
+                AIMessage(
+                    content=f"攻击实体关系网状图(Mermaid)已生成：\n\n```mermaid\n{mermaid_code}\n```"
+                )
+            ],
+        }
+
+    except Exception as e:
+        logger.error("Error generating attack graph Mermaid: %s", e)
+        return {
+            "attack_graph": None,
+            "messages": [AIMessage(content=f"攻击实体关系图(Mermaid)生成失败，发生异常: {e}")],
+        }

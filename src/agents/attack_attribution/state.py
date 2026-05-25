@@ -86,9 +86,12 @@ class AttributionState(TypedDict):
     default_end_time: str = Field(description="调查窗口的结束时间，ISO8601格式 (北京时间/UTC+8)。")
     default_agent_id: str = Field(description="提取到的被攻击 Agent ID (如 '005')。")
 
-    # 可视化展示
-    mermaid_chart: str | None
+    # 可视化展示：SVG攻击时间线图
     svg_chart: str | None
 
     # 攻击调查概要（JSON dict，前端可直接渲染）
     attack_abstract: dict[str, Any] | None
+
+    # 网状图
+    attack_graph: str | None
+    attack_graph_data: dict[str, Any] | None
