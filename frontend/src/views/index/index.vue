@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onMounted } from 'vue';
 import ItemWrap from "@/components/item-wrap";
 // 第一页组件
 import LeftTop from "./left-top.vue";
@@ -10,9 +10,41 @@ import CenterBottom from "./center-bottom.vue";
 import RightTop from "./right-top.vue";
 import RightCenter from "./right-center.vue";
 import RightBottom from "./right-bottom.vue";
-
+import second_left from './second_left.vue';
+import second_middle from './second_middle.vue';
+import second_right from './second_right.vue';
 // 控制页面切换
 const currentPage = ref(1);
+const globalSessions = ref<Record<string, any[]>>({});
+
+// 2. 定义当前选中的智能体和会话ID（应与智能体组件内的逻辑对应）
+const currentAgentId = ref("attack_attribution"); 
+const currentThreadId = ref(""); // 可以在初始化时或由左侧组件传回
+
+// 1. 初始化加载
+onMounted(() => {
+  const saved = localStorage.getItem('wazuh_all_sessions');
+  if (saved) {
+    globalSessions.value = JSON.parse(saved);
+  }
+});
+
+// 2. 统一保存方法
+const updateAndSaveSessions = (newSessions: Record<string, any[]>) => {
+  globalSessions.value = { ...newSessions };
+  localStorage.setItem('wazuh_all_sessions', JSON.stringify(globalSessions.value));
+};
+
+// 3. 清空处理逻辑
+const handleGlobalClear = (agentId: string) => {
+  const updated = { ...globalSessions.value };
+  Object.keys(updated).forEach(key => {
+    if (key.startsWith(agentId)) {
+      updated[key] = []; // 彻底清空该智能体下的所有会话消息
+    }
+  });
+  updateAndSaveSessions(updated);
+};
 </script>
 
 <template>
@@ -46,15 +78,15 @@ const currentPage = ref(1);
       <div class="column-wrapper">
         <ItemWrap class="fixed-column" title="业务模块一">
           <!-- 这里放入你的新组件 -->
-          <div class="content-placeholder">内容区域</div>
+          <second_left />
         </ItemWrap>
         
         <ItemWrap class="fixed-column" title="业务模块二">
-          <div class="content-placeholder">内容区域</div>
+          <second_middle :all-sessions="globalSessions" :agent-id="currentAgentId" @clear-sessions="handleGlobalClear" />
         </ItemWrap>
         
         <ItemWrap class="fixed-column" title="业务模块三">
-          <div class="content-placeholder">内容区域</div>
+          <second_right v-model:sessions="globalSessions" :agent-id="currentAgentId" />
         </ItemWrap>
       </div>
     </div>

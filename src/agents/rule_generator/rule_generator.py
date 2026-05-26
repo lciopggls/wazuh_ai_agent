@@ -16,7 +16,7 @@ from agents.rule_generator.nodes import (
 from agents.rule_generator.state import RuleGeneratorState
 
 
-def get_rule_generator_agent(model: BaseChatModel):
+def get_rule_generator_agent(model: BaseChatModel, checkpointer=None):
     """
     Creates the Rule Generator Agent Graph.
     Args:
@@ -120,7 +120,7 @@ def get_rule_generator_agent(model: BaseChatModel):
     workflow.add_edge("response", END)
 
     # Compile the graph
-    app = workflow.compile()
+    app = workflow.compile(checkpointer=checkpointer)
 
     # Bind the model to the config so nodes can access it
     return app.with_config({"configurable": {"model": model}})

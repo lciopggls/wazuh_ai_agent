@@ -35,13 +35,17 @@ MITRE_KB_FILE_PATH = (
 
 
 class InitialClueAnalysis(BaseModel):
-    is_ready: bool = Field(
-        description="如果输入是直接可用的完整线索（无需用户确认），为 true。如果输入是原始日志，或用户正在要求修改线索（尚未明确同意），必须为 false。"
-    )
     agent_id: str = Field(description="提取到的被攻击 Agent ID (如 '005')。若未找到则留空。")
     start_time_utc8: str = Field(description="调查窗口的起始时间，ISO8601格式 (北京时间/UTC+8)。")
     end_time_utc8: str = Field(description="调查窗口的结束时间，ISO8601格式 (北京时间/UTC+8)。")
     refined_clue: str = Field(description="专业中文攻击线索描述（包含北京时间）。")
+
+
+class QueryIntent(BaseModel):
+    is_simple_query: bool = Field(
+        description="True if the user is only querying/searching/viewing logs without asking for attack analysis. "
+        "False if this is an attack investigation, attribution, or forensics request."
+    )
 
 
 class SynthesizedFindings(BaseModel):
@@ -63,22 +67,131 @@ class SynthesizedFindings(BaseModel):
     )
 
 
+class AttackAbstractModel(BaseModel):
+    """攻击调查概要结构，用于 attack_abstract_node 的 PydanticOutputParser 解析。"""
+
+    hosts: list[str] = Field(description="涉及的主机列表，格式：主机名（Agent ID）")
+    start_time: str = Field(description="攻击起始时间，如 '2024-05-20 10:15:00'")
+    end_time: str = Field(description="攻击结束时间，如 '2024-05-20 10:45:30'")
+    duration: str = Field(description="攻击持续时长，如 '0时30分30秒'")
+    ioc_files: list[str] = Field(
+        description="涉及的文件名IOC列表（含路径），无则空列表。排除明确的系统良性文件。"
+    )
+    ioc_domains: list[str] = Field(
+        description="涉及的域名/IP IOC列表，无则空列表。排除纯内网基础设施IP。"
+    )
+    ioc_processes: list[str] = Field(
+        description="涉及的恶意/被利用进程名IOC列表，含PID等关键上下文，无则空列表。"
+    )
+    tactics: list[str] = Field(
+        description=(
+            "涉及的ATT&CK战术阶段中文名列表，仅限以下12个："
+            "初始访问、执行、持久化、权限提升、防御规避、凭证访问、"
+            "发现、横向移动、收集、数据窃取、命令与控制、影响"
+        )
+    )
+    tactics_count: int = Field(description="涉及的不同战术阶段总数")
+
+
 """
 Nodes:
-0. Decision_Node
-1. Attribution_Planner_Node
-2. Log_Retrieval_Node
-3. Information_Synthesizer_Node
-4. MITRE_Expert_Node - optional
-5. Reporter_Node
-6. User_Input_Node
-7. Visualization_Node
+0. Planner_Node — routes between simple log query and attack attribution
+1. Attribution_Decision_Node
+2. Attribution_Planner_Node
+3. Log_Retrieval_Node
+4. Information_Synthesizer_Node
+5. MITRE_Expert_Node - optional
+6. Reporter_Node
+7. User_Input_Node
+8. Visualization_Node
+9. Simple_Log_Query_Node
+10. Attack_Abstract_Node
 """
 
 
-def decision_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 0: Decision Node."""
-    logger.info("Executing Decision Node...")
+def planner_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
+    """Node 0: Planner Node — determines task type and routes accordingly."""
+    logger.info("Executing Planner Node...")
+
+    # 检查是否已有进行中的攻击溯源会话，若是则跳过意图判断直接续接
+    if state.get("investigation_clue") or state.get("pending_question_type"):
+        logger.info("Ongoing attribution session detected. Routing to Attribution_Decision_Node.")
+        return {
+            "next_action_fromPlannerNode": {
+                "target": "Attribution_Decision_Node",
+                "instruction": "",
+            },
+        }
+
+    messages = state.get("messages", [])
+    last_message = messages[-1] if messages else None
+    is_human = last_message.type == "human" if last_message else False
+    user_text = last_message.content if is_human else ""
+
+    if not is_human or not user_text:
+        logger.info("No valid user input. Defaulting to attack attribution.")
+        return {
+            "next_action_fromPlannerNode": {
+                "target": "Attribution_Decision_Node",
+                "instruction": user_text,
+            },
+        }
+
+    query_intent_parser = PydanticOutputParser(pydantic_object=QueryIntent)
+    intent_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """判断用户输入是"简单日志查询"还是"攻击溯源调查"。
+
+简单日志查询的特征：
+- 用户只是想查询/搜索/查看日志，不涉及攻击行为分析、攻击链追踪、溯源归因
+- 示例："查询agent001最近1天的日志"、"搜索包含abc.txt的日志"、"查看agent003的进程创建日志"、"agent005最近24小时与mimikatz相关的日志"
+- 输入中不包含原始 JSON 日志内容（只有自然语言查询意图）
+
+攻击溯源调查的特征：
+- 涉及攻击行为分析、攻击链追踪、溯源归因、安全事件调查
+- 示例："对上面的日志进行攻击溯源"、"分析这个安全事件"、"这个告警是什么原因造成的"
+- **若输入中包含原始 JSON 日志（大段 {{}} 结构），且同时有"攻击溯源""调查""分析"等指令，必须判定为攻击溯源**
+
+{format_instructions}""",
+            ),
+            ("human", "{user_text}"),
+        ]
+    )
+
+    try:
+        intent_result = (intent_prompt | model | query_intent_parser).invoke(
+            {
+                "user_text": user_text,
+                "format_instructions": query_intent_parser.get_format_instructions(),
+            }
+        )
+        if intent_result.is_simple_query:
+            logger.info("Detected simple log query. Routing to Simple_Log_Query_Node.")
+            return {
+                "next_action_fromPlannerNode": {
+                    "target": "Simple_Log_Query_Node",
+                    "instruction": user_text,
+                },
+            }
+    except Exception as e:
+        logger.warning("Query intent detection failed, defaulting to attack attribution: %s", e)
+
+    logger.info("Detected attack attribution request. Routing to Attribution_Decision_Node.")
+    return {
+        "next_action_fromPlannerNode": {
+            "target": "Attribution_Decision_Node",
+            "instruction": user_text,
+        },
+    }
+
+
+def attribution_decision_node(
+    state: AttributionState, config: RunnableConfig, model: BaseChatModel
+):
+    """Node 1: Attribution Decision Node — handles attack attribution clue extraction and routing."""
+    logger.info("Executing Attribution Decision Node...")
 
     is_clue_confirmed = state.get("is_clue_confirmed")
     requires_mitre_kb = state.get("requires_mitre_kb")
@@ -122,20 +235,16 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
 
             system_prompt = """
             You are a Cybersecurity Triage Expert.
-            Analyze the user's input: is it a raw JSON/System log, or a clear natural language attack clue?
+            Analyze the user's input and extract all relevant security entities.
 
-            [CRITERIA]
-            A "clear natural language attack clue" typically describes an alert, the compromised agent, the malicious behavior, and a strict time boundary.
-            Example of a valid clue: "Agent 012 触发了 Level 14 的告警（Rule 61532: Suspicious PowerShell execution）。告警显示进程 powershell.exe (PID 5192) 异常执行了编码命令，并在 Public 目录下释放了 payload.exe。请启动攻击溯源调查。时间范围限定在北京时间的 2026年3月25日的 14:10 到 14:20 之间。"
+            A valid clue should describe the alert, the compromised agent, the malicious behavior, and a strict time boundary.
+            Example: "Agent 012 触发了 Level 14 的告警（Rule 61532: Suspicious PowerShell execution）。告警显示进程 powershell.exe (PID 5192) 异常执行了编码命令，并在 Public 目录下释放了 payload.exe。请启动攻击溯源调查。时间范围限定在北京时间的 2026年3月25日的 14:00 到 14:20 之间。"
 
             [INSTRUCTIONS]
-            1. Determine the input type and set the `is_ready` boolean:
-               - ONLY set `is_ready` to true if the input is ALREADY a fully mature, clear natural language clue that requires no further user confirmation.
-               - If the input is a raw log, JSON, or requires any rewriting, you MUST set `is_ready` to false.
-            2. Generate the `refined_clue` string:
-               - If the input was a raw log: Extract core entities (Agent ID, Rule, PID, File, Time) and rewrite it into a professional attack clue in Chinese.
-               - If the input was ALREADY a natural language clue: Polish it slightly for professional tone, ensuring it retains all original facts.
-            3. TIME WINDOW (CRITICAL):
+            1. Generate the `refined_clue` string:
+               - If the input is a raw JSON log: Extract core entities (Agent ID, Rule, PID, File, Time) and rewrite them into a professional attack clue in Chinese.
+               - If the input is already a natural language clue: Polish it lightly for professional tone, preserving all original facts. Do not fabricate or add information.
+            2. TIME WINDOW (CRITICAL):
                - If the system has pre-extracted a Beijing time window (see below), you MUST use it DIRECTLY for start_time_utc8 and end_time_utc8. Do NOT recalculate or reinterpret the timezone.
                - If NO pre-extracted time window is provided, extract the time from the user's natural language input. Create a 20-minute investigation window (+/- 10 mins) around the stated time.
                - Output into 'start_time_utc8' and 'end_time_utc8' using ISO8601 format with +08:00 suffix (e.g., '2026-04-27T17:15:00+08:00').
@@ -187,31 +296,20 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                 derived_start = analysis.start_time_utc8
                 derived_end = analysis.end_time_utc8
 
-            if analysis.is_ready:
-                return {
-                    **multi_host_updates,
-                    "investigation_clue": analysis.refined_clue,
-                    "default_agent_id": analysis.agent_id,
-                    "default_start_time": derived_start,
-                    "default_end_time": derived_end,
-                    "is_clue_confirmed": True,
-                    "next_action_fromDecisionNode": {"target": "Decision_Node"},
-                    "next_action_fromAttributionPlannerNode": None,
-                }
-            else:
-                return {
-                    **multi_host_updates,
-                    "investigation_clue": analysis.refined_clue,
-                    "default_agent_id": analysis.agent_id,
-                    "default_start_time": derived_start,
-                    "default_end_time": derived_end,
-                    "pending_question_type": "CLUE",
-                    "next_action_fromDecisionNode": {
-                        "target": "User_Input_Node",
-                        "instruction": "ASK_CLUE",
-                    },
-                    "next_action_fromAttributionPlannerNode": None,
-                }
+            # 统一要求用户确认，不依赖 LLM 自主判断是否跳过确认
+            return {
+                **multi_host_updates,
+                "investigation_clue": analysis.refined_clue,
+                "default_agent_id": analysis.agent_id,
+                "default_start_time": derived_start,
+                "default_end_time": derived_end,
+                "pending_question_type": "CLUE",
+                "next_action_fromDecisionNode": {
+                    "target": "User_Input_Node",
+                    "instruction": "ASK_CLUE",
+                },
+                "next_action_fromAttributionPlannerNode": None,
+            }
         else:
             if is_human and pending_type == "CLUE":
                 logger.info("Parsing user feedback on clue...")
@@ -244,7 +342,7 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                         **multi_host_updates,
                         "is_clue_confirmed": True,
                         "pending_question_type": None,
-                        "next_action_fromDecisionNode": {"target": "Decision_Node"},
+                        "next_action_fromDecisionNode": {"target": "Attribution_Decision_Node"},
                         "next_action_fromAttributionPlannerNode": None,
                     }
                 else:
@@ -253,7 +351,7 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
                         [
                             (
                                 "system",
-                                "Extract the Agent ID, start_time_utc8, and end_time_utc8 from the following revised clue. You MUST set is_ready to False. Place the revised clue verbatim into refined_clue.\n{format_instructions}",
+                                "Extract the Agent ID, start_time_utc8, and end_time_utc8 from the following revised clue. Place the revised clue verbatim into refined_clue.\n{format_instructions}",
                             ),
                             ("human", "{intent}"),
                         ]
@@ -311,7 +409,7 @@ def decision_node(state: AttributionState, config: RunnableConfig, model: BaseCh
 
 def attribution_planner_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
     """
-    Node 1: Attribution Planner Node.
+    Node 2: Attribution Planner Node.
     """
     logger.info("Executing Attribution Planner Node")
 
@@ -321,6 +419,8 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
     messages = state.get("messages", [])
     mitre_kb = state.get("mitre_knowledge_base", {})
     executed_queries = state.get("executed_queries") or []
+    default_start = state.get("default_start_time", "")
+    default_end = state.get("default_end_time", "")
     # 多主机场景相关逻辑已按需求暂时注释/禁用
     # is_multi_host = state.get("is_multi_host")
     # agent_ip_mapping = state.get("agent_ip_mapping") or {}
@@ -405,7 +505,7 @@ Your role is to orchestrate a complex attack forensics investigation. You do NOT
   - IMPORTANT: The Log_Retrieval_Node will execute exactly what you ask. It will NOT automatically translate IP addresses into Agent IDs for you.
 
 - 'Reporter_Node': Routes to the reporting engine to close the case.
-  - When to use (STRICT EXHAUSTION TEST): You are STRICTLY FORBIDDEN from choosing this node until you have exhaustively investigated EVERY SINGLE suspicious PID discovered. Review your history: if there is any PID where you haven't checked BOTH its origins (Upward trace) AND its subsequent actions (Downward/Lateral trace), you MUST go back and query it. Choose this ONLY when you have fully exhausted all leads, built a complete causal tree, and have enough evidence.
+  - When to use (STRICT EXHAUSTION TEST): You are STRICTLY FORBIDDEN from choosing this node until all applicable checks in the Attack Chain Completeness Verification (section 5) have been ATTEMPTED. The key word is ATTEMPTED — if a query returned no data, that dimension is exhausted and you can move on.
   - **How to instruct**: Provide a brief narrative summary of the attack chain and key findings. This summary will be passed as context to the Reporter, which has its OWN strict report format template.
   - **ABSOLUTE PROHIBITION**: You MUST NOT prescribe ANY output format, JSON schema, field names (e.g., "scenario_id", "attack_path", "timeline"), section structure, or markup requirements in your instruction. The Reporter automatically applies its own professional forensic report template. Prescribing a conflicting format will corrupt the final report.
 
@@ -424,6 +524,8 @@ Every query already executed against Wazuh Indexer is recorded below. Cross-chec
 
 ### CURRENT CASE CONTEXT
 
+- **Default Start Time**: {default_start}
+- **Default End Time**: {default_end}
 - **MITRE Knowledge Base**:
 
 {kb_str}
@@ -448,6 +550,8 @@ Every query already executed against Wazuh Indexer is recorded below. Cross-chec
                 "multi_host_instructions": multi_host_instructions,
                 "query_history": query_history,
                 "kb_str": kb_str,
+                "default_start": default_start,
+                "default_end": default_end,
                 "format_instructions": format_instructions,
             }
         )
@@ -480,8 +584,16 @@ Every query already executed against Wazuh Indexer is recorded below. Cross-chec
                 [
                     (
                         "system",
-                        "Convert the input into exactly one valid JSON object matching this schema.\n"
+                        "You are repairing a malformed output from an attack forensics planner agent. "
+                        "Determine which node the planner intended to route to:\n"
+                        "- 'Log_Retrieval_Node': Route here if the raw text describes a log data QUERY to be executed "
+                        "(contains parameters like agent, PID, query_type, event_ids, time range, or FETCH DATA blocks). "
+                        "The query has NOT been run yet — you MUST route to Log_Retrieval_Node with the query description as instruction.\n"
+                        "- 'MITRE_Expert_Node': Route here if the text mentions a MITRE ATT&CK technique ID (Txxxx).\n"
+                        "- 'Reporter_Node': Route ONLY if the text explicitly says the investigation is complete and "
+                        "wants to generate a final report. Do NOT route here if the text describes a data query.\n\n"
                         "CRITICAL OVERRIDE: You MUST NOT wrap the result in a 'properties' dictionary. Return the flat object directly.\n"
+                        "Convert the input into exactly one valid JSON object matching this schema:\n"
                         "{format_instructions}",
                     ),
                     ("human", "{raw_text}"),
@@ -509,7 +621,7 @@ Every query already executed against Wazuh Indexer is recorded below. Cross-chec
 
 
 def log_retrieval_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 2: Log Retrieval Node"""
+    """Node 3: Log Retrieval Node"""
     logger.info("Executing Log Retrieval Node")
 
     next_action = state.get("next_action_fromAttributionPlannerNode")
@@ -666,7 +778,7 @@ If the Planner's instruction does NOT explicitly include an Agent ID and/or a ti
 def information_synthesizer_node(
     state: AttributionState, config: RunnableConfig, model: BaseChatModel
 ):
-    """Node 3: Information Synthesizer Node."""
+    """Node 4: Information Synthesizer Node."""
     logger.info("Executing Information Synthesizer Node")
 
     raw_logs = state.get("current_raw_logs")
@@ -869,7 +981,7 @@ You MUST structure the `detailed_findings` field using the following generalized
 
 
 def mitre_expert_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 4: MITRE Expert Node ."""
+    """Node 5: MITRE Expert Node."""
     logger.info("Executing MITRE Expert Node")
 
     next_action = state.get("next_action_fromAttributionPlannerNode")
@@ -938,7 +1050,7 @@ def mitre_expert_node(state: AttributionState, config: RunnableConfig, model: Ba
 
 
 def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 5: Reporter Node."""
+    """Node 6: Reporter Node."""
     logger.info("Executing Reporter Node: Formatting the final report...")
 
     next_action = state.get("next_action_fromAttributionPlannerNode")
@@ -1061,7 +1173,7 @@ Your task is to take the raw investigation findings provided by the Forensic Det
 
 
 def user_input_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 6: User Input Node ."""
+    """Node 7: User Input Node."""
     logger.info("Executing User Input Node (Suspending...)")
 
     next_action = state.get("next_action_fromDecisionNode")
@@ -1086,80 +1198,21 @@ def user_input_node(state: AttributionState, config: RunnableConfig, model: Base
             ],
             "next_action_fromDecisionNode": None,
         }
-    elif instruction == "ASK_MITRE":
-        return {
-            "messages": [
-                AIMessage(
-                    content="调查线索已锁定。为了更精准地识别攻击手法，您是否希望开启 MITRE 专家知识库辅助分析？(输入是或否)"
-                )
-            ],
-            "next_action_fromDecisionNode": None,
-        }
+    # elif instruction == "ASK_MITRE":
+    #     return {
+    #         "messages": [
+    #             AIMessage(
+    #                 content="调查线索已锁定。为了更精准地识别攻击手法，您是否希望开启 MITRE 专家知识库辅助分析？(输入是或否)"
+    #             )
+    #         ],
+    #         "next_action_fromDecisionNode": None,
+    #     }
 
     return {"next_action_fromDecisionNode": None}
 
 
-# def visualization_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-#     """Node 7: Visualization Node (Mermaid Flowchart)."""
-#     logger.info("Executing Visualization Node: Generating Mermaid chart...")
-
-#     final_report = state.get("final_report")
-#     if not final_report:
-#         logger.warning("No final report found. Skipping visualization.")
-#         return {
-#             "mermaid_chart": None,
-#             "messages": [AIMessage(content="[Visualizer] 缺少最终报告，无法生成攻击拓扑图。")],
-#         }
-
-
-#     human_prompt = "Here is the Upstream Forensic Report. Please locate the specific section titled '#### **ATTACK TIMELINE & EXECUTION FLOW**', extract the chronological events from that section only, and convert them into a Mermaid chart:\n\n{final_report}"
-
-#     prompt_template = ChatPromptTemplate.from_messages(
-#         [("system", visualizer_system_prompt), ("human", human_prompt)]
-#     )
-
-#     try:
-#         visualizer_chain = prompt_template | model
-#         result = visualizer_chain.invoke({"final_report": final_report})
-
-#         raw_content = result.content
-#         if isinstance(raw_content, list):
-#             # 针对大模型返回 [{"type": "text", "text": "..."}] 结构的情况
-#             text_parts = []
-#             for block in raw_content:
-#                 if isinstance(block, dict) and "text" in block:
-#                     text_parts.append(block["text"])
-#                 elif isinstance(block, str):
-#                     text_parts.append(block)
-#             raw_content = "".join(text_parts)
-#         elif not isinstance(raw_content, str):
-#             raw_content = str(raw_content)
-
-#         # 使用正则精确提取 mermaid 代码块
-#         match = re.search(r"```(?:mermaid)?\n(.*?)\n```", raw_content, re.DOTALL | re.IGNORECASE)
-#         if match:
-#             mermaid_code = match.group(1).strip()
-#         else:
-#             mermaid_code = raw_content.strip()
-
-#         mermaid_code_formatted = f"```mermaid\n{mermaid_code}\n```"
-
-#         logger.info("Mermaid chart generated successfully.")
-
-#         return {
-#             "mermaid_chart": mermaid_code_formatted,
-#             "messages": [
-#                 AIMessage(content=f"攻击链路可视化视图已生成：\n\n{mermaid_code_formatted}")
-#             ],
-#         }
-
-#     except Exception as e:
-#         logger.error("Error generating mermaid chart: %s", e)
-#         return {"messages": [AIMessage(content=f"攻击链路图生成失败，发生异常: {e}")]}
-
-
 def visualization_node(state: AttributionState, config: RunnableConfig, model):
-    """Node 7: Visualization Node (SVG Flowchart)."""
+    """Node 8: Visualization Node (SVG Flowchart)."""
     logger.info("Executing Visualization Node: Generating SVG chart...")
 
     final_report = state.get("final_report")
@@ -1173,15 +1226,16 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
     visualizer_system_prompt = """You are a Cybersecurity Visualization Agent operating as a specialized node within an automated incident response workflow. Your sole objective is to convert the `ATTACK TIMELINE & EXECUTION FLOW` section of an upstream forensic report into a highly accurate, structured SVG vector graphic representing a vertical timeline.
 
 **Instructions:**
-1. **Extract Core Elements (Zero-Loss Formatting):** Parse the input text and extract the exact Timestamp, MITRE ATT&CK Mapping (e.g., [T1059.001]), executing process, and the specific malicious action. Preserve all technical indicators (PIDs, paths, arguments) perfectly.
-2. **SVG Structure & Canvas:** Create a standalone `<svg>` tag with `xmlns="http://www.w3.org/2000/svg"`, setting `viewBox="0 0 1000 dynamically_calculated_height"` (assume 160px height per event).
-3. **Vertical Timeline Layout:** Draw a vertical connecting line down the left side (at `x="50"`). For each event, increment the `y` coordinate by 160.
-4. **Text Wrapping (CRITICAL):** Because standard SVG `<text>` does not support auto-wrapping, you MUST use `<foreignObject>` to render the text boxes. Inside `<foreignObject>`, use HTML `<div xmlns="http://www.w3.org/1999/xhtml">` with inline CSS for styling and `word-wrap: break-word`.
-5. **Visual Styling:**
+1. **Extract Core Elements (Zero-Loss Formatting):** Parse the input text and extract the exact Timestamp, MITRE ATT&CK T-code (e.g., T1059.003), executing process, and the specific malicious action. Preserve all technical indicators (PIDs, paths, arguments) perfectly.
+2. **MITRE Tag Format:** ALWAYS use the format `[T-code / English Technique]`. Example: `[T1059.003 / Windows Command Shell]`. The MITRE tag MUST be placed on its own line BELOW the timestamp line, NOT on the same line as the timestamp.
+3. **SVG Structure & Canvas:** Create a standalone `<svg>` tag with `xmlns="http://www.w3.org/2000/svg"`, setting `viewBox="0 0 1000 dynamically_calculated_height"` (assume 160px height per event).
+4. **Vertical Timeline Layout:** Draw a vertical connecting line down the left side (at `x="50"`). For each event, increment the `y` coordinate by 160.
+5. **Text Wrapping (CRITICAL):** Because standard SVG `<text>` does not support auto-wrapping, you MUST use `<foreignObject>` to render the text boxes. Inside `<foreignObject>`, use HTML `<div xmlns="http://www.w3.org/1999/xhtml">` with inline CSS for styling and `word-wrap: break-word`.
+6. **Visual Styling:**
     - Standard events: light blue/gray borders and backgrounds.
     - Malicious events: light red backgrounds and red borders.
     Apply the malicious style to nodes representing explicit malicious actions, payload downloads, or credential dumping.
-6. **Output Format:** Output strictly the raw `<svg>...</svg>` XML code block.
+7. **Output Format:** Output strictly the raw `<svg>...</svg>` XML code block.
 
 **Example Input (ATTACK TIMELINE & EXECUTION FLOW):**
 - **[2026-04-27 14:52:23.194]** - **[Execution / T1059.003]**: powershell.exe (PID: 5324) 创建 cmd.exe (PID: 5508)，触发告警。命令行: cmd.exe /c C:\\AtomicRedTeam\\atomics\\..\\ExternalPayloads\\nanodump.x64.exe --silent-process-exit "%temp%\\SilentProcessExit"
@@ -1204,9 +1258,11 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
     <circle cx="50" cy="90" r="8" class="node-dot" />
     <foreignObject x="80" y="50" width="850" height="120">
         <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow: hidden;">
-            <div style="margin-bottom: 8px;">
+            <div style="margin-bottom: 6px;">
                 <span style="font-family: monospace; color: #64748b; font-size: 13px;">[2026-04-27 14:52:23.194]</span>
-                <strong style="color: #0f172a; font-size: 14px; margin-left: 12px;">[Execution / T1059.003]</strong>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <strong style="color: #0f172a; font-size: 14px;">[T1059.003 / Windows Command Shell]</strong>
             </div>
             <div style="font-size: 14px; color: #334155; margin-bottom: 6px; line-height: 1.4;">powershell.exe (PID: 5324) 创建 cmd.exe (PID: 5508)，触发告警。</div>
             <div style="font-family: monospace; font-size: 12px; color: #64748b; word-wrap: break-word; background: #e2e8f0; padding: 4px 8px; border-radius: 4px;">命令行: cmd.exe /c C:\\AtomicRedTeam\atomics\\..\\ExternalPayloads\nanodump.x64.exe --silent-process-exit "%temp%\\SilentProcessExit"</div>
@@ -1217,9 +1273,11 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
     <circle cx="50" cy="250" r="8" class="node-dot-malicious" />
     <foreignObject x="80" y="210" width="850" height="120">
         <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 2px solid #ef4444; background: #fee2e2; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow: hidden;">
-            <div style="margin-bottom: 8px;">
+            <div style="margin-bottom: 6px;">
                 <span style="font-family: monospace; color: #64748b; font-size: 13px;">[2026-04-27 14:52:23.195]</span>
-                <strong style="color: #991b1b; font-size: 14px; margin-left: 12px;">[Credential Access / T1003.001]</strong>
+            </div>
+            <div style="margin-bottom: 8px;">
+                <strong style="color: #991b1b; font-size: 14px;">[T1003.001 / LSASS Memory]</strong>
             </div>
             <div style="font-size: 14px; color: #7f1d1d; line-height: 1.4;">cmd.exe 启动 nanodump.x64.exe (PID: 13116) 转储 LSASS 内存。</div>
         </div>
@@ -1262,10 +1320,166 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
         return {
             "svg_chart": svg_code,
             "messages": [
-                AIMessage(content=f"攻击链路可视化视图(SVG)已生成：\n\n```xml\n{svg_code}\n```")
+                AIMessage(
+                    content=f"{final_report}\n\n---\n\n攻击链路可视化视图(SVG)已生成：\n\n```xml\n{svg_code}\n```"
+                )
             ],
         }
 
     except Exception as e:
         logger.error("Error generating SVG chart: %s", e)
         return {"messages": [AIMessage(content=f"攻击链路图(SVG)生成失败，发生异常: {e}")]}
+
+
+def simple_log_query_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
+    """Node 9: Simple log query node — directly queries Wazuh indexer and returns raw results
+    without going through the full attribution pipeline.
+
+    Designed for user requests like:
+    - "查询agent001最近1天与文件abc.txt相关的日志"
+    - "搜索agent005包含mimikatz关键词的日志"
+    - "查看agent003最近24小时的进程创建日志"
+    """
+    logger.info("Executing Simple Log Query Node")
+
+    messages = state.get("messages", [])
+    user_input = messages[-1].content if messages else ""
+
+    tools = [get_archives_by_keyword, get_archives_by_eventid]
+
+    system_prompt = """你是 Wazuh 日志查询助手。将用户的自然语言查询翻译为合适的工具调用并返回原始结果。
+
+工具的详细参数说明请参考各工具自身的文档，以下是工具文档未涵盖的补充规则。
+
+时间表达式转换（CRITICAL）：
+- 工具同时支持相对时间和绝对时间两种格式，优先使用相对时间
+- "最近1天"/"最近24小时" → start_time="now-1d", end_time="now"
+- "最近3天" → start_time="now-3d", end_time="now"
+- "最近1周"/"最近7天" → start_time="now-7d", end_time="now"
+- 默认时区与年份（用户未明确说明时自动应用）：
+  · 时区默认北京时间（UTC+8），年份默认 2026 年
+  · 先将用户时间视为 UTC+8，再转换为 UTC 并以 Z 结尾输出
+  · 例："5月19日下午3点" → 视为 2026-05-19T15:00:00+08:00 → 转为 UTC → "2026-05-19T07:00:00Z"
+  · 例："3月10日早上9点到9点半" → start="2026-03-10T01:00:00Z", end="2026-03-10T01:30:00Z"
+- 用户明确给出时区或年份时，以用户为准
+
+工具选择策略：
+- 用户提到具体文件名、路径、进程名、PID、IP、端口、服务名、用户名、注册表路径等结构化字段 → 用 get_archives_by_eventid，query_type 按如下映射：
+  · 文件路径/文件名 → FILE_PATH
+  · 进程 PID（查该进程自身）→ PROCESS_ID；查某进程的子进程 → PARENT_PROCESS_ID
+  · IP 地址 → IP_ADDRESS
+  · 端口号 → PORT
+  · 服务名称 → SERVICE_NAME
+  · 用户账号 → USER_ACCOUNT
+  · 注册表路径 → REGISTRY_PATH
+  · 登录会话 ID → LOGON_ID
+  · 安全标识符 SID → SECURITY_ID
+- 用户只描述了行为类型但未给出具体值 → 用 get_archives_by_eventid，仅传 event_ids，不传 query_type/query_value
+  例："查文件创建的日志" → event_ids=["11"], 不传 query_type
+  例："查最近1天agent001的网络连接日志" → event_ids=["3","4624"], 不传 query_type
+- 用户仅描述通用关键词（无明确结构化字段也无行为类型）→ 用 get_archives_by_keyword
+
+响应格式（CRITICAL — 严禁修改日志内容）：
+- 查询到日志时：先用一行中文标注查询条件与返回条数，然后**完整、逐字地输出工具返回的原始 JSON**。禁止对 JSON 做任何修改、截断、格式化、提取字段或总结。漏掉任何一条日志、任何一个字段都视为违规
+- 无结果时：如实告知，建议扩大时间范围或调整关键词
+- 禁止使用 Markdown 表格或其他结构化方式重新排版日志内容"""
+
+    agent = create_agent(model, tools, system_prompt=system_prompt)
+
+    try:
+        result = agent.invoke({"messages": [("human", user_input)]})
+    except Exception as e:
+        logger.error("Simple log query agent execution failed: %s", e)
+        return {
+            "messages": [AIMessage(content=f"日志查询执行失败：{e}")],
+            "next_action_fromDecisionNode": None,
+        }
+
+    reply = ""
+    for msg in reversed(result.get("messages", [])):
+        if getattr(msg, "type", "") == "ai":
+            content = getattr(msg, "content", "")
+            if isinstance(content, str) and content.strip():
+                reply = content.strip()
+                break
+
+    return {
+        "messages": [AIMessage(content=reply or "日志查询未返回结果。")],
+        "next_action_fromDecisionNode": None,
+    }
+
+
+def attack_abstract_node(state: AttributionState, config: RunnableConfig, model):
+    """Node 10: Attack Abstract Node — 从最终报告中提取攻击调查概要。"""
+    logger.info("Executing Attack Abstract Node: Generating investigation abstract...")
+
+    final_report = state.get("final_report")
+    if not final_report:
+        logger.warning("No final report found. Skipping abstract generation.")
+        return {"attack_abstract": None}
+
+    parser = PydanticOutputParser(pydantic_object=AttackAbstractModel)
+
+    abstract_system_prompt = """You are a Cybersecurity Intelligence Summarizer. Read the Attack Attribution Investigation Report and output a structured JSON object.
+
+**LANGUAGE RULE (CRITICAL)**: All string values MUST be in Simplified Chinese. The ONLY exceptions are technical identifiers: file paths, process names, domain names, IP addresses, command-line arguments. All descriptions, annotations, and array elements MUST be in Chinese.
+
+**Extraction Rules:**
+
+1. **hosts**: List ALL host identifiers in the format "主机名（Agent ID）". Example: "WEB-SRV01（Agent 005）". If the report uses Agent IDs like "005", "001" etc., include them. If a host only has an IP, use "IP地址（Agent ID 未明确）". Skip duplicates. Keep the list ordered by first appearance in the attack chain.
+
+2. **start_time / end_time / duration**: Extract from the ATTACK TIMELINE section. Format start_time/end_time as "YYYY-MM-DD HH:MM:SS". Calculate duration as "X时X分X秒".
+
+3. **ioc_files / ioc_domains / ioc_processes**: Extract real IOCs from the report:
+   - ioc_files: Suspicious file paths. Exclude benign system files (svchost.exe, cmd.exe) UNLESS used maliciously. Empty list if none.
+   - ioc_domains: External C2/IPs/exfil endpoints. Exclude internal infrastructure IPs. Empty list if none.
+   - ioc_processes: Malicious/exploited process names with key context (e.g., PID, behavior). Empty list if none.
+   - Filter out benign system noise. Each entry must be traceable to the report. Use empty list [], not a placeholder string.
+
+4. **tactics / tactics_count**: Identify distinct ATT&CK Tactics from the report. tactics must ONLY contain Chinese names from this closed set: ["初始访问", "执行", "持久化", "权限提升", "防御规避", "凭证访问", "发现", "横向移动", "收集", "数据窃取", "命令与控制", "影响"]. NO TA numbers, NO English. tactics_count is len(tactics).
+
+{format_instructions}
+
+**Example output:**
+```json
+{{
+  "hosts": ["WEB-SRV01（Agent 005）", "DB-SRV02（Agent 003）"],
+  "start_time": "2024-05-20 10:15:00",
+  "end_time": "2024-05-20 10:45:30",
+  "duration": "0时30分30秒",
+  "ioc_files": ["C:\\\\Windows\\\\Temp\\\\mimikatz.exe", "C:\\\\Users\\\\Public\\\\Documents\\\\reverse.dll"],
+  "ioc_domains": ["185.xx.xx.xx:4444（C2 服务器）", "evil.exfil.com（数据外传端点）"],
+  "ioc_processes": ["powershell.exe（TCP 反弹 Shell, PID: 1234）", "rundll32.exe（通过 comsvcs.dll 转储 LSASS, PID: 5678）", "PsExec.exe（横向移动, PID: 9012）"],
+  "tactics": ["初始访问", "执行", "凭证访问", "横向移动", "命令与控制"],
+  "tactics_count": 5
+}}
+```"""
+
+    human_prompt = (
+        "Please read the following Attack Attribution Investigation Report and extract "
+        "a structured JSON abstract according to the format_instructions.\n\n"
+        "### ATTACK ATTRIBUTION INVESTIGATION REPORT\n\n"
+        "{final_report}"
+    )
+
+    prompt_template = ChatPromptTemplate.from_messages(
+        [("system", abstract_system_prompt), ("human", human_prompt)]
+    )
+
+    try:
+        abstract_chain = prompt_template | model | parser
+        abstract_model: AttackAbstractModel = abstract_chain.invoke(
+            {
+                "final_report": final_report,
+                "format_instructions": parser.get_format_instructions(),
+            }
+        )
+        abstract_dict = abstract_model.model_dump()
+
+        logger.info("Attack abstract generated successfully: %s", abstract_dict)
+
+        return {"attack_abstract": abstract_dict}
+
+    except Exception as e:
+        logger.error("Error generating attack abstract: %s", e)
+        return {"attack_abstract": None}
