@@ -125,6 +125,9 @@ def _summarize_attack_state(attack_state: dict[str, Any] | None) -> str:
         "pending_question_type": attack_state.get("pending_question_type"),
         "requires_mitre_kb": attack_state.get("requires_mitre_kb"),
         "has_final_report": bool(attack_state.get("final_report")),
+        "is_full_attribution_complete": bool(
+            attack_state.get("is_full_attribution_complete")
+        ),
         "latest_reply": _extract_latest_ai_content(attack_state.get("messages")),
     }
     return json.dumps(summary, ensure_ascii=False)
@@ -175,6 +178,15 @@ def _invoke_specialist(
     else:
         state_summary = _summarize_attack_state(result)
 
+    artifacts = None
+    if specialist_name == "attack_attribution" and result.get("is_full_attribution_complete"):
+        reply = result.get("final_report") or "报告生成失败。"
+        artifacts = {
+            "svg_chart": result.get("svg_chart"),
+            "attack_abstract": result.get("attack_abstract"),
+            "attack_graph": result.get("attack_graph"),
+        }
+
     return json.dumps(
         {
             "specialist": specialist_name,
@@ -185,6 +197,7 @@ def _invoke_specialist(
             "plan_steps": plan_steps,
             "reply": reply or f"{specialist_name} 未返回可展示内容。",
             "state_summary": json.loads(state_summary),
+            "artifacts": artifacts,
             "executed_steps": session["executed_steps"],
         },
         ensure_ascii=False,

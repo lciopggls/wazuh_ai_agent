@@ -1297,6 +1297,7 @@ Your task is to take the raw investigation findings provided by the Forensic Det
 
         return {
             "final_report": final_report_msg.content,
+            "is_full_attribution_complete": True,
             "next_action_fromAttributionPlannerNode": None,
             "messages": [AIMessage(content=f"报告已生成完毕。\n\n{final_report_msg.content}")],
         }

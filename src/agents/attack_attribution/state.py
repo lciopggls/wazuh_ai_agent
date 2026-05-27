@@ -106,6 +106,9 @@ class AttributionState(TypedDict):
     # 报告
     final_report: str | None
 
+    # 是否已完成完整攻击溯源（Reporter_Node 设置）
+    is_full_attribution_complete: bool | None
+
     # 用户自定义配置相关
     investigation_clue: str | None
     is_clue_confirmed: bool | None
@@ -125,7 +128,7 @@ class AttributionState(TypedDict):
     # 可视化展示：SVG攻击时间线图
     svg_chart: str | None
 
-    # 攻击调查概要（JSON dict，前端可直接渲染）
+    # 攻击调查概要（JSON dict）
     attack_abstract: dict[str, Any] | None
 
     # 网状图
