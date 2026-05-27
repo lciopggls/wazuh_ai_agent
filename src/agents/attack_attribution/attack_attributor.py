@@ -8,6 +8,7 @@ from langgraph.graph import END, StateGraph
 from .nodes import (
     attack_abstract_node,
     attack_graph_node,
+    graph_filter_node,
     attribution_decision_node,
     attribution_planner_node,
     information_synthesizer_node,
@@ -97,6 +98,7 @@ def get_attack_attribution_agent(model: BaseChatModel):
     graph.add_node("Attack_Abstract_Node", partial(attack_abstract_node, model=model))
     graph.add_node("User_Input_Node", partial(user_input_node, model=model))
     graph.add_node("Visualization_Node", partial(visualization_node, model=model))
+    graph.add_node("Graph_Filter_Node", partial(graph_filter_node, model=model))
     graph.add_node("Attack_Graph_Node", partial(attack_graph_node, model=model))
     graph.add_node("Simple_Log_Query_Node", partial(simple_log_query_node, model=model))
 
@@ -139,7 +141,8 @@ def get_attack_attribution_agent(model: BaseChatModel):
     graph.add_edge("MITRE_Expert_Node", "Attribution_Planner_Node")
     graph.add_edge("Reporter_Node", "Attack_Abstract_Node")
     graph.add_edge("Attack_Abstract_Node", "Visualization_Node")
-    graph.add_edge("Visualization_Node", "Attack_Graph_Node")
+    graph.add_edge("Visualization_Node", "Graph_Filter_Node")
+    graph.add_edge("Graph_Filter_Node", "Attack_Graph_Node")
     graph.add_edge("Attack_Graph_Node", END)
     graph.add_edge("User_Input_Node", END)
     graph.add_edge("Simple_Log_Query_Node", END)
