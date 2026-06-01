@@ -125,9 +125,7 @@ def _summarize_attack_state(attack_state: dict[str, Any] | None) -> str:
         "pending_question_type": attack_state.get("pending_question_type"),
         "requires_mitre_kb": attack_state.get("requires_mitre_kb"),
         "has_final_report": bool(attack_state.get("final_report")),
-        "is_full_attribution_complete": bool(
-            attack_state.get("is_full_attribution_complete")
-        ),
+        "is_full_attribution_complete": bool(attack_state.get("is_full_attribution_complete")),
         "latest_reply": _extract_latest_ai_content(attack_state.get("messages")),
     }
     return json.dumps(summary, ensure_ascii=False)

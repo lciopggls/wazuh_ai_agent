@@ -26,7 +26,7 @@ def test_get_archives_by_eventid(demo_wazuh_api_response, requests_mock):
 
     result = get_archives_by_eventid.invoke(
         {
-            "agent_id": "005",
+            "agent_id": ["005"],
             "query_type": QueryType.FILE_PATH.value,
             "query_value": "lsass.exe-(PID-712).dmp",
             "event_ids": ["11"],
@@ -64,7 +64,7 @@ def test_get_archives_by_keyword(demo_wazuh_api_response, requests_mock):
     from agents.attack_attribution.log_retrieval_helper import get_archives_by_keyword
 
     result = get_archives_by_keyword.invoke(
-        {"agent_id": "005", "keyword": "CertUtil.exe", "x_limit": 10}
+        {"agent_id": ["005"], "keyword": "CertUtil.exe", "x_limit": 10}
     )
     logs = json.loads(result)
 

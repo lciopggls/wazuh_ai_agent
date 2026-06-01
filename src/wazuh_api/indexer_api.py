@@ -84,8 +84,19 @@ def agent_alerts(agent_id, x_limit=5, ruleId=-1, timeout=600):
     return result
 
 
+def _normalize_agent_ids(agent_id):
+    """将 agent_id 统一转为字符串列表。支持 str / list / None / 空值。"""
+    if not agent_id:
+        return []
+    if isinstance(agent_id, str):
+        return [agent_id.strip()] if agent_id.strip() else []
+    if isinstance(agent_id, list):
+        return [str(a).strip() for a in agent_id if str(a).strip()]
+    return []
+
+
 def agent_archives(
-    agent_id, keyword="", x_limit=10, payload=None, timeout=30, start_time=None, end_time=None
+    agent_id=None, keyword="", x_limit=10, payload=None, timeout=30, start_time=None, end_time=None
 ):
     logger.info("Getting archives information")
 
@@ -93,8 +104,12 @@ def agent_archives(
     headers = {"Content-Type": "application/json"}
 
     if payload is None:
-        # 1. 初始化基础查询：必须匹配特定的 Agent ID
-        must_conditions = [{"term": {"agent.id": agent_id}}]
+        must_conditions = []
+        agent_ids = _normalize_agent_ids(agent_id)
+        if len(agent_ids) == 1:
+            must_conditions.append({"term": {"agent.id": agent_ids[0]}})
+        elif len(agent_ids) > 1:
+            must_conditions.append({"terms": {"agent.id": agent_ids}})
 
         # 2. 追加关键词搜索功能
         if keyword and (keyword != ""):

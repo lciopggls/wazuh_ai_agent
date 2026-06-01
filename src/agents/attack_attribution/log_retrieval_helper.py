@@ -6,6 +6,7 @@ from enum import Enum
 from langchain.tools import tool
 
 from wazuh_api.indexer_api import (
+    _normalize_agent_ids,
     agent_archives,
 )
 
@@ -27,22 +28,26 @@ class QueryType(str, Enum):
 
 @tool
 def get_archives_by_keyword(
-    agent_id: str,
+    agent_id: list[str] = None,
     keyword: str = "",
     x_limit: int = 10,
     start_time: str = None,
     end_time: str = None,
+    simplify: bool = True,
 ):
     """
-    从 Wazuh Indexer 的 wazuh-archives-* 获取特定 Agent 的原始归档日志，支持关键词搜索和时间过滤。
+    从 Wazuh Indexer 的 wazuh-archives-* 获取归档日志，支持关键词搜索和时间过滤。
 
-    :param agent_id: Agent 的唯一 ID (如 "001")
-    :param keyword: 搜搜索的关键词 (如 "regsvr32"), 默认为""
+    :param agent_id: Agent ID 列表 (如 ["001", "005"])，可选，为空时不做 Agent 维度过滤
+    :param keyword: 搜索的关键词 (如 "regsvr32"), 默认为""
     :param x_limit: 返回的日志条数, 默认为 10。
     :param start_time: (可选) 限定查询时间窗口的起始时间。支持两种格式：① 相对时间 "now-1d"、"now-3d"、"now-7d" 等；② 绝对时间 ISO8601 格式 "2026-03-09T17:24:47Z"
     :param end_time: (可选) 限定查询时间窗口的结束时间。支持两种格式：① 相对时间 "now"；② 绝对时间 ISO8601 格式 "2026-03-09T17:24:47Z"
+    :param simplify: 是否精简日志字段，默认 True。攻击溯源场景建议使用 True；简单日志查询建议传 False 返回完整日志
     """
 
+    if agent_id is None:
+        agent_id = []
     if start_time:
         start_time = _format_iso8601(start_time)
     if end_time:
@@ -61,7 +66,10 @@ def get_archives_by_keyword(
     )
 
     hits = search_results.get("hits", {}).get("hits", [])
-    archives = [simplify_log(hit["_source"]) for hit in hits]
+    if simplify:
+        archives = [simplify_log(hit["_source"]) for hit in hits]
+    else:
+        archives = [hit["_source"] for hit in hits]
 
     return json.dumps(archives, ensure_ascii=False)
 
@@ -271,14 +279,22 @@ def _normalize_pid_values(pid_raw: str) -> tuple[str, str]:
 
 
 def search_archives_by_eventid(
-    agent_id: str,
+    agent_id: list[str] = None,
     query_type: str = "",
     query_value: str = "",
     event_ids: list[str] | None = None,
     start_time: str = None,
     end_time: str = None,
+    simplify: bool = True,
 ):
-    must_conditions = [{"term": {"agent.id": agent_id}}]
+    if agent_id is None:
+        agent_id = []
+    must_conditions = []
+    agent_ids = _normalize_agent_ids(agent_id)
+    if len(agent_ids) == 1:
+        must_conditions.append({"term": {"agent.id": agent_ids[0]}})
+    elif len(agent_ids) > 1:
+        must_conditions.append({"terms": {"agent.id": agent_ids}})
 
     # 时间过滤
     time_range = {}
@@ -404,7 +420,10 @@ def search_archives_by_eventid(
     try:
         response = agent_archives(agent_id, payload=payload)
         hits = response.get("hits", {}).get("hits", [])
-        return [simplify_log(hit["_source"]) for hit in hits] if hits else []
+        if simplify:
+            return [simplify_log(hit["_source"]) for hit in hits] if hits else []
+        else:
+            return [hit["_source"] for hit in hits] if hits else []
     except Exception as e:
         logger.error(f"Error searching lateral activities: {e}")
         return []
@@ -412,18 +431,19 @@ def search_archives_by_eventid(
 
 @tool
 def get_archives_by_eventid(
-    agent_id: str,
+    agent_id: list[str] = None,
     query_type: str = "",
     query_value: str = "",
     event_ids: list[str] | None = None,
     start_time: str = None,
     end_time: str = None,
+    simplify: bool = True,
 ):
     """
     获取多维度的高危行为日志。当需要查询父子进程关联，或需要通过特定特征（如 IP、文件名、服务名、账号）横向追踪攻击痕迹时使用。
     query_type + query_value、event_ids 可各自独立提供或同时省略。省略的维度不参与过滤。
 
-    :param agent_id: Agent 的唯一 ID
+    :param agent_id: Agent ID 列表 (如 ["001", "005"])，可选，为空时不做 Agent 维度过滤
     :param query_type: 【可选】指示查询指标的枚举类型。不传则不做类型过滤。可选值：
         - "PROCESS_ID"   : 按进程 PID 追踪。可用于按子进程 PID 追踪其父进程日志。
         - "PARENT_PROCESS_ID" : 按父进程 PID 追踪其派生的子进程日志。
@@ -458,19 +478,22 @@ def get_archives_by_eventid(
         - ["4720", "4722", "4724", "4725", "4726", "4728", "4732", "4738", "4740", "4798", "4704", "4719"] : 身份与权限安全审计 (Identity & Privilege Auditing) - 用于追踪攻击者对本地账户的枚举、激活、密码重置、属性篡改以及将账户违规加入高权限组的操作。
     :param start_time: (可选) 限定查询时间窗口的起始时间。支持两种格式：① 相对时间 "now-1d"、"now-3d"、"now-7d" 等；② 绝对时间 ISO8601 格式 "2026-03-09T17:24:47Z"
     :param end_time: (可选) 限定查询时间窗口的结束时间。支持两种格式：① 相对时间 "now"；② 绝对时间 ISO8601 格式 "2026-03-09T17:24:47Z"
+    :param simplify: 是否精简日志字段，默认 True。攻击溯源场景建议使用 True；简单日志查询建议传 False 返回完整日志
     """
+    if agent_id is None:
+        agent_id = []
     if not event_ids and not query_type:
         return json.dumps(
             {"search_feedback": "至少需要提供 event_ids 或 query_type 中的一个维度来限定查询范围。"}
         )
 
     results = search_archives_by_eventid(
-        agent_id, query_type, query_value, event_ids or [], start_time, end_time
+        agent_id, query_type, query_value, event_ids or [], start_time, end_time, simplify
     )
     if results:
         return json.dumps(results, ensure_ascii=False, indent=2)
     else:
-        feedback_parts = [f"No logs found for agent {agent_id}"]
+        feedback_parts = [f"No logs found for agent(s) {agent_id}"]
         if event_ids:
             feedback_parts.append(f"event IDs ={event_ids}")
         if query_type:

@@ -1,8 +1,8 @@
 import json
 import logging
 import re
-from pathlib import Path
 from collections import deque
+from pathlib import Path
 from typing import Any, Literal
 
 from langchain.agents import create_agent
@@ -757,7 +757,7 @@ You are exclusively a raw data retrieval pipeline. You MUST adhere strictly to t
 ### Query DEFAULT VALUES (CRITICAL):
 If the Planner's instruction does NOT explicitly include an Agent ID and/or a time range, you MUST use the following default values when calling tools:
 (CRITICAL OVERRIDE: The default times provided below are strictly in Beijing Time / UTC+8)
-- Default Agent ID: {default_agent}
+- Default Agent ID(s) (pass as list, e.g. ["{default_agent}"]): {default_agent}
 - Default Start Time: {default_start}
 - Default End Time: {default_end}
 """
@@ -823,8 +823,14 @@ If the Planner's instruction does NOT explicitly include an Agent ID and/or a ti
                     tool_name = tc_info["name"]
                     args = tc_info["args"]
 
+                    agent_arg = args.get("agent_id", "")
+                    if isinstance(agent_arg, list):
+                        agent_display = ",".join(agent_arg)
+                    else:
+                        agent_display = str(agent_arg) if agent_arg else ""
+
                     fp: dict[str, Any] = {
-                        "agent": args.get("agent_id", ""),
+                        "agent": agent_display,
                         "tool": "by_keyword" if "keyword" in tool_name else "by_eventid",
                         "count": log_count,
                     }
@@ -1094,10 +1100,14 @@ You MUST structure the `detailed_findings` field using the following generalized
             "current_raw_logs": None,
             "next_action_fromDecisionNode": None,
             "next_action_fromAttributionPlannerNode": None,
-            "attack_graph_data": {
-                "entities": [e.model_dump() for e in graph_entities],
-                "relations": [r.model_dump() for r in graph_relations],
-            } if graph_entities or graph_relations else None,
+            "attack_graph_data": (
+                {
+                    "entities": [e.model_dump() for e in graph_entities],
+                    "relations": [r.model_dump() for r in graph_relations],
+                }
+                if graph_entities or graph_relations
+                else None
+            ),
             "messages": [AIMessage(content=summary)],
         }
 
@@ -1457,9 +1467,7 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
         return {
             "svg_chart": svg_code,
             "messages": [
-                AIMessage(
-                    content=f"攻击链路可视化视图(SVG)已生成：\n\n```xml\n{svg_code}\n```"
-                )
+                AIMessage(content=f"攻击链路可视化视图(SVG)已生成：\n\n```xml\n{svg_code}\n```")
             ],
         }
 
@@ -1469,28 +1477,33 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
 
 
 def simple_log_query_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 9: Simple log query node — directly queries Wazuh indexer and returns raw results
-    without going through the full attribution pipeline.
+    """Node 9: 简单日志查询节点 — 绕过完整攻击溯源流水线，直接查询 Wazuh Indexer 并返回原始结果。
 
-    Designed for user requests like:
+    适用于用户请求如：
     - "查询agent001最近1天与文件abc.txt相关的日志"
     - "搜索agent005包含mimikatz关键词的日志"
     - "查看agent003最近24小时的进程创建日志"
+
+    日志数据直接从 ToolMessage 提取，不经过 LLM 输出，避免模型输出截断。
+    截断在日志条目边界进行，确保返回的每条日志都是完整的。
     """
     logger.info("Executing Simple Log Query Node")
+
+    # 简单查询默认最大条数
+    MAX_RAW_LOGS = 10
 
     messages = state.get("messages", [])
     user_input = messages[-1].content if messages else ""
 
     tools = [get_archives_by_keyword, get_archives_by_eventid]
 
-    system_prompt = """你是 Wazuh 日志查询助手。将用户的自然语言查询翻译为合适的工具调用并返回原始结果。
+    system_prompt = """你是 Wazuh 日志查询助手。将用户的自然语言查询翻译为合适的工具调用。
 
 工具的详细参数说明请参考各工具自身的文档，以下是工具文档未涵盖的补充规则。
 
 时间表达式转换（CRITICAL）：
 - 工具同时支持相对时间和绝对时间两种格式，优先使用相对时间
-- "最近1天"/"最近24小时" → start_time="now-1d", end_time="now"
+- "今天"/"最近1天"/"最近24小时" → start_time="now-1d", end_time="now"
 - "最近3天" → start_time="now-3d", end_time="now"
 - "最近1周"/"最近7天" → start_time="now-7d", end_time="now"
 - 默认时区与年份（用户未明确说明时自动应用）：
@@ -1516,10 +1529,11 @@ def simple_log_query_node(state: AttributionState, config: RunnableConfig, model
   例："查最近1天agent001的网络连接日志" → event_ids=["3","4624"], 不传 query_type
 - 用户仅描述通用关键词（无明确结构化字段也无行为类型）→ 用 get_archives_by_keyword
 
-响应格式（CRITICAL — 严禁修改日志内容）：
-- 查询到日志时：先用一行中文标注查询条件与返回条数，然后**完整、逐字地输出工具返回的原始 JSON**。禁止对 JSON 做任何修改、截断、格式化、提取字段或总结。漏掉任何一条日志、任何一个字段都视为违规
-- 无结果时：如实告知，建议扩大时间范围或调整关键词
-- 禁止使用 Markdown 表格或其他结构化方式重新排版日志内容"""
+日志完整性（CRITICAL）：
+- 调用 get_archives_by_keyword 和 get_archives_by_eventid 时，**必须传 simplify=False**，以获取完整的原始日志字段，不得精简
+
+响应格式：
+- 只需用一行中文简要确认已执行的操作（如"已查询 agent001 最近 1 天的文件创建日志"），无需输出日志内容本身（日志内容将由系统自动拼接）"""
 
     agent = create_agent(model, tools, system_prompt=system_prompt)
 
@@ -1532,16 +1546,52 @@ def simple_log_query_node(state: AttributionState, config: RunnableConfig, model
             "next_action_fromDecisionNode": None,
         }
 
-    reply = ""
+    # 直接从 ToolMessage 提取日志数据，绕过 LLM 输出 token 限制
+    raw_logs: list[dict] = []
+    search_feedback: list[str] = []
+
+    for msg in result.get("messages", []):
+        if isinstance(msg, ToolMessage):
+            try:
+                parsed = json.loads(msg.content)
+                if isinstance(parsed, list):
+                    raw_logs.extend(parsed)
+                elif isinstance(parsed, dict) and "search_feedback" not in parsed:
+                    raw_logs.append(parsed)
+                elif isinstance(parsed, dict) and "search_feedback" in parsed:
+                    search_feedback.append(parsed["search_feedback"])
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse ToolMessage content as JSON")
+
+    # 提取 Agent 的确认语句
+    agent_summary = ""
     for msg in reversed(result.get("messages", [])):
-        if getattr(msg, "type", "") == "ai":
+        if isinstance(msg, AIMessage):
             content = getattr(msg, "content", "")
             if isinstance(content, str) and content.strip():
-                reply = content.strip()
+                agent_summary = content.strip()
                 break
 
+    # 组装最终响应
+    if raw_logs:
+        total = len(raw_logs)
+        shown = raw_logs[:MAX_RAW_LOGS]
+        lines = [f"查询完成，共返回 {total} 条日志。"]
+        if total > MAX_RAW_LOGS:
+            lines.append(
+                f"（由于日志较长，仅展示最近 {MAX_RAW_LOGS} 条完整日志，省略 {total - MAX_RAW_LOGS} 条）"
+            )
+        lines.append("")
+        lines.append(json.dumps(shown, ensure_ascii=False, indent=2))
+        reply = "\n".join(lines)
+    elif search_feedback:
+        feedback_text = "; ".join(search_feedback)
+        reply = f"查询未返回匹配日志。\n详细信息：{feedback_text}\n建议扩大时间范围或调整查询条件。"
+    else:
+        reply = agent_summary or "日志查询未返回结果。"
+
     return {
-        "messages": [AIMessage(content=reply or "日志查询未返回结果。")],
+        "messages": [AIMessage(content=reply)],
         "next_action_fromDecisionNode": None,
     }
 
@@ -1625,7 +1675,7 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
 # def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
 #     """Node 11: Attack Graph Node — 生成攻击实体关系网状Mermaid图。"""
 #     logger.info("Executing Attack Graph Node: Generating entity relationship graph (Mermaid)...")
-# 
+#
 #     final_report = state.get("final_report")
 #     if not final_report:
 #         logger.warning("No final report found. Skipping attack graph generation.")
@@ -1633,28 +1683,28 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
 #             "attack_graph": None,
 #             "messages": [AIMessage(content="[Attack Graph] 缺少最终报告，无法生成攻击实体关系图。")],
 #         }
-# 
+#
 #     graph_system_prompt = """You are a Cybersecurity Graph Visualization Agent. Your sole objective is to convert the entire upstream forensic report into a **Mermaid graph** (flowchart LR) showing attack entity relationships.
-# 
+#
 # Output **Mermaid flowchart LR** syntax. Use the `graph LR` directive so nodes flow left-to-right chronologically.
-# 
+#
 # ---
-# 
+#
 # ### MERMAID FORMAT
-# 
+#
 # Output a `graph LR` flowchart. Use Mermaid's native syntax.
-# 
+#
 # **Node format:** `A["name PID:xxx<br/>Txxxx Technique Name"]` — entity name + key info before `<br/>`, MITRE ID + English technique name after.
 # **Edge format:** `A -->|中文标签| B` — labels MUST be in Chinese: 创建进程, 写入文件, 连接, 修改注册表, 注入, 加载DLL, 执行
-# 
+#
 # Parse the report and classify every entity into one of these Mermaid node styles:
-# 
+#
 # - **PROCESS (malicious)**: use `:::red` class
 # - **FILE**: use `:::orange` class
 # - **NETWORK**: use `:::blue` class
 # - **REGISTRY**: use `:::green` class
 # - **NOISE** (any entity judged benign/system noise): use `:::noise` class, gray styling
-# 
+#
 # Define classes once at the bottom:
 # ```
 # classDef red fill:#fee2e2,stroke:#ef4444,color:#991b1b,stroke-width:2px
@@ -1663,18 +1713,18 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
 # classDef green fill:#f0fdf4,stroke:#22c55e,color:#166534,stroke-width:2px,stroke-dasharray:5
 # classDef noise fill:#f1f5f9,stroke:#94a3b8,color:#64748b,stroke-width:1px
 # ```
-# 
+#
 # **Noise rule:** Any entity the report identifies as benign background noise MUST use `:::noise` class.
 # **File display rule:** Use only the filename (e.g., `svchost.exe`), not the full path.
-# 
+#
 # ### MITRE TECHNIQUE DISPLAY (CRITICAL — NOT standalone nodes)
-# 
+#
 # **MITRE display:** Embed MITRE ID + English technique name inside the node label text (e.g., `<br/>T1059.003 Windows Command Shell`), NOT as separate nodes. You MUST include both the T-code and the English name.
-# 
+#
 # ### EDGE LABELS
-# 
+#
 # Use Chinese labels on edges:
-# 
+#
 # - Process spawns child → `A -->|创建进程| B`
 # - Process creates/writes file → `A -->|写入文件| B`
 # - Process connects to network → `A -->|连接| B`
@@ -1682,17 +1732,17 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
 # - Process injects into another → `A -->|注入| B`
 # - Process loads DLL → `A -->|加载DLL| B`
 # - File executed as process → `A -->|执行| B`
-# 
+#
 # ---
-# 
+#
 # ### LAYOUT
-# 
+#
 # Mermaid's `graph LR` engine handles all positioning automatically. No manual coordinates needed. Nodes will flow left-to-right chronologically by the order you declare edges.
-# 
+#
 # ---
-# 
+#
 # ### CRITICAL RULES
-# 
+#
 # 1. Read the WHOLE report, extract all entities and relationships.
 # 2. NO hallucination — everything must be traceable to the report.
 # 3. Every node (except entry point) must have at least one incoming edge.
@@ -1701,11 +1751,11 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
 # 6. Edge labels MUST be in Chinese.
 # 7. **URL escaping (CRITICAL):** In node labels, replace `:` in `http://` with `&#58;` to prevent Markdown auto-linking. Write `http&#58;//evil.com/path` instead of `http://evil.com/path`. The browser renders `&#58;` as `:` so it displays correctly but won't trigger link detection.
 # 8. Output ONLY the Mermaid code block inside triple backticks. No other text.
-# 
+#
 # ---
-# 
+#
 # ### Example Output
-# 
+#
 # ```mermaid
 # graph LR
 #     A["winword.exe PID:4216<br/>T1566.001 Spearphishing Attachment"]:::red
@@ -1715,14 +1765,14 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
 #     E["HKLM\\...\\Run\\Updater"]:::green
 #     F["evil.c2.net:443"]:::blue
 #     G["explorer.exe"]:::noise
-# 
+#
 #     A -->|创建进程| B
 #     B -->|写入文件| D
 #     B -->|创建进程| C
 #     C -->|修改注册表| E
 #     C -->|连接| F
 #     G -->|创建进程| B
-# 
+#
 #     classDef red fill:#fee2e2,stroke:#ef4444,color:#991b1b,stroke-width:2px
 #     classDef orange fill:#fff7ed,stroke:#f97316,color:#9a3412,stroke-width:2px,stroke-dasharray:5
 #     classDef blue fill:#eff6ff,stroke:#3b82f6,color:#1e40af,stroke-width:2px,stroke-dasharray:5
@@ -1730,22 +1780,22 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
 #     classDef noise fill:#f1f5f9,stroke:#94a3b8,color:#64748b,stroke-width:1px
 # ```
 # """
-# 
+#
 #     human_prompt = (
 #         "Here is the complete forensic report. Parse EVERY section to extract all entities "
 #         "(processes, files, network indicators, registry keys) and their relationships, "
 #         "then output a Mermaid graph (graph LR):\n\n"
 #         "{final_report}"
 #     )
-# 
+#
 #     prompt_template = ChatPromptTemplate.from_messages(
 #         [("system", graph_system_prompt), ("human", human_prompt)]
 #     )
-# 
+#
 #     try:
 #         graph_chain = prompt_template | model
 #         result = graph_chain.invoke({"final_report": final_report})
-# 
+#
 #         raw_content = result.content
 #         if isinstance(raw_content, list):
 #             text_parts = []
@@ -1757,7 +1807,7 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
 #             raw_content = "".join(text_parts)
 #         elif not isinstance(raw_content, str):
 #             raw_content = str(raw_content)
-# 
+#
 #         mermaid_match = re.search(r"```(?:mermaid)?\s*\n(.*?)```", raw_content, re.DOTALL | re.IGNORECASE)
 #         if mermaid_match:
 #             mermaid_code = mermaid_match.group(1).strip()
@@ -1765,9 +1815,9 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
 #             mermaid_code = re.sub(
 #                 r"^```(?:mermaid)?\n|\n```$", "", raw_content.strip(), flags=re.MULTILINE
 #             )
-# 
+#
 #         logger.info("Attack graph Mermaid generated successfully.")
-# 
+#
 #         return {
 #             "attack_graph": mermaid_code,
 #             "messages": [
@@ -1776,17 +1826,18 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
 #                 )
 #             ],
 #         }
-# 
+#
 #     except Exception as e:
 #         logger.error("Error generating attack graph Mermaid: %s", e)
 #         return {
 #             "attack_graph": None,
 #             "messages": [AIMessage(content=f"攻击实体关系图(Mermaid)生成失败，发生异常: {e}")],
 #         }
-# 
+#
+
 
 def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
-    """Node 11: Graph Filter Node """
+    """Node 11: Graph Filter Node"""
     logger.info("Executing Graph Filter Node: Reconstructing attack_graph_data from report...")
 
     graph_data = state.get("attack_graph_data")
@@ -1802,14 +1853,30 @@ def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
     final_report = state.get("final_report", "")
 
     entity_list_str = json.dumps(
-        [{"id": e["id"], "type": e["type"], "name": e["name"], "properties": e.get("properties", {})}
-         for e in entities],
-        ensure_ascii=False, indent=2,
+        [
+            {
+                "id": e["id"],
+                "type": e["type"],
+                "name": e["name"],
+                "properties": e.get("properties", {}),
+            }
+            for e in entities
+        ],
+        ensure_ascii=False,
+        indent=2,
     )
     relation_list_str = json.dumps(
-        [{"source": r["source"], "target": r["target"], "relation": r["relation"], "timestamp": r.get("timestamp")}
-         for r in relations],
-        ensure_ascii=False, indent=2,
+        [
+            {
+                "source": r["source"],
+                "target": r["target"],
+                "relation": r["relation"],
+                "timestamp": r.get("timestamp"),
+            }
+            for r in relations
+        ],
+        ensure_ascii=False,
+        indent=2,
     )
 
     system_prompt = """You are a cybersecurity entity graph reconstructor. Your primary input is the final attack attribution REPORT. The provided entity/relation list from raw logs is supplementary reference.
@@ -1889,11 +1956,13 @@ Example output:
 
     try:
         chain = prompt_template | model
-        result = chain.invoke({
-            "entity_list": entity_list_str,
-            "relation_list": relation_list_str,
-            "report": final_report[:10000],
-        })
+        result = chain.invoke(
+            {
+                "entity_list": entity_list_str,
+                "relation_list": relation_list_str,
+                "report": final_report[:10000],
+            }
+        )
 
         raw = result.content
         if isinstance(raw, list):
@@ -1908,32 +1977,47 @@ Example output:
             filtered_entities = entities
             filtered_relations = relations
 
-        logger.info("Graph filter: %d entities, %d relations → %d entities, %d relations.",
-                    len(entities), len(relations), len(filtered_entities), len(filtered_relations))
+        logger.info(
+            "Graph filter: %d entities, %d relations → %d entities, %d relations.",
+            len(entities),
+            len(relations),
+            len(filtered_entities),
+            len(filtered_relations),
+        )
 
         return {
-            "attack_graph_data": {
-                "_replace": True,
-                "entities": filtered_entities,
-                "relations": filtered_relations,
-            } if filtered_entities else None,
+            "attack_graph_data": (
+                {
+                    "_replace": True,
+                    "entities": filtered_entities,
+                    "relations": filtered_relations,
+                }
+                if filtered_entities
+                else None
+            ),
         }
 
     except Exception as e:
         logger.error("Graph filter failed, keeping original data: %s", e)
-        return {"attack_graph_data": {"_replace": True, "entities": entities, "relations": relations}}
+        return {
+            "attack_graph_data": {"_replace": True, "entities": entities, "relations": relations}
+        }
 
 
 def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     """Node 12: Attack Graph Node — 基于 attack_graph_data 生成攻击实体关系网状图 SVG"""
-    logger.info("Executing Attack Graph Node (Node 12): Generating entity relationship graph SVG from structured data...")
+    logger.info(
+        "Executing Attack Graph Node (Node 12): Generating entity relationship graph SVG from structured data..."
+    )
 
     graph_data = state.get("attack_graph_data")
     if not graph_data:
         logger.warning("No attack_graph_data found. Skipping attack graph generation.")
         return {
             "attack_graph": None,
-            "messages": [AIMessage(content="[Attack Graph] 缺少攻击图谱数据，无法生成实体关系图。")],
+            "messages": [
+                AIMessage(content="[Attack Graph] 缺少攻击图谱数据，无法生成实体关系图。")
+            ],
         }
 
     entities: list[dict] = graph_data.get("entities", [])
@@ -2005,32 +2089,47 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
 
     max_in_layer = max((len(v) for v in layer_groups.values()), default=1)
     body_height = max_in_layer * (NODE_HEIGHT + NODE_GAP_Y) + MARGIN * 2 + TITLE_H
-    canvas_width = (max(layer_groups.keys()) + 1) * LAYER_GAP_X + MARGIN * 2 if layer_groups else 800
+    canvas_width = (
+        (max(layer_groups.keys()) + 1) * LAYER_GAP_X + MARGIN * 2 if layer_groups else 800
+    )
     canvas_height = max(400, body_height + LEGEND_H)
 
     legend_base_y = canvas_height - 70
 
     # --- color scheme ---
     type_colors: dict[str, dict[str, str]] = {
-        "process":      {"bg": "#fee2e2", "border": "#ef4444", "text": "#991b1b", "arrow": "arrow-red"},
-        "file":         {"bg": "#fff7ed", "border": "#f97316", "text": "#9a3412", "arrow": "arrow-orange"},
-        "ip":           {"bg": "#eff6ff", "border": "#3b82f6", "text": "#1e40af", "arrow": "arrow-blue"},
-        "registry":     {"bg": "#f0fdf4", "border": "#22c55e", "text": "#166534", "arrow": "arrow-green"},
-        "user_account": {"bg": "#faf5ff", "border": "#a855f7", "text": "#6b21a8", "arrow": "arrow-purple"},
-        "other":        {"bg": "#f1f5f9", "border": "#94a3b8", "text": "#475569", "arrow": "arrow-gray"},
+        "process": {"bg": "#fee2e2", "border": "#ef4444", "text": "#991b1b", "arrow": "arrow-red"},
+        "file": {"bg": "#fff7ed", "border": "#f97316", "text": "#9a3412", "arrow": "arrow-orange"},
+        "ip": {"bg": "#eff6ff", "border": "#3b82f6", "text": "#1e40af", "arrow": "arrow-blue"},
+        "registry": {
+            "bg": "#f0fdf4",
+            "border": "#22c55e",
+            "text": "#166534",
+            "arrow": "arrow-green",
+        },
+        "user_account": {
+            "bg": "#faf5ff",
+            "border": "#a855f7",
+            "text": "#6b21a8",
+            "arrow": "arrow-purple",
+        },
+        "other": {"bg": "#f1f5f9", "border": "#94a3b8", "text": "#475569", "arrow": "arrow-gray"},
     }
 
     rel_labels: dict[str, str] = {
-        "create": "创建", "modify": "修改", "execute": "执行",
-        "communicate": "通信", "authenticate": "认证",
+        "create": "创建",
+        "modify": "修改",
+        "execute": "执行",
+        "communicate": "通信",
+        "authenticate": "认证",
     }
     # edge style per relation: (stroke-width, stroke-dasharray, color, arrow-marker-id)
     rel_styles: dict[str, tuple[str, str, str, str]] = {
-        "create":       ("3", "none", "#22c55e", "arrow-create"),        # thick solid green
-        "modify":       ("2", "6,4",  "#f59e0b", "arrow-modify"),        # dashed amber
-        "execute":      ("2", "2,3",  "#ef4444", "arrow-execute"),       # dotted red
-        "communicate":  ("2", "none", "#3b82f6", "arrow-communicate"),   # normal solid blue
-        "authenticate": ("1.5", "4,3","#a855f7", "arrow-authenticate"),  # thin dashed purple
+        "create": ("3", "none", "#22c55e", "arrow-create"),  # thick solid green
+        "modify": ("2", "6,4", "#f59e0b", "arrow-modify"),  # dashed amber
+        "execute": ("2", "2,3", "#ef4444", "arrow-execute"),  # dotted red
+        "communicate": ("2", "none", "#3b82f6", "arrow-communicate"),  # normal solid blue
+        "authenticate": ("1.5", "4,3", "#a855f7", "arrow-authenticate"),  # thin dashed purple
     }
 
     # --- position nodes ---
@@ -2049,24 +2148,41 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     # --- build SVG ---
     lines: list[str] = []
 
-    lines.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {canvas_width} {canvas_height}" width="100%" height="100%">')
-    lines.append('<style>')
-    lines.append('.legend-text { font-family: sans-serif; font-size: 10px; fill: #cbd5e1; }')
-    lines.append('</style>')
+    lines.append(
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {canvas_width} {canvas_height}" width="100%" height="100%">'
+    )
+    lines.append("<style>")
+    lines.append(".legend-text { font-family: sans-serif; font-size: 10px; fill: #cbd5e1; }")
+    lines.append("</style>")
     lines.append(f'<rect width="{canvas_width}" height="{canvas_height}" fill="#0f172a"/>')
-    lines.append(f'<text x="{canvas_width // 2}" y="26" text-anchor="middle" font-size="15" font-weight="bold" fill="#e2e8f0" font-family="sans-serif">攻击实体关系图</text>')
+    lines.append(
+        f'<text x="{canvas_width // 2}" y="26" text-anchor="middle" font-size="15" font-weight="bold" fill="#e2e8f0" font-family="sans-serif">攻击实体关系图</text>'
+    )
 
     # arrow markers (entity type arrows + relation type arrows)
-    lines.append('<defs>')
-    ent_arrows = [("arrow-red","#ef4444"),("arrow-orange","#f97316"),("arrow-blue","#3b82f6"),
-                  ("arrow-green","#22c55e"),("arrow-purple","#a855f7"),("arrow-gray","#94a3b8")]
-    rel_arrows = [("arrow-create","#22c55e"),("arrow-modify","#f59e0b"),("arrow-execute","#ef4444"),
-                  ("arrow-communicate","#3b82f6"),("arrow-authenticate","#a855f7")]
+    lines.append("<defs>")
+    ent_arrows = [
+        ("arrow-red", "#ef4444"),
+        ("arrow-orange", "#f97316"),
+        ("arrow-blue", "#3b82f6"),
+        ("arrow-green", "#22c55e"),
+        ("arrow-purple", "#a855f7"),
+        ("arrow-gray", "#94a3b8"),
+    ]
+    rel_arrows = [
+        ("arrow-create", "#22c55e"),
+        ("arrow-modify", "#f59e0b"),
+        ("arrow-execute", "#ef4444"),
+        ("arrow-communicate", "#3b82f6"),
+        ("arrow-authenticate", "#a855f7"),
+    ]
     for name, color in ent_arrows + rel_arrows:
-        lines.append(f'<marker id="{name}" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">')
+        lines.append(
+            f'<marker id="{name}" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">'
+        )
         lines.append(f'<path d="M 0 0 L 10 5 L 0 10 z" fill="{color}"/>')
-        lines.append('</marker>')
-    lines.append('</defs>')
+        lines.append("</marker>")
+    lines.append("</defs>")
 
     # edges — collect paths and labels separately
     target_entry_slots: dict[str, int] = {}
@@ -2082,7 +2198,9 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         tx, ty_base = x2, y2 + NODE_HEIGHT // 2
 
         rel_type = rel.get("relation", "")
-        sw, dash, edge_color, arrow_id = rel_styles.get(rel_type, ("2", "none", "#94a3b8", "arrow-gray"))
+        sw, dash, edge_color, arrow_id = rel_styles.get(
+            rel_type, ("2", "none", "#94a3b8", "arrow-gray")
+        )
         dash_attr = f' stroke-dasharray="{dash}"' if dash != "none" else ""
 
         # offset entry point when multiple sources connect to the same target
@@ -2093,11 +2211,15 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         ty = ty_base + offset_sign * offset_idx * 20
         corner_x = tx - 90 - offset_sign * offset_idx * 8
 
-        edge_paths.append(f'<path d="M {sx} {sy} L {corner_x} {sy} L {corner_x} {ty} L {tx} {ty}" fill="none" stroke="{edge_color}" stroke-width="{sw}"{dash_attr} marker-end="url(#{arrow_id})"/>')
+        edge_paths.append(
+            f'<path d="M {sx} {sy} L {corner_x} {sy} L {corner_x} {ty} L {tx} {ty}" fill="none" stroke="{edge_color}" stroke-width="{sw}"{dash_attr} marker-end="url(#{arrow_id})"/>'
+        )
 
         label = rel_labels.get(rel_type, rel_type)
         lx = (corner_x + tx) / 2
-        edge_labels.append(f'<text x="{lx}" y="{ty}" font-family="sans-serif" font-size="10" fill="#cbd5e1" stroke="#0f172a" stroke-width="4" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">{label}</text>')
+        edge_labels.append(
+            f'<text x="{lx}" y="{ty}" font-family="sans-serif" font-size="10" fill="#cbd5e1" stroke="#0f172a" stroke-width="4" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">{label}</text>'
+        )
 
     lines.extend(edge_paths)
     lines.extend(edge_labels)
@@ -2110,12 +2232,22 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         x, y = node_pos[eid]
         etype = entity.get("type", "other")
         tc = type_colors.get(etype, type_colors["other"])
-        name = (entity.get("name") or eid).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+        name = (
+            (entity.get("name") or eid)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+        )
         dash = "5,4" if etype != "process" else "none"
 
         lines.append(f'<foreignObject x="{x}" y="{y}" width="{NODE_WIDTH}" height="{NODE_HEIGHT}">')
-        lines.append(f'<div xmlns="http://www.w3.org/1999/xhtml" style="border:2px {tc["border"]}; border-style:solid; border-radius:8px; background:{tc["bg"]}; padding:6px 10px; font-family:sans-serif; font-size:11px; box-sizing:border-box; height:100%; display:flex; flex-direction:column; justify-content:center; overflow:hidden; stroke-dasharray:{dash};">')
-        lines.append(f'<div style="font-weight:bold; color:{tc["text"]}; font-size:11px; word-wrap:break-word;">{name}</div>')
+        lines.append(
+            f'<div xmlns="http://www.w3.org/1999/xhtml" style="border:2px {tc["border"]}; border-style:solid; border-radius:8px; background:{tc["bg"]}; padding:6px 10px; font-family:sans-serif; font-size:11px; box-sizing:border-box; height:100%; display:flex; flex-direction:column; justify-content:center; overflow:hidden; stroke-dasharray:{dash};">'
+        )
+        lines.append(
+            f'<div style="font-weight:bold; color:{tc["text"]}; font-size:11px; word-wrap:break-word;">{name}</div>'
+        )
         props = entity.get("properties", {})
         detail = ""
         etype = entity.get("type", "")
@@ -2128,64 +2260,88 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
             if vn:
                 detail = vn
         if detail:
-            detail = detail.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-            lines.append(f'<div style="color:{tc["text"]}; font-size:9px; opacity:0.75; margin-top:2px; word-wrap:break-word; line-height:1.2;">{detail[:40]}</div>')
-        lines.append('</div>')
-        lines.append('</foreignObject>')
+            detail = (
+                detail.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace('"', "&quot;")
+            )
+            lines.append(
+                f'<div style="color:{tc["text"]}; font-size:9px; opacity:0.75; margin-top:2px; word-wrap:break-word; line-height:1.2;">{detail[:40]}</div>'
+            )
+        lines.append("</div>")
+        lines.append("</foreignObject>")
 
     # --- legend ---
     # entity legend (right side)
     ent_items = [
-        ("process",      "进程"),
-        ("file",         "文件"),
-        ("ip",           "网络"),
-        ("registry",     "注册表"),
+        ("process", "进程"),
+        ("file", "文件"),
+        ("ip", "网络"),
+        ("registry", "注册表"),
         ("user_account", "用户账户"),
-        ("other",        "其他"),
+        ("other", "其他"),
     ]
     ent_start_x = canvas_width - 580
     ent_box_w = len(ent_items) * 90 + 16
     # entity legend: box + title first, then items
-    lines.append(f'<rect x="{ent_start_x - 8}" y="{legend_base_y}" width="{ent_box_w}" height="46" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>')
-    lines.append(f'<text x="{ent_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#f8fafc" font-weight="bold" font-family="sans-serif">实体</text>')
+    lines.append(
+        f'<rect x="{ent_start_x - 8}" y="{legend_base_y}" width="{ent_box_w}" height="46" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>'
+    )
+    lines.append(
+        f'<text x="{ent_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#f8fafc" font-weight="bold" font-family="sans-serif">实体</text>'
+    )
     for i, (key, label) in enumerate(ent_items):
         lx = ent_start_x + i * 90
         tc = type_colors[key]
-        lines.append(f'<rect x="{lx}" y="{legend_base_y + 24}" width="14" height="14" rx="3" fill="{tc["bg"]}" stroke="{tc["border"]}" stroke-width="1.5"/>')
-        lines.append(f'<text x="{lx + 19}" y="{legend_base_y + 35}" font-size="10" fill="#cbd5e1" font-family="sans-serif">{label}</text>')
+        lines.append(
+            f'<rect x="{lx}" y="{legend_base_y + 24}" width="14" height="14" rx="3" fill="{tc["bg"]}" stroke="{tc["border"]}" stroke-width="1.5"/>'
+        )
+        lines.append(
+            f'<text x="{lx + 19}" y="{legend_base_y + 35}" font-size="10" fill="#cbd5e1" font-family="sans-serif">{label}</text>'
+        )
 
     # behavior legend (left side)
     act_items = [
-        ("create",       "创建"),
-        ("modify",       "修改"),
-        ("execute",      "执行"),
-        ("communicate",  "通信"),
+        ("create", "创建"),
+        ("modify", "修改"),
+        ("execute", "执行"),
+        ("communicate", "通信"),
         ("authenticate", "认证"),
     ]
     act_start_x = 50
     act_box_w = len(act_items) * 90 + 16
     # behavior legend: box + title first, then items
-    lines.append(f'<rect x="{act_start_x - 8}" y="{legend_base_y}" width="{act_box_w}" height="46" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>')
-    lines.append(f'<text x="{act_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#f8fafc" font-weight="bold" font-family="sans-serif">行为</text>')
+    lines.append(
+        f'<rect x="{act_start_x - 8}" y="{legend_base_y}" width="{act_box_w}" height="46" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>'
+    )
+    lines.append(
+        f'<text x="{act_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#f8fafc" font-weight="bold" font-family="sans-serif">行为</text>'
+    )
     for i, (rel_type, label) in enumerate(act_items):
         lx = act_start_x + i * 90
         sw, dash, color, _ = rel_styles[rel_type]
         dash_attr = f' stroke-dasharray="{dash}"' if dash != "none" else ""
-        lines.append(f'<line x1="{lx}" y1="{legend_base_y + 31}" x2="{lx + 40}" y2="{legend_base_y + 31}" stroke="{color}" stroke-width="{sw}"{dash_attr}/>')
-        lines.append(f'<text x="{lx + 48}" y="{legend_base_y + 35}" font-size="10" fill="#cbd5e1" font-family="sans-serif">{label}</text>')
+        lines.append(
+            f'<line x1="{lx}" y1="{legend_base_y + 31}" x2="{lx + 40}" y2="{legend_base_y + 31}" stroke="{color}" stroke-width="{sw}"{dash_attr}/>'
+        )
+        lines.append(
+            f'<text x="{lx + 48}" y="{legend_base_y + 35}" font-size="10" fill="#cbd5e1" font-family="sans-serif">{label}</text>'
+        )
 
-    lines.append('</svg>')
+    lines.append("</svg>")
 
     svg_code = "\n".join(lines)
 
-    logger.info("Attack graph SVG generated successfully from structured data (%d entities, %d relations).",
-                len(entities), len(relations))
+    logger.info(
+        "Attack graph SVG generated successfully from structured data (%d entities, %d relations).",
+        len(entities),
+        len(relations),
+    )
 
     return {
         "attack_graph": svg_code,
         "messages": [
-            AIMessage(
-                content=f"攻击实体关系网状图(SVG)已生成：\n\n```xml\n{svg_code}\n```"
-            )
+            AIMessage(content=f"攻击实体关系网状图(SVG)已生成：\n\n```xml\n{svg_code}\n```")
         ],
     }
