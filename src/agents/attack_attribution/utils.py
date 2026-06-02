@@ -195,6 +195,80 @@ def _iter_json_candidates(text: str):
                 start = -1
 
 
+# --- query fingerprint helpers (shared by multiple nodes) ---
+
+# Single-ID entries provide granular labels when the Agent queries a subset.
+# Merged-group entries compact the label when ALL members are present.
+_EIDS_BEHAVIOR_MAP: list[tuple[tuple[str, ...], str]] = [
+    # --- merged groups (largest first, matched when all members present) ---
+    (
+        ("4720", "4722", "4724", "4725", "4726", "4728", "4732", "4738", "4740", "4798", "4704", "4719"),
+        "Account auditing",
+    ),
+    (("3", "22", "4624"), "Network & DNS"),
+    (("7", "11"),         "File & module"),
+    (("8", "10", "25"),   "Process memory"),
+    (("12", "13", "14"),  "Registry"),
+    (("4648", "4672"),     "Credential & privilege"),
+    # --- single IDs (fallback when merged group doesn't fully match) ---
+    (("1",),    "Process creation"),
+    (("3",),    "Network connection"),
+    (("22",),   "DNS query"),
+    (("4624",), "Network logon"),
+    (("7",),    "DLL / module load"),
+    (("11",),   "File creation"),
+    (("8",),    "Process injection"),
+    (("10",),   "Process access"),
+    (("25",),   "Process tampering"),
+    (("12",),   "Registry key delete"),
+    (("13",),   "Registry value set"),
+    (("14",),   "Registry key rename"),
+    (("7045",), "Service installation"),
+    (("4648",), "Credential logon"),
+    (("4672",), "Privilege assignment"),
+]
+
+_QTYPE_LABEL: dict[str, str] = {
+    "PROCESS_ID": "PID",
+    "PARENT_PROCESS_ID": "Parent PID",
+    "FILE_PATH": "File",
+    "IP_ADDRESS": "IP",
+    "PORT": "Port",
+    "SERVICE_NAME": "Service",
+    "USER_ACCOUNT": "User",
+    "REGISTRY_PATH": "Registry",
+    "LOGON_ID": "Logon ID",
+    "SECURITY_ID": "SID",
+    "DNS_QUERY": "Domain",
+}
+
+
+def eids_to_investigation(eids: list[str]) -> str:
+    if not eids:
+        return "-"
+    eids_set = set(str(e) for e in eids)
+    labels: list[str] = []
+    covered: set[str] = set()
+    for eid_tuple, label in sorted(_EIDS_BEHAVIOR_MAP, key=lambda x: (-len(x[0]), x[0])):
+        group = set(eid_tuple)
+        if group <= (eids_set - covered):
+            labels.append(label)
+            covered |= group
+    leftovers = eids_set - covered
+    if leftovers:
+        labels.append(", ".join(sorted(leftovers)))
+    return ", ".join(labels)
+
+
+def fp_target(tool_name: str, args: dict) -> str:
+    if "keyword" in tool_name:
+        return (args.get("keyword") or "-")[:60]
+    qtype = args.get("query_type", "")
+    qval = str(args.get("query_value", ""))
+    label = _QTYPE_LABEL.get(qtype, qtype or "-")
+    return f"{label} {qval}" if qval else label
+
+
 if __name__ == "__main__":
     from pathlib import Path
 

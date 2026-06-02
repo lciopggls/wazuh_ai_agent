@@ -3,7 +3,7 @@ import logging
 import re
 from collections import deque
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -11,12 +11,23 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel, Field
 
 from .log_retrieval_helper import get_archives_by_eventid, get_archives_by_keyword
 from .prompt import attribution_investigation_prompt_long
+from .schemas import (
+    AttackAbstractModel,
+    InitialClueAnalysis,
+    QueryIntent,
+    SynthesizedFindings,
+)
 from .state import AttributionPlannerActionCommand, AttributionState
-from .utils import extract_beijing_time_from_logs, load_mitre, load_skill
+from .utils import (
+    eids_to_investigation,
+    extract_beijing_time_from_logs,
+    fp_target,
+    load_mitre,
+    load_skill,
+)
 
 # from .utils import extract_agent_ip_mapping
 
@@ -33,136 +44,6 @@ MITRE_KB_FILE_PATH = (
     / "attribution_skills"
     / "mitre_knowledgebase.md"
 )
-
-
-class InitialClueAnalysis(BaseModel):
-    agent_id: str = Field(description="提取到的被攻击 Agent ID (如 '005')。若未找到则留空。")
-    start_time_utc8: str = Field(description="调查窗口的起始时间，ISO8601格式 (北京时间/UTC+8)。")
-    end_time_utc8: str = Field(description="调查窗口的结束时间，ISO8601格式 (北京时间/UTC+8)。")
-    refined_clue: str = Field(description="专业中文攻击线索描述（包含北京时间）。")
-
-
-class QueryIntent(BaseModel):
-    is_simple_query: bool = Field(
-        description="True if the user is only querying/searching/viewing logs without asking for attack analysis. "
-        "False if this is an attack investigation, attribution, or forensics request."
-    )
-
-
-class GraphEntity(BaseModel):
-    """攻击实体节点。"""
-
-    id: str = Field(
-        description=(
-            "Unique entity ID. Must follow the convention: "
-            "process → 'proc_<pid>' (e.g., 'proc_5324'), "
-            "file → 'file_<N>' (e.g., 'file_1'), "
-            "ip → 'ip_<address>' (e.g., 'ip_192.168.1.100'), "
-            "registry → 'reg_<N>' (e.g., 'reg_1'), "
-            "user_account → 'user_<name>' (e.g., 'user_Administrator'), "
-            "other → 'other_<N>' (e.g., 'other_1'). "
-            "N is a sequential integer starting from 1 per type."
-        )
-    )
-    type: Literal["process", "file", "ip", "registry", "user_account", "other"] = Field(
-        description="Entity type."
-    )
-    name: str = Field(description="Human-readable entity name, e.g., 'powershell.exe (PID: 5324)'.")
-    timestamp: str | None = Field(
-        default=None, description="First observed ISO8601 timestamp for this entity."
-    )
-    properties: dict = Field(
-        default_factory=dict,
-        description=(
-            "Type-specific key-value dict. "
-            "process: {pid (int), image (str), command_line (str|None)}. "
-            "file: {path (str)}. "
-            "ip: {address (str), port (int|None)}. "
-            "registry: {key_path (str), value_name (str|None)}. "
-            "user_account: {username (str), domain (str|None)}. "
-            "other: {} (empty). "
-            "Omit keys whose values are missing from the raw logs."
-        ),
-    )
-
-
-class GraphRelation(BaseModel):
-    """攻击实体间的关系边。"""
-
-    source: str = Field(description="Source entity ID (must match a GraphEntity.id).")
-    target: str = Field(description="Target entity ID (must match a GraphEntity.id).")
-    relation: Literal[
-        "create",
-        "modify",
-        "execute",
-        "communicate",
-        "authenticate",
-    ] = Field(
-        description=(
-            "Relationship type (simplified): "
-            "create = spawned child process OR created/wrote a file; "
-            "modify = modified a file OR modified a registry key; "
-            "execute = executed a file as process OR loaded a DLL OR injected into another process; "
-            "communicate = connected to network address OR DNS resolved to IP; "
-            "authenticate = process ran under a user account (credential use / privilege verification)."
-        )
-    )
-    timestamp: str | None = Field(
-        default=None, description="ISO8601 timestamp when the relationship was observed."
-    )
-
-
-class SynthesizedFindings(BaseModel):
-    task_description: str = Field(
-        description="Briefly restate the exact investigation instruction you are executing (e.g., 'Downward tracking of PID 10484 on Agent 005 for Process Creation'). DO NOT include any prefixes or markdown headers. Must be in Chinese."
-    )
-    detailed_findings: str = Field(
-        description="""A strict chronological timeline and factual summary of the events.
-        CRITICAL ZERO-LOSS RULE: You MUST embed all exact technical Evidence/IOCs directly into this narrative.
-        Whenever you mention an event, you MUST include its exact timestamp, exact PID, full absolute file path, unredacted command line, and any related IPs/Ports.
-
-        ### ANTI-HALLUCINATION PROTOCOL (CRITICAL) ###
-        1. GROUNDING RULE: You are STRICTLY FORBIDDEN from inventing, inferring, or generating ANY data (timestamps, PIDs, IPs, filenames, actions) that is not EXPLICITLY present in the provided Raw JSON Logs.
-        2. MISSING EVIDENCE RULE: If the Raw Logs do NOT contain the exact behavior requested in the instruction (e.g., the instruction asks for Process Creation, but logs only show File Creation), you MUST explicitly state the discrepancy.
-        3. NULL RESPONSE RULE: If the Raw Logs are empty, irrelevant, or insufficient to fulfill the instruction, you MUST output EXACTLY: "日志检索结果未包含符合预期的行为证据。发现的孤立事件为：[简述实际发现的内容]。" DO NOT fabricate a story.
-
-        ROLE BOUNDARY (CRITICAL): You are a Fact Extractor, NOT the final judge. DO NOT forcefully assign MITRE Tactic IDs unless explicitly supported by the 'MITRE Knowledge'. If in doubt, just describe the objective behavior.
-        FORMATTING RULE: You MUST strictly use the hierarchical Markdown template defined in the System Prompt (using ###, >, -, and ```cmd). Must be in Chinese. """
-    )
-    graph_entities: list[GraphEntity] = Field(
-        default_factory=list,
-        description="Structured attack graph entity nodes extracted from the raw logs. Include every distinct process, file, IP, registry key, and user account observed.",
-    )
-    graph_relations: list[GraphRelation] = Field(
-        default_factory=list,
-        description="Structured attack graph relationship edges linking entities. Every entity in graph_entities that acts as source or target of an observable behavior MUST have at least one relation.",
-    )
-
-
-class AttackAbstractModel(BaseModel):
-    """攻击调查概要结构，用于 attack_abstract_node 的 PydanticOutputParser 解析。"""
-
-    hosts: list[str] = Field(description="涉及的主机列表，格式：主机名（Agent ID）")
-    start_time: str = Field(description="攻击起始时间，如 '2024-05-20 10:15:00'")
-    end_time: str = Field(description="攻击结束时间，如 '2024-05-20 10:45:30'")
-    duration: str = Field(description="攻击持续时长，如 '0时30分30秒'")
-    ioc_files: list[str] = Field(
-        description="涉及的文件名IOC列表（含路径），无则空列表。排除明确的系统良性文件。"
-    )
-    ioc_domains: list[str] = Field(
-        description="涉及的域名/IP IOC列表，无则空列表。排除纯内网基础设施IP。"
-    )
-    ioc_processes: list[str] = Field(
-        description="涉及的恶意/被利用进程名IOC列表，含PID等关键上下文，无则空列表。"
-    )
-    tactics: list[str] = Field(
-        description=(
-            "涉及的ATT&CK战术阶段中文名列表，仅限以下12个："
-            "初始访问、执行、持久化、权限提升、防御规避、凭证访问、"
-            "发现、横向移动、收集、数据窃取、命令与控制、影响"
-        )
-    )
-    tactics_count: int = Field(description="涉及的不同战术阶段总数")
 
 
 """
@@ -507,26 +388,19 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
     # --- build query fingerprint history table ---
     if executed_queries:
         rows = [
-            "| # | Agent | Tool | Type/Keyword | Value | EventIDs | Time Range | Logs |",
-            "|---|-------|------|-------------|-------|----------|------------|------|",
+            "| # | Agent | Target | Investigation | Time Range | Logs |",
+            "|---|-------|--------|--------------|------------|------|",
         ]
         for i, q in enumerate(executed_queries, 1):
             agent = q.get("agent", "")
-            tool = q.get("tool", "")
+            target = q.get("target", "-")
+            investigation = q.get("investigation", "-")
             count = q.get("count", 0)
             start = q.get("start", "")
             end = q.get("end", "")
             time_range = f"{start}~{end}" if start or end else "-"
-            if tool == "by_keyword":
-                qtype = "KEYWORD"
-                qval = q.get("kw", "")
-                eids = "-"
-            else:
-                qtype = q.get("qtype", "")
-                qval = q.get("qval", "")
-                eids = ", ".join(q.get("eids", []))
             rows.append(
-                f"| {i} | {agent} | {tool} | {qtype} | {qval} | {eids} | {time_range} | {count} |"
+                f"| {i} | {agent} | {target} | {investigation} | {time_range} | {count} |"
             )
         query_history = "\n".join(rows)
     else:
@@ -551,7 +425,7 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
   - **How to instruct**: Explicitly mention the MITRE ATT&CK ID (e.g., T1059 or T1003.001) in your instruction.
   - **Rule 1 (Explicit SIEM Tags)**: Whenever you encounter a MITRE ATT&CK ID in a raw log's `rule.mitre.id` field, you MUST call this node using that ID, UNLESS it has already been queried.
   - **Rule 2 (Implicit Behaviors - CRITICAL)**: While SIEM labels provide a useful baseline, they can sometimes be incomplete or false positives. You MUST proactively analyze process names, command-line arguments, and systemic behaviors. Use your cybersecurity expertise to independently deduce the true underlying attack techniques and query this node for them, UNLESS they have already been queried.
-  - **Rule 3 (Deduplication & State Awareness - ABSOLUTE MANDATORY)**: Before routing to this node, you MUST check the **MITRE Knowledge Base** section at the bottom of this prompt. If the TID you intend to query is ALREADY listed there, you are STRICTLY FORBIDDEN from calling this node for that exact TID again.
+  - **Rule 3 (Deduplication & State Awareness - ABSOLUTE MANDATORY)**: Before routing to this node, you MUST check the **MITRE Knowledge Base** section in the CURRENT CASE CONTEXT section. If the TID you intend to query is ALREADY listed there, you are STRICTLY FORBIDDEN from calling this node for that exact TID again.
 """
 
     multi_host_instructions = ""
@@ -569,41 +443,56 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
     # """
 
     system_prompt = (
-        """You are an elite Cybersecurity Chief Attribution Planner.
-Your role is to orchestrate a complex attack forensics investigation. You do NOT query databases directly. Instead, you analyze the intelligence gathered so far and delegate specific tasks to specialized subordinate nodes.
+"""\
+You are an elite Cybersecurity Chief Attribution Planner.
+Your role is to orchestrate a complex attack forensics investigation. You do NOT query
+databases directly. Instead, you analyze the intelligence gathered so far and delegate
+specific tasks to specialized subordinate nodes.
 
 ## YOUR ARSENAL (TARGET NODES)
 - 'Log_Retrieval_Node': Routes to a specialized AI agent equipped with Wazuh API tools.
-  - **How to instruct**: Provide clear, natural language instructions detailing *what* you want to find. You MUST explicitly mention *the Agent ID* in your instruction.
-  - *Example*: "Investigate PID 6536 on Agent 005 for File Creation. Apply time range 2026-03-25T10:00:00Z to 2026-03-25T11:00:00Z."
-  - IMPORTANT: The Log_Retrieval_Node will execute exactly what you ask. It will NOT automatically translate IP addresses into Agent IDs for you.
-
+  - **How to instruct**: Provide clear, natural language instructions detailing *what* you
+    want to find. You MUST explicitly mention *the Agent ID* in your instruction.
+  - *Example*: "Investigate PID 6536 on Agent 005 for File Creation. Apply time range
+    2026-03-25T10:00:00Z to 2026-03-25T11:00:00Z."
+  - IMPORTANT: The Log_Retrieval_Node will execute exactly what you ask. It will NOT
+    automatically translate IP addresses into Agent IDs for you.
 - 'Reporter_Node': Routes to the reporting engine to close the case.
-  - When to use (STRICT EXHAUSTION TEST): You are STRICTLY FORBIDDEN from choosing this node until all applicable checks in the Attack Chain Completeness Verification (section 5) have been ATTEMPTED. The key word is ATTEMPTED — if a query returned no data, that dimension is exhausted and you can move on.
-  - **How to instruct**: Provide a brief narrative summary of the attack chain and key findings. This summary will be passed as context to the Reporter, which has its OWN strict report format template.
-  - **ABSOLUTE PROHIBITION**: You MUST NOT prescribe ANY output format, JSON schema, field names (e.g., "scenario_id", "attack_path", "timeline"), section structure, or markup requirements in your instruction. The Reporter automatically applies its own professional forensic report template. Prescribing a conflicting format will corrupt the final report.
-
-{mitre_instructions}
-{multi_host_instructions}
+  - When to use (STRICT EXHAUSTION TEST): You are STRICTLY FORBIDDEN from choosing this
+    node until all applicable checks in the Attack Chain Completeness Verification
+    (section 4) have been ATTEMPTED. The key word is ATTEMPTED — if a query returned no
+    data, that dimension is exhausted and you can move on.
+  - **How to instruct**: Provide a brief narrative summary of the attack chain and key
+    findings. This summary will be passed as context to the Reporter, which has its OWN
+    strict report format template.
+  - **ABSOLUTE PROHIBITION**: You MUST NOT prescribe ANY output format, JSON schema,
+    field names (e.g., "scenario_id", "attack_path", "timeline"), section structure, or
+    markup requirements in your instruction. The Reporter automatically applies its own
+    professional forensic report template. Prescribing a conflicting format will corrupt
+    the final report.
+{mitre_instructions}\
+{multi_host_instructions}\
 
 """
-        + attribution_investigation_prompt
-        + """
-
-### QUERY FINGERPRINT HISTORY (READ-ONLY — DO NOT REPEAT)
-
-Every query already executed against Wazuh Indexer is recorded below. Cross-check your intended query against this table before routing to Log_Retrieval_Node.
-
-{query_history}
-
+    +
+"""\
 ### CURRENT CASE CONTEXT
-
 - **Default Start Time**: {default_start}
 - **Default End Time**: {default_end}
 - **MITRE Knowledge Base**:
-
 {kb_str}
 
+### QUERY FINGERPRINT HISTORY (READ-ONLY — DO NOT REPEAT)
+Every query already executed against Wazuh Indexer is recorded below. Cross-check your
+intended query against this table before routing to Log_Retrieval_Node.
+
+{query_history}
+
+"""
+    +
+    attribution_investigation_prompt
+    +
+"""\
 ### OUTPUT FORMAT
 {format_instructions}
 """
@@ -715,41 +604,48 @@ def log_retrieval_node(state: AttributionState, config: RunnableConfig, model: B
     tools = [get_archives_by_keyword, get_archives_by_eventid]
 
     system_prompt = f"""You are an elite Data Access & API Agent for the Wazuh Indexer.
-Your primary role is to fetch precise security telemetry, logs, and forensic data using the provided tools. You act as the core data engine for other analytical agents and human users.
+Your primary role is to translate the Chief Planner's natural language investigation instructions into precise Wazuh API queries and fetch raw security telemetry.
 
-### TOOL SELECTION LOGIC (STRICT ADHERENCE):
-- **Scenario A: Generic Keyword Searches (STRICTLY NON-PROCESS QUERIES)**
-  If the instruction explicitly asks to search for a general text string, malicious filename, or IP address (e.g., "Search for mimikatz.exe"), you MUST call `get_archives_by_keyword`.
-  *ABSOLUTE BAN (CRITICAL)*: You are STRICTLY FORBIDDEN from executing `get_archives_by_keyword` if the instruction requests tracking a numerical `PID` or specific behavior like "File Drops".
+### BEHAVIOR → EVENT ID MAPPING (CRITICAL)
+The Planner will describe investigation targets in natural language (e.g., "child processes", "file drops", "DNS resolution"). You MUST map these descriptions to the correct `event_ids` using the table below. Choose ALL event_ids groups that match the Planner's described behaviors, but do NOT combine unrelated behaviors into a single call.
 
-- **Scenario B: Specific Behaviors, Process Trees, Registry activity & Lateral Activity**
-  If the instruction asks about process tracking, registry changes, or file actions, you MUST call `get_archives_by_eventid`.
-  - To find the execution details of a process itself (e.g., finding its creation log), use `query_type="PROCESS_ID"` and `event_ids=["1"]`.
-  - To find child processes spawned by a specific parent, use `query_type="PARENT_PROCESS_ID"` and `event_ids=["1"]`.
-  - To find lateral activities: Use relevant `event_ids` (Network Connection=["3","4624"], DLL Loading=["7"], Injection=["8","10"], File Creation=["11"], Registry Modification=["12","13","14"], Service Installation=["7045"], Identity & Privilege Auditing=["4722", "4724", "4732", "4738", "4798"].).
-  - **PATH Retry Rule (FILE & REGISTRY)**: If you execute a `FILE_PATH` or `REGISTRY_PATH` query using a full path and the tool returns a `search_feedback` error, you MUST automatically extract the last part of the path (the filename or the specific Key name) and execute a SECOND tool call using ONLY that fragment as the `query_value`.
+| Planner describes...                                 | event_ids | query_type hint (decide based on target entity) |
+|------------------------------------------------------|-----------|-------------------------------------------------|
+| Process creation — upward / ancestor / who created PID X | ["1"] | PROCESS_ID (PID), FILE_PATH, USER_ACCOUNT |
+| Process creation — downward / descendant / what PID X created | ["1"] | PARENT_PROCESS_ID (PID), FILE_PATH, USER_ACCOUNT |
+| Network connection, DNS resolution, network logon | ["3","22","4624"] | PID, IP_ADDRESS, PORT, FILE_PATH, USER_ACCOUNT |
+| File creation, DLL / module loads | ["7","11"] | PID, FILE_PATH, USER_ACCOUNT |
+| Process injection, process access, process tampering (memory) | ["8","10","25"] | PID, FILE_PATH, USER_ACCOUNT |
+| Registry key / value modification | ["12","13","14"] | PID, REGISTRY_PATH, FILE_PATH, USER_ACCOUNT |
+| Service installation | ["7045"] | SERVICE_NAME, FILE_PATH, USER_ACCOUNT |
+| Explicit credential logon (runas / PSRemote) | ["4648"] | PID, FILE_PATH, USER_ACCOUNT, IP_ADDRESS, LOGON_ID |
+| Special logon / privilege assignment | ["4672"] | LOGON_ID, SECURITY_ID, USER_ACCOUNT |
+| Account management, group membership, user auditing | ["4720","4722","4724","4725","4726","4728","4732","4738","4740","4798","4704","4719"] | USER_ACCOUNT, LOGON_ID, SECURITY_ID |
 
-### STRICT TOOL ISOLATION (NO FALLBACKS):
-- **NO KEYWORD FALLBACK FOR PIDs**: If the specific process tracking tools return 0 results or a `search_feedback` message for a PID, you MUST simply return that result to the Chief Planner. **DO NOT** attempt to "help" by falling back to `get_archives_by_keyword` to search the PID as a keyword.
+### TOOL SELECTION LOGIC
+- **Use `get_archives_by_eventid`** when the instruction mentions a specific PID, file path, IP, user account, registry path, service name, logon ID, SID, domain name, or any behavior from the mapping table above.
+  - The `query_type` parameter is a separate dimension from `event_ids`. Match `query_type` to the entity you are searching FOR (e.g., if searching BY a PID for file creation behavior, use `query_type="PROCESS_ID"` and `event_ids=["7","11"]`).
+  - For upward trace ("who created PID X"): `query_type="PROCESS_ID"`, `event_ids=["1"]`.
+  - For downward trace ("what did PID X create"): `query_type="PARENT_PROCESS_ID"`, `event_ids=["1"]`.
+- **Use `get_archives_by_keyword`** when the instruction asks to search for a raw text string, filename, or IP that does NOT map to any specific structured entity or behavior. Also use it as a fallback (see below).
 
+### AUTO-FALLBACK RULE (CRITICAL)
+If `get_archives_by_eventid` returns 0 results or a `search_feedback` message for a PID-based or file-path-based query, you MUST automatically attempt ONE fallback call using `get_archives_by_keyword` with the same PID or filename as the keyword. This catches cases where the relevant logs use non-standard field names or the target does not appear in the expected structured fields.
+- If the keyword fallback also returns 0 results, report the `search_feedback` and stop.
+- Do NOT perform more than ONE fallback call per Planner instruction.
+- Do NOT fall back to keyword if the original query already returned data — the auto-fallback is only for empty results.
 
-### API TRANSLATION RULES (CRITICAL)
-When translating the Planner's instructions into API calls, you MUST adhere to these field mappings for EventID=1 (Process Creation):
-1. **For 'Process Creation (Upward)'**: The Planner wants to know WHO created the target PID.
-   - You must search for the log where the target PID is the NEW process being born.
-   - Use `query_type="PROCESS_ID"` and pass the target PID. This returns the exact moment the process started, revealing its `parent_process_id` and `parent_image`.
-2. **For 'Process Creation (Downward)'**: The Planner wants to know WHAT the target PID created.
-   - You must search for logs where the target PID acted as the creator.
-   - You MUST use `query_type="PARENT_PROCESS_ID"` and pass the target PID. This will return all child processes spawned by it.
+### PATH RETRY RULE (FILE & REGISTRY)
+If you execute a `FILE_PATH` or `REGISTRY_PATH` query using a full path and the tool returns a `search_feedback` error, you MUST automatically extract the last part of the path (the filename or the specific Key name) and execute a SECOND tool call using ONLY that fragment as the `query_value`.
 
 ### DATA HANDLING & ROLE BOUNDARIES (CRITICAL):
 You are exclusively a raw data retrieval pipeline. You MUST adhere strictly to these constraints:
 1. **ZERO HALLUCINATION**: You MUST NOT generate, simulate, or mock any JSON data.
 2. **ZERO MODIFICATION**: When the tool returns the JSON logs, you MUST NOT summarize, filter, analyze, or explain them.
-3. **NO RETRIES ON EMPTY DATA (ABSOLUTE RULE)**: You are a single-shot execution agent (except for the FILE_PATH retry rule above).
-   - If `get_archives_by_eventid` returns a JSON indicating no logs were found (e.g., `{{"search_feedback": ...}}`), your job is DONE.
+3. **NO EXPANSIVE RETRIES**: Beyond the AUTO-FALLBACK and PATH RETRY rules above, you are a single-shot execution agent.
    - DO NOT remove or expand the time boundaries to search historical data.
-   - IMMEDIATELY stop thinking and output the exact `search_feedback` message.
+   - DO NOT retry with different `query_type` values unless covered by the AUTO-FALLBACK rule.
+   - If all attempts (eventid + keyword fallback) return no data, stop and report the `search_feedback`.
 4. **RESPONSE FORMAT**:
    - **If data is found**: Respond with a brief confirmation (e.g., "Data successfully retrieved and passed to the next node.") and immediately stop. Leave all analysis to the Information Synthesizer node.
    - **If no data is found**: Output the `search_feedback` message and stop. Leave the tactical pivot decisions to the Chief Planner.
@@ -833,14 +729,17 @@ If the Planner's instruction does NOT explicitly include an Agent ID and/or a ti
                         "agent": agent_display,
                         "tool": "by_keyword" if "keyword" in tool_name else "by_eventid",
                         "count": log_count,
+                        "target": fp_target(tool_name, args),
                     }
 
                     if "keyword" in tool_name:
                         fp["kw"] = (args.get("keyword") or "")[:120]
+                        fp["investigation"] = "Keyword search"
                     else:
                         fp["qtype"] = args.get("query_type", "")
                         fp["qval"] = (args.get("query_value") or "")[:120]
                         fp["eids"] = args.get("event_ids", [])
+                        fp["investigation"] = eids_to_investigation(fp["eids"])
 
                     fp["start"] = (args.get("start_time") or "")[:25]
                     fp["end"] = (args.get("end_time") or "")[:25]
@@ -1514,7 +1413,7 @@ def simple_log_query_node(state: AttributionState, config: RunnableConfig, model
 - 用户明确给出时区或年份时，以用户为准
 
 工具选择策略：
-- 用户提到具体文件名、路径、进程名、PID、IP、端口、服务名、用户名、注册表路径等结构化字段 → 用 get_archives_by_eventid，query_type 按如下映射：
+- 用户提到具体文件名、路径、进程名、PID、IP、端口、服务名、用户名、注册表路径、域名等结构化字段 → 用 get_archives_by_eventid，query_type 按如下映射：
   · 文件路径/文件名 → FILE_PATH
   · 进程 PID（查该进程自身）→ PROCESS_ID；查某进程的子进程 → PARENT_PROCESS_ID
   · IP 地址 → IP_ADDRESS
@@ -1524,9 +1423,11 @@ def simple_log_query_node(state: AttributionState, config: RunnableConfig, model
   · 注册表路径 → REGISTRY_PATH
   · 登录会话 ID → LOGON_ID
   · 安全标识符 SID → SECURITY_ID
+  · 域名/DNS 查询 → DNS_QUERY
 - 用户只描述了行为类型但未给出具体值 → 用 get_archives_by_eventid，仅传 event_ids，不传 query_type/query_value
-  例："查文件创建的日志" → event_ids=["11"], 不传 query_type
-  例："查最近1天agent001的网络连接日志" → event_ids=["3","4624"], 不传 query_type
+  例："查文件创建的日志" → event_ids=["7","11"], 不传 query_type
+  例："查最近1天agent001的网络连接日志" → event_ids=["3","22","4624"], 不传 query_type
+	  例："查DNS查询日志" → event_ids=["22"], 不传 query_type
 - 用户仅描述通用关键词（无明确结构化字段也无行为类型）→ 用 get_archives_by_keyword
 
 日志完整性（CRITICAL）：

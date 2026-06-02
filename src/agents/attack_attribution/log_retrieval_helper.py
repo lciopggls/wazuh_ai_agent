@@ -24,6 +24,7 @@ class QueryType(str, Enum):
     REGISTRY_PATH = "REGISTRY_PATH"
     LOGON_ID = "LOGON_ID"
     SECURITY_ID = "SECURITY_ID"
+    DNS_QUERY = "DNS_QUERY"
 
 
 @tool
@@ -153,7 +154,7 @@ def simplify_log(source):
         system_out["eventID"] = win_system.get("eventID")
 
     eventdata_keep = [
-        # --- 1. 基础进程上下文 (Event 1, 3, 7, 11) ---
+        # --- 1. 基础进程上下文 (Event 1, 3, 7, 11, 22) ---
         "processId",
         "image",
         "commandLine",
@@ -162,14 +163,17 @@ def simplify_log(source):
         "parentCommandLine",
         "originalFileName",
         "integrityLevel",
-        # --- 2. 用户与账号身份 (Event 1, 3, 8, 10, 7045) ---
+        "processName",  # Windows Security 事件中的发起进程路径 (Event 4648)
+        # --- 2. 用户与账号身份 (Event 1, 3, 8, 10, 7045, 4648, 4672) ---
         "user",
         "parentUser",
         "sourceUser",
         "targetUser",
         "accountName",
         "targetUserName",
-        # --- 3. 网络通信记录 (Event 3, 4624) ---
+        "subjectDomainName",  # 发起者域/工作组 (Event 4672, 4648)
+        "targetDomainName",  # 目标账户域/IP (Event 4648，横向移动关键字段)
+        # --- 3. 网络通信与 DNS (Event 3, 4624, 4648, 22) ---
         "sourceIp",
         "sourcePort",
         "destinationIp",
@@ -180,6 +184,10 @@ def simplify_log(source):
         "subjectLogonId",
         "targetLogonId",
         "logonId",
+        "targetServerName",  # 横向移动目标主机名 (Event 4648)
+        "queryName",  # DNS 查询域名 (Event 22，C2 检测核心 IOC)
+        "queryResults",  # DNS 解析结果 (Event 22)
+        "queryStatus",  # DNS 查询状态码 (Event 22)
         # --- 4. 文件与模块加载 (Event 7, 11) ---
         "targetFilename",
         "imageLoaded",
@@ -201,7 +209,7 @@ def simplify_log(source):
         "eventType",  # 动作类型：如 CreateKey, DeleteKey, SetValue, RenameKey
         "targetObject",  # 目标对象：被操作的完整注册表路径
         "details",  # 具体细节：写入注册表的具体值
-        # --- 8. 账号与组安全审计 (Event 47**) ---
+        # --- 8. 账号与组安全审计 (Event 47**, 4672, 4648) ---
         "subjectUserName",  # 执行操作的账号名
         "subjectUserSid",  # 执行操作者的安全标识符 (SID)
         "targetSid",  # 目标账户或目标组的 SID
@@ -216,6 +224,8 @@ def simplify_log(source):
         "scriptPath",  # 登录脚本路径 (攻击者可能通过修改脚本实现持久化)
         "profilePath",  # 配置文件路径
         "primaryGroupId",  # 主组 ID
+        "privilegeList",  # 登录分配的特权列表 (Event 4672，权限提升核心证据)
+        "targetInfo",  # 目标 SPN/服务信息 (Event 4648)
     ]
 
     eventdata_out = {
@@ -344,6 +354,7 @@ def search_archives_by_eventid(
                             "data.win.eventdata.imagePath",
                             "data.win.eventdata.commandLine",
                             "data.win.eventdata.callerProcessName",
+                            "data.win.eventdata.processName",
                             "data.win.eventdata.scriptPath",
                         ],
                     }
@@ -407,6 +418,16 @@ def search_archives_by_eventid(
                 {"term": {"data.win.eventdata.targetSid": val_str}},
                 {"term": {"data.win.eventdata.memberSid": val_str}},
             ]
+        elif query_type == QueryType.DNS_QUERY:
+            query_str = f"*{val_str}*"
+            type_conditions = [
+                {
+                    "query_string": {
+                        "query": query_str,
+                        "fields": ["data.win.eventdata.queryName"],
+                    }
+                }
+            ]
 
         if type_conditions:
             must_conditions.append({"bool": {"should": type_conditions, "minimum_should_match": 1}})
@@ -455,6 +476,7 @@ def get_archives_by_eventid(
         - "REGISTRY_PATH" : 按注册表路径追踪。
         - "LOGON_ID" : 按登录会话 ID 追踪。
         - "SECURITY_ID" : 按安全标识符 (SID) 追踪。
+        - "DNS_QUERY" : 按 DNS 查询域名追踪，用于 C2 域名发现。
     :param query_value: 【可选】与 query_type 对应的具体数值。不传则不做值匹配。样例说明：
         - 若为 PROCESS_ID 或 PARENT_PROCESS_ID: 传入pid "6536" 或 "0x1d26"
         - 若为 FILE_PATH: 传入文件名 "PSEXESVC.EXE", "b.jsp" 或完整路径 "C:\\Windows\\System32\\b.jsp"
@@ -465,17 +487,26 @@ def get_archives_by_eventid(
         - 若为 REGISTRY_PATH: 传入 "CurrentControlSet\\Services\\bam" 或 "Run"
         - 若为 LOGON_ID: 传入 "0x1ed26"
         - 若为 SECURITY_ID: 传入完整 SID "S-1-5-21-..."
-    :param event_ids: 【可选】目标 EventID 列表，不传则不做事件类型过滤。若提供，请从以下类别中选择：
+        - 若为 DNS_QUERY: 传入域名 "evil-c2.xyz" 或 "s.cn.bing.net"
+    :param event_ids: 【可选】目标 EventID 列表，不传则不做事件类型过滤。可选择完整的类别组，也可仅选取组内部分 ID。若提供，请从以下类别中选择：
         - ["1"]                    : 进程创建行为 (Process Creation) - 用于检测异常的进程启动、父子关系违规或参数混淆。
-        - ["3","4624"]             : 网络连接行为 (Network Connection) - 用于检测 C2 通信、SMB 横向移动或异常端口访问。
-        - ["7"]                    : 模块加载行为 (Image/DLL Loading) - 用于检测恶意 DLL 注入、劫持或可疑模块调用。
-        - ["8"]                    : 进程注入行为 (Process Injection) - 用于检测 CreateRemoteThread 等跨进程的高危代码注入或执行规避动作。
-        - ["10"]                   : 进程访问行为(Process Access) - 用于检测一个进程尝试打开另一个进程句柄以进行内存读写或状态控制的行为。
-        - ["11"]                   : 文件创建行为 (File Creation) - 用于检测木马落地、WebShell 释放或临时文件生成。
-        - ["25"]                   : 进程篡改行为 (Process Tampering) - 用于检测进程在内存中的执行镜像被恶意修改或替换的行为。
+        - ["3","22","4624"]        : 网络通信与 DNS 行为 (Network & DNS)
+                                      · 3    = Sysmon 网络连接 (C2 通信、横向移动)
+                                      · 22   = Sysmon DNS 查询 (DGA 域名、DNS 隧道)
+                                      · 4624 = Windows 登录事件 (网络登录、远程桌面等)
+        - ["7","11"]               : 文件与模块行为 (File & Module)
+                                      · 7  = 模块加载 (DLL 劫持、恶意模块注入)
+                                      · 11 = 文件创建 (木马落地、WebShell 释放)
+        - ["8","10","25"]          : 进程内存操作 (Process Memory)
+                                      · 8  = 进程注入 (CreateRemoteThread 等跨进程代码注入)
+                                      · 10 = 进程访问 (打开目标进程句柄进行内存读写)
+                                      · 25 = 进程篡改 (修改进程内存中的执行镜像)
+        - ["4648","4672"]          : 凭据与特权行为 (Credential & Privilege)
+                                      · 4648 = 显式凭据登录 (runas / PSRemote 借用他人身份)
+                                      · 4672 = 特殊登录特权分配 (登录时授予的特权列表，提权证据)
         - ["7045"]                 : 系统服务安装 (Service Installation) - 用于检测权限提升、持久化驻留或通过服务实现的横向移动。
-        - ["12", "13", "14"]       : 注册表行为 (Registry) - 用于检测注册表修改、删除或创建等操作。
-        - ["4720", "4722", "4724", "4725", "4726", "4728", "4732", "4738", "4740", "4798", "4704", "4719"] : 身份与权限安全审计 (Identity & Privilege Auditing) - 用于追踪攻击者对本地账户的枚举、激活、密码重置、属性篡改以及将账户违规加入高权限组的操作。
+        - ["12","13","14"]         : 注册表行为 (Registry) - 用于检测注册表键值的修改、删除或创建等持久化操作。
+        - ["4720","4722","4724","4725","4726","4728","4732","4738","4740","4798","4704","4719"] : 身份与权限安全审计 (Identity & Privilege Auditing) - 用于追踪攻击者对本地账户的枚举、激活、密码重置、属性篡改以及将账户违规加入高权限组的操作。
     :param start_time: (可选) 限定查询时间窗口的起始时间。支持两种格式：① 相对时间 "now-1d"、"now-3d"、"now-7d" 等；② 绝对时间 ISO8601 格式 "2026-03-09T17:24:47Z"
     :param end_time: (可选) 限定查询时间窗口的结束时间。支持两种格式：① 相对时间 "now"；② 绝对时间 ISO8601 格式 "2026-03-09T17:24:47Z"
     :param simplify: 是否精简日志字段，默认 True。攻击溯源场景建议使用 True；简单日志查询建议传 False 返回完整日志
