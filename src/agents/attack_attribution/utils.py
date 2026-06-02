@@ -111,6 +111,49 @@ def extract_agent_ip_mapping() -> dict[str, str]:
     return ip_mapping
 
 
+def get_agents_identity() -> list[dict]:
+    """
+    获取 Wazuh Agent 身份信息列表，用于将用户的主机名/IP 指代自动转换为 agent_id。
+
+    Returns:
+        list of dicts, 每个元素包含:
+        - id: Agent 编号 (str)
+        - name: 主机名 (str)
+        - ip: IP 地址 (str)
+        - status: 连接状态 (str)
+        - os_platform: 操作系统平台标识 (str)
+    """
+    identities: list[dict] = []
+
+    try:
+        api_response = list_agents()
+        agents = api_response.get("data", {}).get("affected_items", [])
+
+        for agent in agents:
+            agent_id = agent.get("id")
+            name = agent.get("name")
+            ip = agent.get("ip")
+            status = agent.get("status")
+            os_obj = agent.get("os", {})
+            os_platform = os_obj.get("platform", "")
+
+            if agent_id and agent_id != "000":
+                identities.append(
+                    {
+                        "id": agent_id,
+                        "name": name or "",
+                        "ip": ip or "",
+                        "status": status or "",
+                        "os_platform": os_platform or "",
+                    }
+                )
+
+    except Exception as e:
+        logger.info(f"Exception occurred while building agents identity list: {e}")
+
+    return identities
+
+
 BEIJING_TZ = timezone(timedelta(hours=8))
 
 
@@ -202,27 +245,40 @@ def _iter_json_candidates(text: str):
 _EIDS_BEHAVIOR_MAP: list[tuple[tuple[str, ...], str]] = [
     # --- merged groups (largest first, matched when all members present) ---
     (
-        ("4720", "4722", "4724", "4725", "4726", "4728", "4732", "4738", "4740", "4798", "4704", "4719"),
+        (
+            "4720",
+            "4722",
+            "4724",
+            "4725",
+            "4726",
+            "4728",
+            "4732",
+            "4738",
+            "4740",
+            "4798",
+            "4704",
+            "4719",
+        ),
         "Account auditing",
     ),
     (("3", "22", "4624"), "Network & DNS"),
-    (("7", "11"),         "File & module"),
-    (("8", "10", "25"),   "Process memory"),
-    (("12", "13", "14"),  "Registry"),
-    (("4648", "4672"),     "Credential & privilege"),
+    (("7", "11"), "File & module"),
+    (("8", "10", "25"), "Process memory"),
+    (("12", "13", "14"), "Registry"),
+    (("4648", "4672"), "Credential & privilege"),
     # --- single IDs (fallback when merged group doesn't fully match) ---
-    (("1",),    "Process creation"),
-    (("3",),    "Network connection"),
-    (("22",),   "DNS query"),
+    (("1",), "Process creation"),
+    (("3",), "Network connection"),
+    (("22",), "DNS query"),
     (("4624",), "Network logon"),
-    (("7",),    "DLL / module load"),
-    (("11",),   "File creation"),
-    (("8",),    "Process injection"),
-    (("10",),   "Process access"),
-    (("25",),   "Process tampering"),
-    (("12",),   "Registry key delete"),
-    (("13",),   "Registry value set"),
-    (("14",),   "Registry key rename"),
+    (("7",), "DLL / module load"),
+    (("11",), "File creation"),
+    (("8",), "Process injection"),
+    (("10",), "Process access"),
+    (("25",), "Process tampering"),
+    (("12",), "Registry key delete"),
+    (("13",), "Registry value set"),
+    (("14",), "Registry key rename"),
     (("7045",), "Service installation"),
     (("4648",), "Credential logon"),
     (("4672",), "Privilege assignment"),
@@ -246,7 +302,7 @@ _QTYPE_LABEL: dict[str, str] = {
 def eids_to_investigation(eids: list[str]) -> str:
     if not eids:
         return "-"
-    eids_set = set(str(e) for e in eids)
+    eids_set = {str(e) for e in eids}
     labels: list[str] = []
     covered: set[str] = set()
     for eid_tuple, label in sorted(_EIDS_BEHAVIOR_MAP, key=lambda x: (-len(x[0]), x[0])):

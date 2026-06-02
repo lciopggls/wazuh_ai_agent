@@ -25,6 +25,7 @@ from .utils import (
     eids_to_investigation,
     extract_beijing_time_from_logs,
     fp_target,
+    get_agents_identity,
     load_mitre,
     load_skill,
 )
@@ -399,9 +400,7 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
             start = q.get("start", "")
             end = q.get("end", "")
             time_range = f"{start}~{end}" if start or end else "-"
-            rows.append(
-                f"| {i} | {agent} | {target} | {investigation} | {time_range} | {count} |"
-            )
+            rows.append(f"| {i} | {agent} | {target} | {investigation} | {time_range} | {count} |")
         query_history = "\n".join(rows)
     else:
         query_history = "_No queries executed yet._"
@@ -443,7 +442,7 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
     # """
 
     system_prompt = (
-"""\
+        """\
 You are an elite Cybersecurity Chief Attribution Planner.
 Your role is to orchestrate a complex attack forensics investigation. You do NOT query
 databases directly. Instead, you analyze the intelligence gathered so far and delegate
@@ -474,8 +473,7 @@ specific tasks to specialized subordinate nodes.
 {multi_host_instructions}\
 
 """
-    +
-"""\
+        + """\
 ### CURRENT CASE CONTEXT
 - **Default Start Time**: {default_start}
 - **Default End Time**: {default_end}
@@ -489,10 +487,8 @@ intended query against this table before routing to Log_Retrieval_Node.
 {query_history}
 
 """
-    +
-    attribution_investigation_prompt
-    +
-"""\
+        + attribution_investigation_prompt
+        + """\
 ### OUTPUT FORMAT
 {format_instructions}
 """
@@ -1376,7 +1372,7 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
 
 
 def simple_log_query_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 9: 简单日志查询节点 — 绕过完整攻击溯源流水线，直接查询 Wazuh Indexer 并返回原始结果。
+    """Node 9: 简单日志查询节点 — 直接查询 Wazuh Indexer 中的日志并返回原始结果。
 
     适用于用户请求如：
     - "查询agent001最近1天与文件abc.txt相关的日志"
@@ -1388,17 +1384,44 @@ def simple_log_query_node(state: AttributionState, config: RunnableConfig, model
     """
     logger.info("Executing Simple Log Query Node")
 
-    # 简单查询默认最大条数
+    # 简单日志查询默认最大条数
     MAX_RAW_LOGS = 10
 
     messages = state.get("messages", [])
     user_input = messages[-1].content if messages else ""
 
+    # 获取 Agent 身份映射，用于将用户的主机名/IP 指代自动转换为 agent_id
+    agent_identities = get_agents_identity()
+    agent_identity_json = (
+        json.dumps(agent_identities, ensure_ascii=False, indent=2) if agent_identities else "[]"
+    )
+
     tools = [get_archives_by_keyword, get_archives_by_eventid]
 
-    system_prompt = """你是 Wazuh 日志查询助手。将用户的自然语言查询翻译为合适的工具调用。
+    system_prompt = f"""你是 Wazuh 日志查询助手。将用户的自然语言查询翻译为合适的工具调用。
 
 工具的详细参数说明请参考各工具自身的文档，以下是工具文档未涵盖的补充规则。
+
+### Agent 身份映射表（CRITICAL）
+当用户使用主机名、IP 地址、连接状态或操作系统指代 Agent 时，你必须使用下表将用户描述转换为对应的 agent_id：
+```json
+{agent_identity_json}
+```
+
+字段说明：
+- id: Agent 编号（工具调用的 agent_id 参数使用此值）
+- name: 主机名
+- ip: IP 地址
+- status: 连接状态 — "active"=在线，"disconnected"=离线
+- os_platform: 操作系统平台（"ubuntu"、"windows" 等）
+
+转换规则：
+- 用户提到主机名（如 "win10"）→ 在表中查找 name 字段，使用该行的 id 作为 agent_id；支持模糊匹配（如 "win10" 可匹配 "win10" 或 "win10_node2"），选最匹配的行
+- 用户提到 IP 地址（如 "192.168.109.1"）→ 在表中查找 ip 字段，使用该行的 id 作为 agent_id
+- 用户提到状态（如 "在线的"、"离线的"、"active"、"disconnected"）→ 筛选 status 匹配的行，取这些行的 id 列表
+- 用户进行组合条件查询时（如 "在线的 win"、"Ubuntu 离线机器"）→ 对不同条件各自查询匹配的结果取交集，交集为空则告知用户无匹配的 Agent
+- 用户已明确给出 agent_id（如 "agent005"、"agent_005" 或 "005"）→ 直接使用该 id（去掉前缀 "agent" 或 "agent_"），无需查表
+- 如果查到的 Agent status 为 "disconnected"，在回复中告知用户该 Agent 当前离线，查到的是历史日志
 
 时间表达式转换（CRITICAL）：
 - 工具同时支持相对时间和绝对时间两种格式，优先使用相对时间
@@ -1427,7 +1450,7 @@ def simple_log_query_node(state: AttributionState, config: RunnableConfig, model
 - 用户只描述了行为类型但未给出具体值 → 用 get_archives_by_eventid，仅传 event_ids，不传 query_type/query_value
   例："查文件创建的日志" → event_ids=["7","11"], 不传 query_type
   例："查最近1天agent001的网络连接日志" → event_ids=["3","22","4624"], 不传 query_type
-	  例："查DNS查询日志" → event_ids=["22"], 不传 query_type
+  例："查DNS查询日志" → event_ids=["22"], 不传 query_type
 - 用户仅描述通用关键词（无明确结构化字段也无行为类型）→ 用 get_archives_by_keyword
 
 日志完整性（CRITICAL）：
