@@ -9,15 +9,16 @@ const props = defineProps<{
 
 const emit = defineEmits(['update:sessions']);
 
+// 智能体配置列表（保持标准的系统标识命名）
 const agents = [
   { id: 'router_agent', name: '路由智能体' },
-  { id: 'attack_attribution', name: '攻击溯源' }
+  { id: 'attack_attributor', name: '攻击溯源' }
 ];
 
-// 当前选中的智能体 ID
-const currentAgentId = ref("attack_attribution");
+// 当前选中的智能体 ID，默认指向攻击溯源
+const currentAgentId = ref("attack_attributor");
 
-// 智能体与线程 ID 的映射表
+// 智能体与线程 ID 的映射表（本地持久化）
 const agentThreadMap = ref<Record<string, string>>(
   JSON.parse(localStorage.getItem('wazuh_agent_thread_map') || '{}')
 );
@@ -25,10 +26,6 @@ const agentThreadMap = ref<Record<string, string>>(
 const userInput = ref("");
 const isTyping = ref(false);
 const scrollRef = ref<HTMLElement | null>(null);
-
-// --- 💡 弹窗状态管理 ---
-const isModalOpen = ref(false);
-const activeModalData = ref<any>(null);
 
 // --- 2. 计算属性 ---
 
@@ -40,7 +37,7 @@ const historyThreads = computed(() => {
     .map(key => key.replace(prefix, ''));
 });
 
-// 获取当前活跃的线程 ID（带保护，防止切换时为空）
+// 获取或设置当前活跃的线程 ID
 const currentThreadId = computed({
   get: () => agentThreadMap.value[currentAgentId.value] || "",
   set: (newTid: string) => {
@@ -92,11 +89,20 @@ const createNewThread = () => {
 
   const newKey = `${currentAgentId.value}_${newId}`;
   
-  // 纯净的深拷贝一层，维护单向数据流
   const updatedSessions = { ...props.sessions };
   updatedSessions[newKey] = [];
   
   emit('update:sessions', updatedSessions);
+};
+
+// 💡 动态拼装 Markdown 代码块辅助函数，防止特殊反引号在传输/编译时发生嵌套截断
+const formatMarkdownSource = (msg: any) => {
+  if (!msg || !msg.content) return "";
+  if (msg.node === 'tools') {
+    const ticks = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
+    return `${ticks}json\n${msg.content}\n${ticks}`;
+  }
+  return msg.content;
 };
 
 // --- 4. 核心发送与流式渲染逻辑 ---
@@ -109,7 +115,7 @@ const handleSend = async () => {
   const tid = currentThreadId.value;
   const sessionKey = `${aid}_${tid}`;
 
-  // 严格遵循规范：不直接操作 props.sessions 内层数组
+  // 初始化用户发送的消息
   const initSessions = { ...props.sessions };
   const currentSessionList = initSessions[sessionKey] ? [...initSessions[sessionKey]] : [];
   currentSessionList.push({ role: 'user', content: msg });
@@ -120,7 +126,7 @@ const handleSend = async () => {
   emit('update:sessions', initSessions);
 
   let lastNodeName = "";
-  let currentAiMsgIndex = -1;
+  let currentAiMsgIndex = -1; // 用于定位当前正在写入的 AI 原始节点气泡
 
   await nextTick();
   scrollToBottom();
@@ -143,74 +149,117 @@ const handleSend = async () => {
       const chunk = decoder.decode(value);
       const lines = chunk.split('\n');
 
-      // === 修改后的前端 chunk 循环处理逻辑 ===
-for (const line of lines) {
-  if (line.startsWith('data: ')) {
-    const dataStr = line.replace('data: ', '').trim();
-    if (dataStr === '[DONE]') break;
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        
+        const dataStr = line.replace('data: ', '').trim();
+        if (dataStr === '[DONE]') break;
 
-    // 定义提取出来的变量
-    let incomingContent = "";
-    let nodeName = lastNodeName || "Processing_Node";
+        let incomingContent = "";
+        let nodeName = lastNodeName || "model"; 
+        let isJsonNode = false;
+        let extractedReply = "";
 
-    try {
-      const data = JSON.parse(dataStr);
-      nodeName = data.node || lastNodeName || "Agent_Node";
-      
-      // 1. 通用提取：优先取 content，取不到再尝试转义整个对象或取其它常见键
-      if (data.content) {
-        incomingContent = data.content;
-      } else if (nodeName === 'Attack_Abstract_Node') {
-        const copy = { ...data };
-        delete copy.node; delete copy.content;
-        if (Object.keys(copy).length > 0) incomingContent = JSON.stringify(copy, null, 2);
-      } else {
-        // 💡 核心增强：如果后端把数据塞在别的地方，尝试将其整体序列化输出，不丢弃数据
-        const copy = { ...data };
-        delete copy.node;
-        if (Object.keys(copy).length > 0) {
-          incomingContent = copy.output || copy.messages || JSON.stringify(copy);
+        try {
+          const data = JSON.parse(dataStr);
+          nodeName = data.node || lastNodeName || "model";
+          
+          if (nodeName === 'tools') {
+            isJsonNode = true;
+            
+            // 💡 核心修复：后端 tools 节点的 data.content 是双重转义的 JSON 字符串，我们需要在此处对其进行二次反序列化
+            let parsedInnerContent: any = null;
+            if (data.content) {
+              try {
+                parsedInnerContent = typeof data.content === 'string' ? JSON.parse(data.content) : data.content;
+              } catch (innerErr) {
+                console.warn("二次反序列化 tools.content 失败:", innerErr);
+              }
+            }
+
+            if (parsedInnerContent) {
+              // 1. tools 节点展示排版美化后的完整 JSON 树
+              incomingContent = JSON.stringify(parsedInnerContent, null, 2);
+              // 2. 从二次解析后的内部数据中精准提取 reply
+              if (parsedInnerContent.reply) {
+                extractedReply = parsedInnerContent.reply;
+              }
+            } else {
+              // 降级兜底：万一二次解析失败，保留外层原封不动的 content
+              incomingContent = typeof data.content === 'string' ? data.content : JSON.stringify(data, null, 2);
+            }
+          } else if (data.content) {
+            incomingContent = data.content;
+          }
+        } catch (e) {
+          // 纯文本流兜底
+          incomingContent = dataStr;
+          nodeName = "model";
+        }
+
+        if (incomingContent) {
+          const currentSessions = { ...props.sessions };
+          const sessionData = currentSessions[sessionKey] ? [...currentSessions[sessionKey]] : [];
+
+          // 1. 用节点名发生切换，或者第一次渲染作为判断
+          if (nodeName !== lastNodeName || currentAiMsgIndex === -1) {
+            lastNodeName = nodeName;
+            
+            sessionData.push({ 
+              role: 'assistant', 
+              content: incomingContent,
+              node: nodeName,
+              isNewStep: true 
+            });
+            currentAiMsgIndex = sessionData.length - 1;
+
+            // 🌟 核心分裂展示：如果是 tools 节点且成功提取到了真正的 reply 文本，立刻无缝追加独立的 reply 气泡
+            if (isJsonNode && extractedReply) {
+              sessionData.push({
+                role: 'assistant',
+                content: extractedReply,
+                node: 'reply', 
+                isNewStep: true
+              });
+            }
+          } else {
+            // 2. 属于同一节点的流式内容增量更新
+            if (currentAiMsgIndex !== -1 && sessionData[currentAiMsgIndex]) {
+              const targetMsg = { ...sessionData[currentAiMsgIndex] };
+              
+              if (isJsonNode) {
+                // 持续写入 tools 气泡更新的完整格式化 JSON 数据
+                targetMsg.content = incomingContent; 
+                sessionData[currentAiMsgIndex] = targetMsg;
+                
+                // 同步流式更新紧随其后的 reply 独立文本气泡
+                const nextMsgIndex = currentAiMsgIndex + 1;
+                if (extractedReply && sessionData[nextMsgIndex] && sessionData[nextMsgIndex].node === 'reply') {
+                  sessionData[nextMsgIndex].content = extractedReply;
+                } else if (extractedReply && (!sessionData[nextMsgIndex] || sessionData[nextMsgIndex].node !== 'reply')) {
+                  // 如果未检索到后续 reply 气泡则弹性插队创建
+                  sessionData.splice(nextMsgIndex, 0, {
+                    role: 'assistant',
+                    content: extractedReply,
+                    node: 'reply',
+                    isNewStep: true
+                  });
+                }
+              } else {
+                // model 节点常规流式文本追加
+                targetMsg.content += incomingContent;
+                sessionData[currentAiMsgIndex] = targetMsg;
+              }
+            }
+          }
+          
+          currentSessions[sessionKey] = sessionData;
+          emit('update:sessions', currentSessions);
+          
+          await nextTick();
+          scrollToBottom();
         }
       }
-    } catch (e) {
-      // 2. 💡 通用兜底：如果后端吐出来的压根不是 JSON 字符串（而是纯文本），直接当成文本渲染
-      incomingContent = dataStr;
-    }
-
-    // 3. 统一渲染气泡（移除特定节点的硬编码限制）
-    if (incomingContent) {
-      if (typeof incomingContent === 'object' && incomingContent !== null) {
-        incomingContent = JSON.stringify(incomingContent, null, 2);
-      }
-
-      const currentSessions = { ...props.sessions };
-      const sessionData = currentSessions[sessionKey] ? [...currentSessions[sessionKey]] : [];
-
-      if (nodeName !== lastNodeName || currentAiMsgIndex === -1) {
-        lastNodeName = nodeName;
-        sessionData.push({ 
-          role: 'assistant', 
-          content: incomingContent,
-          node: nodeName,
-          isNewStep: true 
-        });
-        currentAiMsgIndex = sessionData.length - 1;
-      } else {
-        if (currentAiMsgIndex !== -1 && sessionData[currentAiMsgIndex]) {
-          const targetMsg = { ...sessionData[currentAiMsgIndex] };
-          targetMsg.content += incomingContent;
-          sessionData[currentAiMsgIndex] = targetMsg;
-        }
-      }
-      
-      currentSessions[sessionKey] = sessionData;
-      emit('update:sessions', currentSessions);
-      
-      await nextTick();
-      scrollToBottom();
-    }
-  }
-}
     }
   } catch (error: any) {
     const errSessions = { ...props.sessions };
@@ -228,43 +277,6 @@ for (const line of lines) {
 const scrollToBottom = async () => {
   await nextTick();
   if (scrollRef.value) scrollRef.value.scrollTop = scrollRef.value.scrollHeight;
-};
-
-// 辅助函数：在展现层处理不同节点的内容包装
-const formatMessageContent = (msg: any) => {
-  if (msg.node === 'Attack_Abstract_Node' && msg.content) {
-    // 检查是否已经包裹过，防止意外重复
-    if (msg.content.startsWith('```json')) return msg.content;
-    return `\`\`\`json\n${msg.content}\n\`\`\``;
-  }
-  return msg.content;
-};
-
-// --- 💡 处理点击卡片：解析 JSON 数据并开启弹窗 ---
-const handleNodeClick = (msg: any) => {
-  if (msg.node !== 'Attack_Abstract_Node') return;
-  try {
-    // 处理各种边界情况，确保拿到纯净的 json 进行渲染
-    let rawContent = msg.content || "";
-    if (typeof rawContent === 'string') {
-      rawContent = rawContent.replace(/```json\n?|```/g, '').trim();
-    }
-    
-    const parsed = typeof rawContent === 'object' ? rawContent : JSON.parse(rawContent);
-    
-    // 计算指标总数，供弹窗顶部表格使用
-    const iocTotal = (parsed.ioc_files?.length || 0) + (parsed.ioc_domains?.length || 0) + (parsed.ioc_processes?.length || 0);
-    
-    activeModalData.value = {
-      ...parsed,
-      total_hosts: parsed.hosts?.length || 0,
-      total_iocs: iocTotal,
-      total_tactics: parsed.tactics_count || parsed.tactics?.length || 0
-    };
-    isModalOpen.value = true;
-  } catch (e) {
-    console.error("解析攻击摘要 JSON 失败:", e);
-  }
 };
 </script>
 
@@ -307,21 +319,23 @@ const handleNodeClick = (msg: any) => {
       >
         <div class="avatar">{{ msg.role === 'user' ? 'ME' : 'AI' }}</div>
         
-        <!-- 💡 消息核心区：如果是摘要节点，增加点击交互提示 -->
-        <div 
-          class="content_box" 
-          :class="{ 'abstract_node_box_clickable': msg.node === 'Attack_Abstract_Node' }"
-          @click="handleNodeClick(msg)"
-          :title="msg.node === 'Attack_Abstract_Node' ? '点击查看可视化溯源摘要' : ''"
-        >
+        <!-- 气泡主体：AI 气泡和用户气泡采用统一的主样式结构 -->
+        <div class="content_box">
+          <!-- 动态步骤标签展示 -->
           <div v-if="msg.role === 'assistant' && msg.node" class="node_tag">
-            ⚡ 步骤: {{ msg.node }} 
-            <span v-if="msg.node === 'Attack_Abstract_Node'" class="click_tip">🖱️ 点击查看大图</span>
+            <template v-if="msg.node === 'tools'">⚙️ 原始工具输出 (完整数据)</template>
+            <template v-else-if="msg.node === 'reply'">🎯 溯源结论 (提取结果)</template>
+            <template v-else-if="msg.node === 'model'">🤖 AI 文本回复</template>
+            <template v-else>⚡ 步骤: {{ msg.node }}</template>
           </div>
           
           <!-- Markdown 渲染 -->
           <div class="markdown_body">
-            <vue-markdown :source="formatMessageContent(msg)" v-if="msg.content" />
+            <!-- 使用 formatMarkdownSource 动态包装，保持外观一致性的同时渲染代码高亮 -->
+            <vue-markdown 
+              :source="formatMarkdownSource(msg)" 
+              v-if="msg.content" 
+            />
             <p v-else-if="isTyping && index === chatList.length - 1">正在处理...</p>
           </div>
         </div>
@@ -338,90 +352,6 @@ const handleNodeClick = (msg: any) => {
         @keyup.enter="handleSend"
       />
       <button @click="handleSend" :disabled="isTyping">发送</button>
-    </div>
-
-    <!-- 💡 SOC 科技风溯源调查摘要弹窗 -->
-    <div v-if="isModalOpen" class="modal_overlay" @click.self="isModalOpen = false">
-      <div class="soc_modal_card">
-        <div class="modal_close" @click="isModalOpen = false">×</div>
-        <h2 class="modal_title">攻击溯源调查摘要</h2>
-        
-        <!-- 核心指标指标栏 (四格表) -->
-        <table class="metrics_table">
-          <thead>
-            <tr>
-              <th>涉及主机</th>
-              <th>时间跨度</th>
-              <th>IOC 总数</th>
-              <th>战术阶段</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td class="highlight_blue">{{ activeModalData.total_hosts }} 台</td>
-              <td class="highlight_blue">{{ activeModalData.duration || '0时0分0秒' }}</td>
-              <td class="highlight_cyan">{{ activeModalData.total_iocs }} 个</td>
-              <td class="highlight_cyan">{{ activeModalData.total_tactics }} 个</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <!-- 详细卡片信息展现 -->
-        <div class="detail_section">
-          <div class="section_title">涉及主机：描述涉及的主机名</div>
-          <ul class="detail_list">
-            <li v-for="host in activeModalData.hosts" :key="host">
-              <span class="bullet_icon">📌</span> {{ host }}
-            </li>
-            <li v-if="!activeModalData.hosts || activeModalData.hosts.length === 0" class="empty_item">无主机记录</li>
-          </ul>
-
-          <div class="section_title">时间跨度：给出攻击跨越的时间</div>
-          <ul class="detail_list">
-            <li>
-              <span class="bullet_icon">⏰</span> {{ activeModalData.start_time || 'N/A' }} - {{ activeModalData.end_time || 'N/A' }}
-            </li>
-          </ul>
-
-          <div class="section_title">涉及 IOC：依次列出文件名、域名、进程名</div>
-          <div class="sub_detail_group">
-            <!-- 文件夹类型 -->
-            <div class="sub_label">文件：</div>
-            <ul class="detail_list text_indent">
-              <li v-for="file in activeModalData.ioc_files" :key="file">
-                <span class="bullet_icon">📄</span> {{ file }}
-              </li>
-              <li v-if="!activeModalData.ioc_files || activeModalData.ioc_files.length === 0" class="empty_sub_item">无相关文件 IOC</li>
-            </ul>
-            
-            <!-- 域名和IP -->
-            <div class="sub_label">IP / 域名：</div>
-            <ul class="detail_list text_indent">
-              <li v-for="domain in activeModalData.ioc_domains" :key="domain">
-                <span class="bullet_icon">🌐</span> {{ domain }}
-              </li>
-              <li v-if="!activeModalData.ioc_domains || activeModalData.ioc_domains.length === 0" class="empty_sub_item">无相关网络/域名 IOC</li>
-            </ul>
-
-            <!-- 关联进程 -->
-            <div class="sub_label">进程：</div>
-            <ul class="detail_list text_indent">
-              <li v-for="proc in activeModalData.ioc_processes" :key="proc">
-                <span class="bullet_icon">⚙️</span> {{ proc }}
-              </li>
-              <li v-if="!activeModalData.ioc_processes || activeModalData.ioc_processes.length === 0" class="empty_sub_item">无关联进程</li>
-            </ul>
-          </div>
-
-          <div class="section_title">ATT&CK 战术覆盖：依次列出所有的 tactics</div>
-          <ul class="detail_list tactic_tags">
-            <li v-for="tactic in activeModalData.tactics" :key="tactic">
-              <span class="bullet_icon">🛡️</span> {{ tactic }}
-            </li>
-            <li v-if="!activeModalData.tactics || activeModalData.tactics.length === 0" class="empty_item">无匹配战术</li>
-          </ul>
-        </div>
-      </div>
     </div>
   </div>
 </template>
@@ -520,6 +450,7 @@ const handleNodeClick = (msg: any) => {
       margin-bottom: 20px;
 
       .avatar { width: 32px; height: 32px; border-radius: 8px; font-size: 10px; line-height: 32px; text-align: center; flex-shrink: 0; }
+      
       .content_box {
         max-width: 85%;
         padding: 10px 14px;
@@ -536,24 +467,6 @@ const handleNodeClick = (msg: any) => {
           padding: 2px 6px; 
           border-radius: 4px; 
           display: inline-block; 
-          .click_tip {
-            margin-left: 8px;
-            color: #ffaa00;
-            text-decoration: underline;
-          }
-        }
-        
-        // 目标可点击节点专属样式：增加微弱的发光渐变及手势
-        &.abstract_node_box_clickable {
-          background: rgba(0, 253, 250, 0.03) !important;
-          border: 1px dashed rgba(0, 253, 250, 0.4) !important;
-          cursor: pointer;
-          
-          &:hover {
-            background: rgba(0, 253, 250, 0.08) !important;
-            border-color: #00fdfa !important;
-            box-shadow: inset 0 0 12px rgba(0, 253, 250, 0.15), 0 0 8px rgba(0, 253, 250, 0.15);
-          }
         }
 
         .markdown_body {
@@ -609,172 +522,6 @@ const handleNodeClick = (msg: any) => {
   }
 }
 
-// ==========================================
-// 💡 全新深度整合：科技蓝 SOC 弹窗样式表
-// ==========================================
-.modal_overlay {
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0, 10, 20, 0.8);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 999;
-  animation: modalFadeIn 0.25s ease-out;
-}
-
-.soc_modal_card {
-  width: 90%;
-  max-width: 650px;
-  background: linear-gradient(180deg, rgba(0, 15, 30, 0.95) 0%, rgba(1, 7, 15, 0.98) 100%);
-  border: 1.5px solid rgba(49, 171, 227, 0.6);
-  box-shadow: 0 0 25px rgba(49, 171, 227, 0.4), inset 0 0 15px rgba(0, 253, 250, 0.1);
-  border-radius: 10px;
-  padding: 24px;
-  position: relative;
-  color: #e0e8f0;
-  font-family: Consolas, Monaco, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  max-height: 85vh;
-  overflow-y: auto;
-
-  &::-webkit-scrollbar { width: 5px; }
-  &::-webkit-scrollbar-thumb { background: rgba(49, 171, 227, 0.5); border-radius: 3px; }
-
-  .modal_close {
-    position: absolute;
-    top: 15px; right: 20px;
-    font-size: 24px;
-    color: #31ABE3;
-    cursor: pointer;
-    transition: color 0.2s;
-    &:hover { color: #00fdfa; }
-  }
-
-  .modal_title {
-    text-align: center;
-    font-size: 19px;
-    font-weight: bold;
-    color: #ffffff;
-    letter-spacing: 2px;
-    margin-top: 0;
-    margin-bottom: 22px;
-    text-shadow: 0 0 8px rgba(49, 171, 227, 0.7);
-  }
-
-  // 顶部核心四格统计表
-  .metrics_table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-bottom: 22px;
-    border: 1px solid rgba(49, 171, 227, 0.25);
-
-    th {
-      background: rgba(49, 171, 227, 0.12);
-      color: #31ABE3;
-      font-size: 13px;
-      padding: 8px;
-      font-weight: 600;
-      border: 1px solid rgba(49, 171, 227, 0.25);
-    }
-
-    td {
-      text-align: center;
-      padding: 12px 8px;
-      font-size: 15px;
-      font-weight: bold;
-      border: 1px solid rgba(49, 171, 227, 0.25);
-      background: rgba(0, 15, 30, 0.5);
-    }
-
-    // 适配科技感颜色规范
-    .highlight_blue {
-      color: #31ABE3;
-      text-shadow: 0 0 4px rgba(49, 171, 227, 0.5);
-    }
-
-    .highlight_cyan {
-      color: #00fdfa;
-      text-shadow: 0 0 4px rgba(0, 253, 250, 0.5);
-    }
-  }
-
-  // 信息分块展现
-  .detail_section {
-    .section_title {
-      font-size: 14px;
-      color: #55b6e6;
-      font-weight: bold;
-      margin-top: 20px;
-      margin-bottom: 10px;
-      border-left: 3px solid #00fdfa;
-      padding-left: 8px;
-    }
-
-    .sub_label {
-      font-size: 12px;
-      color: rgba(49, 171, 227, 0.85);
-      margin-top: 8px;
-      margin-left: 12px;
-      font-weight: bold;
-    }
-
-    .detail_list {
-      list-style: none;
-      padding-left: 12px;
-      margin: 4px 0 10px 0;
-
-      li {
-        font-size: 13px;
-        line-height: 1.6;
-        color: #d1e2f0;
-        margin-bottom: 5px;
-        word-break: break-all;
-        display: flex;
-        align-items: flex-start;
-
-        .bullet_icon {
-          margin-right: 6px;
-          flex-shrink: 0;
-        }
-      }
-
-      .empty_item {
-        color: rgba(255, 255, 255, 0.25);
-        font-style: italic;
-        font-size: 12px;
-      }
-
-      &.text_indent {
-        padding-left: 24px;
-        .empty_sub_item {
-          color: rgba(255, 255, 255, 0.2);
-          font-style: italic;
-          font-size: 12px;
-          list-style: none;
-        }
-      }
-
-      // 战术标签样式
-      &.tactic_tags {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        padding-left: 8px;
-        li {
-          background: rgba(0, 253, 250, 0.05);
-          border: 1px solid rgba(0, 253, 250, 0.3);
-          color: #00fdfa;
-          padding: 3px 10px;
-          border-radius: 4px;
-          font-size: 12px;
-          box-shadow: 0 0 5px rgba(0, 253, 250, 0.1);
-        }
-      }
-    }
-  }
-}
-
 .new_step_animation {
   animation: stepFadeIn 0.4s ease-out forwards;
 }
@@ -782,10 +529,5 @@ const handleNodeClick = (msg: any) => {
 @keyframes stepFadeIn {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes modalFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
 }
 </style>

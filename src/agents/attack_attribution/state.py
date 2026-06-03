@@ -91,8 +91,4 @@ class AttributionState(TypedDict):
     svg_chart: str | None
 
     # 攻击调查概要（JSON dict，前端可直接渲染）
-<<<<<<< HEAD
     attack_abstract: dict[str, Any] | None
-=======
-    attack_abstract: dict[str, Any] | None
->>>>>>> master

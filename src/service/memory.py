@@ -12,7 +12,6 @@ from langgraph.checkpoint.memory import MemorySaver
 # 假设的项目结构
 from src.agents.agent import get_demo_agent
 from src.agents.agent import get_attack_attribution_agent
-from src.agents.agent import get_rule_generator_agent
 from src.agents.agent import get_router_agent
 from core.config import settings
 app = FastAPI(title="Wazuh SOC Multi-Agent Streaming API")

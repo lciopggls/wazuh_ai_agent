@@ -30,7 +30,6 @@ def _get_thread_session(
     session_cache_by_thread: dict[str, dict[str, Any]],
     thread_id: str,
 ) -> dict[str, Any]:
-    """保留这个函数，用于记录主控的最新计划（Plan）和已执行步骤"""
     if thread_id not in session_cache_by_thread:
         session_cache_by_thread[thread_id] = {
             "latest_plan_summary": None,
@@ -66,17 +65,23 @@ def _extract_latest_ai_content(messages: list[Any] | None) -> str:
             content = _normalize_message_content(getattr(msg, "content", ""))
             if content.strip():
                 return content.strip()
-        # 兼容字典格式的消息
-        elif isinstance(msg, dict) and msg.get("role") == "assistant":
-            if msg.get("content"):
-                return msg["content"].strip()
     return ""
 
 
 def _is_high_risk_rule_task(task: str) -> bool:
     high_risk_keywords = [
-        "验证", "apply", "应用", "上传", "重启", "restart", 
-        "删除", "cleanup", "覆盖", "overwrite", "启用规则", "停用规则",
+        "验证",
+        "apply",
+        "应用",
+        "上传",
+        "重启",
+        "restart",
+        "删除",
+        "cleanup",
+        "覆盖",
+        "overwrite",
+        "启用规则",
+        "停用规则",
     ]
     lowered_task = task.lower()
     return any(keyword in task or keyword in lowered_task for keyword in high_risk_keywords)
@@ -84,8 +89,11 @@ def _is_high_risk_rule_task(task: str) -> bool:
 
 def _has_explicit_user_authorization(task: str) -> bool:
     approval_markers = [
-        "已获用户明确授权", "用户已明确授权", "用户已确认执行", 
-        "用户明确同意执行", "已获得用户授权",
+        "已获用户明确授权",
+        "用户已明确授权",
+        "用户已确认执行",
+        "用户明确同意执行",
+        "已获得用户授权",
     ]
     return any(marker in task for marker in approval_markers)
 
@@ -117,6 +125,9 @@ def _summarize_attack_state(attack_state: dict[str, Any] | None) -> str:
         "pending_question_type": attack_state.get("pending_question_type"),
         "requires_mitre_kb": attack_state.get("requires_mitre_kb"),
         "has_final_report": bool(attack_state.get("final_report")),
+        "is_full_attribution_complete": bool(
+            attack_state.get("is_full_attribution_complete")
+        ),
         "latest_reply": _extract_latest_ai_content(attack_state.get("messages")),
     }
     return json.dumps(summary, ensure_ascii=False)
@@ -131,27 +142,11 @@ def _invoke_specialist(
 ) -> str:
     thread_id = _get_thread_id()
     session = _get_thread_session(session_cache_by_thread, thread_id)
-    
-    # 🌟 关键修改 1：构造带有当前 thread_id 的 config
-    # 这样子智能体在执行时，就能自动从你传入的 checkpointer 里读写历史记忆了！
-    config = {"configurable": {"thread_id": thread_id}}
+    specialist_state_cache = session["specialist_state_cache"]
+    current_state = None if reset_context else specialist_state_cache.get(specialist_name)
+    next_state = dict(current_state or {})
+    existing_messages = list(next_state.get("messages", []))
 
-    # 🌟 关键修改 2：处理上下文重置与组装
-    next_state = {}
-    
-    if reset_context:
-        # 如果需要重置，我们传一个空消息列表，并且可以考虑清除该 thread 对应的检查点（可选）
-        logger.info(f"Resetting context for specialist {specialist_name} under thread {thread_id}")
-        existing_messages = []
-    else:
-        # 如果不重置，先获取子智能体当前在 checkpointer 里的最新状态
-        try:
-            current_state = specialist_app.get_state(config)
-            existing_messages = list(current_state.values.get("messages", [])) if current_state.values else []
-        except Exception:
-            existing_messages = []
-
-    # 组装任务输入
     plan_summary = session.get("latest_plan_summary")
     plan_steps = session.get("latest_plan_steps") or []
     if plan_summary:
@@ -173,7 +168,7 @@ def _invoke_specialist(
         {
             "specialist": specialist_name,
             "task": task,
-            "reply": reply or f"{specialist_name} 未返回可展示内容。",
+            "reply": _extract_latest_ai_content(result.get("messages")),
         }
     )
 
@@ -182,6 +177,15 @@ def _invoke_specialist(
         state_summary = _summarize_rule_state(result)
     else:
         state_summary = _summarize_attack_state(result)
+
+    artifacts = None
+    if specialist_name == "attack_attribution" and result.get("is_full_attribution_complete"):
+        reply = result.get("final_report") or "报告生成失败。"
+        artifacts = {
+            "svg_chart": result.get("svg_chart"),
+            "attack_abstract": result.get("attack_abstract"),
+            "attack_graph": result.get("attack_graph"),
+        }
 
     return json.dumps(
         {
@@ -193,18 +197,18 @@ def _invoke_specialist(
             "plan_steps": plan_steps,
             "reply": reply or f"{specialist_name} 未返回可展示内容。",
             "state_summary": json.loads(state_summary),
+            "artifacts": artifacts,
             "executed_steps": session["executed_steps"],
         },
         ensure_ascii=False,
     )
 
 
-# 🌟 关键修改 4：让主控图编译函数接收 checkpointer 参数
 def get_router_agent(
     router_model: BaseChatModel,
     rule_model: BaseChatModel | None = None,
     attack_model: BaseChatModel | None = None,
-    checkpointer=None,  # 注入你的内存/数据库检查点（例如 MemorySaver()）
+    checkpointer=None,
 ):
     rule_agent = get_rule_agent(rule_model or router_model)
     attack_agent = get_attack_attribution_agent(attack_model or router_model)
@@ -215,7 +219,11 @@ def get_router_agent(
         plan_summary: str,
         steps: list[str],
     ) -> str:
-        """为当前线程会话记录任务计划..."""
+        """为当前线程会话记录任务计划。
+        当用户请求包含两个及以上动作时，你必须先调用本工具，再开始执行 specialist 工具。
+        `plan_summary` 是一句话总目标，`steps` 是按顺序排列的可执行步骤列表。
+        """
+
         thread_id = _get_thread_id()
         session = _get_thread_session(session_cache_by_thread, thread_id)
         session["latest_plan_summary"] = plan_summary
@@ -394,11 +402,9 @@ def get_router_agent(
      JSON 中有多少条、多少字段，就完整输出多少。
 """
 
-    # 🌟 关键修改 6：主控 Agent 同样需要包裹 checkpointer 
-    # 因为 LangChain 的 create_agent 背后也是一个图，支持传入 checkpointer 维护主路由的 ReAct 记忆
     return create_agent(
         model=router_model,
         tools=[write_task_plan, delegate_rule_agent, delegate_attack_attribution],
         system_prompt=system_prompt,
-        checkpointer=checkpointer,  # 👈 直接在这里挂载检查点
+        checkpointer=checkpointer,
     )
