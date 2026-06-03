@@ -27,6 +27,42 @@ def merge_executed_queries(
     return left + right
 
 
+def merge_graph_data(
+    left: dict[str, Any] | None, right: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """合并攻击图谱数据，按 id 去重实体、按 (source, target, relation) 去重关系。
+    若 right 包含 `_replace: True`，则直接替换而非合并。
+    """
+    if not left:
+        return right
+    if not right:
+        return left
+    if right.get("_replace"):
+        return {"entities": right.get("entities", []), "relations": right.get("relations", [])}
+    l_entities = left.get("entities", [])
+    r_entities = right.get("entities", [])
+    l_relations = left.get("relations", [])
+    r_relations = right.get("relations", [])
+
+    seen_ids: set[str] = set()
+    merged_entities: list[dict[str, Any]] = []
+    for e in l_entities + r_entities:
+        eid = e.get("id", "")
+        if eid and eid not in seen_ids:
+            seen_ids.add(eid)
+            merged_entities.append(e)
+
+    seen_rels: set[tuple[str, str, str]] = set()
+    merged_relations: list[dict[str, Any]] = []
+    for r in l_relations + r_relations:
+        key = (r.get("source", ""), r.get("target", ""), r.get("relation", ""))
+        if key not in seen_rels:
+            seen_rels.add(key)
+            merged_relations.append(r)
+
+    return {"entities": merged_entities, "relations": merged_relations}
+
+
 class PlannerActionCommand(BaseModel):
     target: Literal["Simple_Log_Query_Node", "Attribution_Decision_Node"] = Field(
         description="The target node to route to from Planner_Node."
@@ -70,6 +106,9 @@ class AttributionState(TypedDict):
     # 报告
     final_report: str | None
 
+    # 是否已完成完整攻击溯源（Reporter_Node 设置）
+    is_full_attribution_complete: bool | None
+
     # 用户自定义配置相关
     investigation_clue: str | None
     is_clue_confirmed: bool | None
@@ -86,9 +125,12 @@ class AttributionState(TypedDict):
     default_end_time: str = Field(description="调查窗口的结束时间，ISO8601格式 (北京时间/UTC+8)。")
     default_agent_id: str = Field(description="提取到的被攻击 Agent ID (如 '005')。")
 
-    # 可视化展示
-    mermaid_chart: str | None
+    # 可视化展示：SVG攻击时间线图
     svg_chart: str | None
 
-    # 攻击调查概要（JSON dict，前端可直接渲染）
+    # 攻击调查概要（JSON dict）
     attack_abstract: dict[str, Any] | None
+
+    # 网状图
+    attack_graph: str | None
+    attack_graph_data: Annotated[dict[str, Any] | None, merge_graph_data]

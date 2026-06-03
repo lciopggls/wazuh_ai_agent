@@ -2,7 +2,8 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any
+from collections import deque
+from typing import Any, Literal
 
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -48,6 +49,69 @@ class QueryIntent(BaseModel):
     )
 
 
+class GraphEntity(BaseModel):
+    """攻击实体节点。"""
+
+    id: str = Field(
+        description=(
+            "Unique entity ID. Must follow the convention: "
+            "process → 'proc_<pid>' (e.g., 'proc_5324'), "
+            "file → 'file_<N>' (e.g., 'file_1'), "
+            "ip → 'ip_<address>' (e.g., 'ip_192.168.1.100'), "
+            "registry → 'reg_<N>' (e.g., 'reg_1'), "
+            "user_account → 'user_<name>' (e.g., 'user_Administrator'), "
+            "other → 'other_<N>' (e.g., 'other_1'). "
+            "N is a sequential integer starting from 1 per type."
+        )
+    )
+    type: Literal["process", "file", "ip", "registry", "user_account", "other"] = Field(
+        description="Entity type."
+    )
+    name: str = Field(description="Human-readable entity name, e.g., 'powershell.exe (PID: 5324)'.")
+    timestamp: str | None = Field(
+        default=None, description="First observed ISO8601 timestamp for this entity."
+    )
+    properties: dict = Field(
+        default_factory=dict,
+        description=(
+            "Type-specific key-value dict. "
+            "process: {pid (int), image (str), command_line (str|None)}. "
+            "file: {path (str)}. "
+            "ip: {address (str), port (int|None)}. "
+            "registry: {key_path (str), value_name (str|None)}. "
+            "user_account: {username (str), domain (str|None)}. "
+            "other: {} (empty). "
+            "Omit keys whose values are missing from the raw logs."
+        ),
+    )
+
+
+class GraphRelation(BaseModel):
+    """攻击实体间的关系边。"""
+
+    source: str = Field(description="Source entity ID (must match a GraphEntity.id).")
+    target: str = Field(description="Target entity ID (must match a GraphEntity.id).")
+    relation: Literal[
+        "create",
+        "modify",
+        "execute",
+        "communicate",
+        "authenticate",
+    ] = Field(
+        description=(
+            "Relationship type (simplified): "
+            "create = spawned child process OR created/wrote a file; "
+            "modify = modified a file OR modified a registry key; "
+            "execute = executed a file as process OR loaded a DLL OR injected into another process; "
+            "communicate = connected to network address OR DNS resolved to IP; "
+            "authenticate = process ran under a user account (credential use / privilege verification)."
+        )
+    )
+    timestamp: str | None = Field(
+        default=None, description="ISO8601 timestamp when the relationship was observed."
+    )
+
+
 class SynthesizedFindings(BaseModel):
     task_description: str = Field(
         description="Briefly restate the exact investigation instruction you are executing (e.g., 'Downward tracking of PID 10484 on Agent 005 for Process Creation'). DO NOT include any prefixes or markdown headers. Must be in Chinese."
@@ -64,6 +128,14 @@ class SynthesizedFindings(BaseModel):
 
         ROLE BOUNDARY (CRITICAL): You are a Fact Extractor, NOT the final judge. DO NOT forcefully assign MITRE Tactic IDs unless explicitly supported by the 'MITRE Knowledge'. If in doubt, just describe the objective behavior.
         FORMATTING RULE: You MUST strictly use the hierarchical Markdown template defined in the System Prompt (using ###, >, -, and ```cmd). Must be in Chinese. """
+    )
+    graph_entities: list[GraphEntity] = Field(
+        default_factory=list,
+        description="Structured attack graph entity nodes extracted from the raw logs. Include every distinct process, file, IP, registry key, and user account observed.",
+    )
+    graph_relations: list[GraphRelation] = Field(
+        default_factory=list,
+        description="Structured attack graph relationship edges linking entities. Every entity in graph_entities that acts as source or target of an observable behavior MUST have at least one relation.",
     )
 
 
@@ -106,6 +178,8 @@ Nodes:
 8. Visualization_Node
 9. Simple_Log_Query_Node
 10. Attack_Abstract_Node
+11. Graph_Filter_Node
+12. Attack_Graph_Node
 """
 
 
@@ -529,6 +603,9 @@ Every query already executed against Wazuh Indexer is recorded below. Cross-chec
 - **MITRE Knowledge Base**:
 
 {kb_str}
+
+### OUTPUT FORMAT
+{format_instructions}
 """
     )
 
@@ -802,6 +879,7 @@ def information_synthesizer_node(
             "current_raw_logs": None,
             "next_action_fromDecisionNode": None,
             "next_action_fromAttributionPlannerNode": None,
+            "attack_graph_data": None,
             "messages": [AIMessage(content=failure_feedback)],
         }
 
@@ -871,6 +949,57 @@ Do not automatically classify parent-to-child high-privilege access (e.g., 0x1ff
 Modern Windows architectures (e.g., Start Menu, UWP apps, Windows Terminal) routinely use system broker processes to proxy-launch interactive shells.
 - **RuntimeBroker.exe / sihost.exe / svchost.exe**: When you observe these processes launching `powershell.exe`, `cmd.exe`, or `wt.exe` (often with `-Embedding` parameters or via COM calls), DO NOT blindly classify this as malicious "Initial Access" or "COM Hijacking".
 - **The Exemption Rule**: Treat `RuntimeBroker.exe -> powershell.exe` as NORMAL user interaction (e.g., the user manually opening a terminal) UNLESS you observe explicit injected memory indicators in the broker, or the spawned shell immediately executes an encoded/malicious payload (e.g., `powershell -enc ...`).
+
+### GRAPH ENTITY & RELATION EXTRACTION (CRITICAL)
+
+In addition to the narrative findings, you MUST populate `graph_entities` and `graph_relations` with structured data for the attack graph.
+
+**Entity ID Convention (STRICT):**
+- Process: `proc_<pid>` (e.g., `proc_5324`)
+- File: `file_<N>` where N is sequential starting from 1 (e.g., `file_1`, `file_2`)
+- IP: `ip_<address>` (e.g., `ip_192.168.1.100`)
+- Registry: `reg_<N>` where N is sequential starting from 1 (e.g., `reg_1`)
+- User account: `user_<name>` (e.g., `user_Administrator`)
+- Other: `other_<N>` where N is sequential starting from 1
+
+**Properties per entity type:**
+- process: `{{"pid": <int>, "image": "<exe path>", "command_line": "<cmdline or null>"}}`
+- file: `{{"path": "<full file path>"}}`
+- ip: `{{"address": "<ip>", "port": <int or null>}}`
+- registry: `{{"key_path": "<registry key>", "value_name": "<value or null>"}}`
+- user_account: `{{"username": "<name>", "domain": "<domain or null>"}}`
+- other: `{{}}` (empty dict)
+
+**Relation types (STRICT — choose exactly one):**
+- `create` — spawned child process OR created/wrote a file (creating new entities)
+- `modify` — modified a file OR modified a registry key (tampering with existing state)
+- `execute` — executed file as process OR loaded a DLL OR injected into another process (in-memory payload operations)
+- `communicate` — connected to network address OR DNS resolved to IP (network channel establishment)
+- `authenticate` — process ran under a user account (credential use / privilege verification)
+
+**Entity type constraints per relation (CRITICAL — DO NOT violate):**
+Use the source entity's `type` and the target entity's `type` to choose the correct relation.
+| Source type | Relation | Target type | Description |
+|-------------|----------|-------------|-------------|
+| process | create | process | spawned a child process |
+| process | create | file | created/wrote a file |
+| process | modify | file | modified a file |
+| process | modify | registry | modified a registry key |
+| process | execute | process | injected into / loaded DLL into another process |
+| file | execute | process | file was executed, spawning a process |
+| process | communicate | ip | connected to remote address |
+| ip | communicate | ip | DNS resolved to IP |
+| process | authenticate | user_account | ran under a user account |
+
+If the (source_type, target_type) pair does NOT match any row in the above table, DO NOT create a relation between those two entities. For example, process → file with `communicate` is INVALID — use `create` or `modify` instead.
+
+**Rules:**
+1. Every entity mentioned in `detailed_findings` MUST appear in `graph_entities`, UNLESS it is obvious system noise (see rule 6).
+2. Every observable behavior between entities (process→file, process→IP, process→process, etc.) MUST appear in `graph_relations`.
+3. Use the EXACT timestamps from the raw logs. Do not hallucinate timestamps.
+4. If no timestamp is available for an entity or relation, set it to `null`.
+5. Each entity's `name` should be a human-readable label like `powershell.exe (PID: 5324)` or `cmd.exe (PID: 5508)`. For file entities, use only the filename (e.g., `payload.exe`), full path goes in `properties.path`. For IP entities, use only the address (e.g., `192.168.1.100`), port goes in `properties.port`.
+6. **Noise filter (CRITICAL):** Do NOT include entities or relations that are clearly system background noise (e.g., `svchost.exe` routine activity, `RuntimeBroker.exe` launching normal windows, internal-only IPs with no malicious context). If uncertain whether an entity is attack-related or noise, keep it — better to include a borderline entity than drop a real IOC.
 
 ### CONTEXT
 - **Original Instruction**: {instruction}
@@ -954,6 +1083,8 @@ You MUST structure the `detailed_findings` field using the following generalized
 
         task_desc = getattr(result, "task_description", "未提取到指令")
         findings = getattr(result, "detailed_findings", "解析完成，未发现异常。")
+        graph_entities = getattr(result, "graph_entities", [])
+        graph_relations = getattr(result, "graph_relations", [])
 
         summary = f"【执行指令描述】\n{task_desc}\n\n【调查总结与IOC清单】\n{findings}"
 
@@ -963,6 +1094,10 @@ You MUST structure the `detailed_findings` field using the following generalized
             "current_raw_logs": None,
             "next_action_fromDecisionNode": None,
             "next_action_fromAttributionPlannerNode": None,
+            "attack_graph_data": {
+                "entities": [e.model_dump() for e in graph_entities],
+                "relations": [r.model_dump() for r in graph_relations],
+            } if graph_entities or graph_relations else None,
             "messages": [AIMessage(content=summary)],
         }
 
@@ -972,6 +1107,7 @@ You MUST structure the `detailed_findings` field using the following generalized
             "current_raw_logs": None,
             "next_action_fromDecisionNode": None,
             "next_action_fromAttributionPlannerNode": None,
+            "attack_graph_data": None,
             "messages": [
                 AIMessage(
                     content=f"[审查官汇报] 针对指令『{instruction}』的日志解析失败。异常信息: {e}"
@@ -1161,6 +1297,7 @@ Your task is to take the raw investigation findings provided by the Forensic Det
 
         return {
             "final_report": final_report_msg.content,
+            "is_full_attribution_complete": True,
             "next_action_fromAttributionPlannerNode": None,
             "messages": [AIMessage(content=f"报告已生成完毕。\n\n{final_report_msg.content}")],
         }
@@ -1228,8 +1365,8 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
 **Instructions:**
 1. **Extract Core Elements (Zero-Loss Formatting):** Parse the input text and extract the exact Timestamp, MITRE ATT&CK T-code (e.g., T1059.003), executing process, and the specific malicious action. Preserve all technical indicators (PIDs, paths, arguments) perfectly.
 2. **MITRE Tag Format:** ALWAYS use the format `[T-code / English Technique]`. Example: `[T1059.003 / Windows Command Shell]`. The MITRE tag MUST be placed on its own line BELOW the timestamp line, NOT on the same line as the timestamp.
-3. **SVG Structure & Canvas:** Create a standalone `<svg>` tag with `xmlns="http://www.w3.org/2000/svg"`, setting `viewBox="0 0 1000 dynamically_calculated_height"` (assume 160px height per event).
-4. **Vertical Timeline Layout:** Draw a vertical connecting line down the left side (at `x="50"`). For each event, increment the `y` coordinate by 160.
+3. **SVG Structure & Canvas:** Create a standalone `<svg>` tag with `xmlns="http://www.w3.org/2000/svg"`, setting `viewBox="0 0 1000 dynamically_calculated_height"`. The height MUST be calculated as `(事件数 * 240) + 100` so that the canvas is tall enough to display all events without truncation even when the event count is large.
+4. **Vertical Timeline Layout:** Draw a vertical connecting line down the left side (at `x="50"`). For each event, increment the `y` coordinate by 240.
 5. **Text Wrapping (CRITICAL):** Because standard SVG `<text>` does not support auto-wrapping, you MUST use `<foreignObject>` to render the text boxes. Inside `<foreignObject>`, use HTML `<div xmlns="http://www.w3.org/1999/xhtml">` with inline CSS for styling and `word-wrap: break-word`.
 6. **Visual Styling:**
     - Standard events: light blue/gray borders and backgrounds.
@@ -1243,7 +1380,7 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
 
 **Example Output:**
 ```xml
-<svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" viewBox="0 0 1000 380" width="100%" height="100%">
+<svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" viewBox="0 0 1000 580" width="100%" height="100%">
     <style>
         .timeline-line {{ stroke: #cbd5e1; stroke-width: 4px; }}
         .node-dot {{ fill: #3b82f6; stroke: #fff; stroke-width: 2px; }}
@@ -1252,12 +1389,12 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
     </style>
 
     <text x="50" y="30" class="title">ATTACK TIMELINE &amp; EXECUTION FLOW</text>
-    <line x1="50" y1="50" x2="50" y2="360" class="timeline-line" />
+    <line x1="50" y1="50" x2="50" y2="560" class="timeline-line" />
 
     <!-- Event 1 (Default) -->
     <circle cx="50" cy="90" r="8" class="node-dot" />
-    <foreignObject x="80" y="50" width="850" height="120">
-        <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow: hidden;">
+    <foreignObject x="80" y="50" width="850" height="180">
+        <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow-y: auto;">
             <div style="margin-bottom: 6px;">
                 <span style="font-family: monospace; color: #64748b; font-size: 13px;">[2026-04-27 14:52:23.194]</span>
             </div>
@@ -1270,9 +1407,9 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
     </foreignObject>
 
     <!-- Event 2 (Malicious) -->
-    <circle cx="50" cy="250" r="8" class="node-dot-malicious" />
-    <foreignObject x="80" y="210" width="850" height="120">
-        <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 2px solid #ef4444; background: #fee2e2; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow: hidden;">
+    <circle cx="50" cy="330" r="8" class="node-dot-malicious" />
+    <foreignObject x="80" y="290" width="850" height="180">
+        <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 2px solid #ef4444; background: #fee2e2; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow-y: auto;">
             <div style="margin-bottom: 6px;">
                 <span style="font-family: monospace; color: #64748b; font-size: 13px;">[2026-04-27 14:52:23.195]</span>
             </div>
@@ -1321,7 +1458,7 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
             "svg_chart": svg_code,
             "messages": [
                 AIMessage(
-                    content=f"{final_report}\n\n---\n\n攻击链路可视化视图(SVG)已生成：\n\n```xml\n{svg_code}\n```"
+                    content=f"攻击链路可视化视图(SVG)已生成：\n\n```xml\n{svg_code}\n```"
                 )
             ],
         }
@@ -1483,3 +1620,572 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
     except Exception as e:
         logger.error("Error generating attack abstract: %s", e)
         return {"attack_abstract": None}
+
+
+# def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
+#     """Node 11: Attack Graph Node — 生成攻击实体关系网状Mermaid图。"""
+#     logger.info("Executing Attack Graph Node: Generating entity relationship graph (Mermaid)...")
+# 
+#     final_report = state.get("final_report")
+#     if not final_report:
+#         logger.warning("No final report found. Skipping attack graph generation.")
+#         return {
+#             "attack_graph": None,
+#             "messages": [AIMessage(content="[Attack Graph] 缺少最终报告，无法生成攻击实体关系图。")],
+#         }
+# 
+#     graph_system_prompt = """You are a Cybersecurity Graph Visualization Agent. Your sole objective is to convert the entire upstream forensic report into a **Mermaid graph** (flowchart LR) showing attack entity relationships.
+# 
+# Output **Mermaid flowchart LR** syntax. Use the `graph LR` directive so nodes flow left-to-right chronologically.
+# 
+# ---
+# 
+# ### MERMAID FORMAT
+# 
+# Output a `graph LR` flowchart. Use Mermaid's native syntax.
+# 
+# **Node format:** `A["name PID:xxx<br/>Txxxx Technique Name"]` — entity name + key info before `<br/>`, MITRE ID + English technique name after.
+# **Edge format:** `A -->|中文标签| B` — labels MUST be in Chinese: 创建进程, 写入文件, 连接, 修改注册表, 注入, 加载DLL, 执行
+# 
+# Parse the report and classify every entity into one of these Mermaid node styles:
+# 
+# - **PROCESS (malicious)**: use `:::red` class
+# - **FILE**: use `:::orange` class
+# - **NETWORK**: use `:::blue` class
+# - **REGISTRY**: use `:::green` class
+# - **NOISE** (any entity judged benign/system noise): use `:::noise` class, gray styling
+# 
+# Define classes once at the bottom:
+# ```
+# classDef red fill:#fee2e2,stroke:#ef4444,color:#991b1b,stroke-width:2px
+# classDef orange fill:#fff7ed,stroke:#f97316,color:#9a3412,stroke-width:2px,stroke-dasharray:5
+# classDef blue fill:#eff6ff,stroke:#3b82f6,color:#1e40af,stroke-width:2px,stroke-dasharray:5
+# classDef green fill:#f0fdf4,stroke:#22c55e,color:#166534,stroke-width:2px,stroke-dasharray:5
+# classDef noise fill:#f1f5f9,stroke:#94a3b8,color:#64748b,stroke-width:1px
+# ```
+# 
+# **Noise rule:** Any entity the report identifies as benign background noise MUST use `:::noise` class.
+# **File display rule:** Use only the filename (e.g., `svchost.exe`), not the full path.
+# 
+# ### MITRE TECHNIQUE DISPLAY (CRITICAL — NOT standalone nodes)
+# 
+# **MITRE display:** Embed MITRE ID + English technique name inside the node label text (e.g., `<br/>T1059.003 Windows Command Shell`), NOT as separate nodes. You MUST include both the T-code and the English name.
+# 
+# ### EDGE LABELS
+# 
+# Use Chinese labels on edges:
+# 
+# - Process spawns child → `A -->|创建进程| B`
+# - Process creates/writes file → `A -->|写入文件| B`
+# - Process connects to network → `A -->|连接| B`
+# - Process modifies registry → `A -->|修改注册表| B`
+# - Process injects into another → `A -->|注入| B`
+# - Process loads DLL → `A -->|加载DLL| B`
+# - File executed as process → `A -->|执行| B`
+# 
+# ---
+# 
+# ### LAYOUT
+# 
+# Mermaid's `graph LR` engine handles all positioning automatically. No manual coordinates needed. Nodes will flow left-to-right chronologically by the order you declare edges.
+# 
+# ---
+# 
+# ### CRITICAL RULES
+# 
+# 1. Read the WHOLE report, extract all entities and relationships.
+# 2. NO hallucination — everything must be traceable to the report.
+# 3. Every node (except entry point) must have at least one incoming edge.
+# 4. MITRE IDs + English names go INSIDE node labels (after `<br/>`), never as standalone nodes.
+# 5. Use `graph LR` for left-to-right chronological flow.
+# 6. Edge labels MUST be in Chinese.
+# 7. **URL escaping (CRITICAL):** In node labels, replace `:` in `http://` with `&#58;` to prevent Markdown auto-linking. Write `http&#58;//evil.com/path` instead of `http://evil.com/path`. The browser renders `&#58;` as `:` so it displays correctly but won't trigger link detection.
+# 8. Output ONLY the Mermaid code block inside triple backticks. No other text.
+# 
+# ---
+# 
+# ### Example Output
+# 
+# ```mermaid
+# graph LR
+#     A["winword.exe PID:4216<br/>T1566.001 Spearphishing Attachment"]:::red
+#     B["powershell.exe PID:8852<br/>T1059.001 PowerShell"]:::red
+#     C["svchost.exe PID:9936<br/>T1547.001 Registry Run Keys / T1071.001 Application Layer Protocol"]:::red
+#     D["svchost.exe"]:::orange
+#     E["HKLM\\...\\Run\\Updater"]:::green
+#     F["evil.c2.net:443"]:::blue
+#     G["explorer.exe"]:::noise
+# 
+#     A -->|创建进程| B
+#     B -->|写入文件| D
+#     B -->|创建进程| C
+#     C -->|修改注册表| E
+#     C -->|连接| F
+#     G -->|创建进程| B
+# 
+#     classDef red fill:#fee2e2,stroke:#ef4444,color:#991b1b,stroke-width:2px
+#     classDef orange fill:#fff7ed,stroke:#f97316,color:#9a3412,stroke-width:2px,stroke-dasharray:5
+#     classDef blue fill:#eff6ff,stroke:#3b82f6,color:#1e40af,stroke-width:2px,stroke-dasharray:5
+#     classDef green fill:#f0fdf4,stroke:#22c55e,color:#166534,stroke-width:2px,stroke-dasharray:5
+#     classDef noise fill:#f1f5f9,stroke:#94a3b8,color:#64748b,stroke-width:1px
+# ```
+# """
+# 
+#     human_prompt = (
+#         "Here is the complete forensic report. Parse EVERY section to extract all entities "
+#         "(processes, files, network indicators, registry keys) and their relationships, "
+#         "then output a Mermaid graph (graph LR):\n\n"
+#         "{final_report}"
+#     )
+# 
+#     prompt_template = ChatPromptTemplate.from_messages(
+#         [("system", graph_system_prompt), ("human", human_prompt)]
+#     )
+# 
+#     try:
+#         graph_chain = prompt_template | model
+#         result = graph_chain.invoke({"final_report": final_report})
+# 
+#         raw_content = result.content
+#         if isinstance(raw_content, list):
+#             text_parts = []
+#             for block in raw_content:
+#                 if isinstance(block, dict) and "text" in block:
+#                     text_parts.append(block["text"])
+#                 elif isinstance(block, str):
+#                     text_parts.append(block)
+#             raw_content = "".join(text_parts)
+#         elif not isinstance(raw_content, str):
+#             raw_content = str(raw_content)
+# 
+#         mermaid_match = re.search(r"```(?:mermaid)?\s*\n(.*?)```", raw_content, re.DOTALL | re.IGNORECASE)
+#         if mermaid_match:
+#             mermaid_code = mermaid_match.group(1).strip()
+#         else:
+#             mermaid_code = re.sub(
+#                 r"^```(?:mermaid)?\n|\n```$", "", raw_content.strip(), flags=re.MULTILINE
+#             )
+# 
+#         logger.info("Attack graph Mermaid generated successfully.")
+# 
+#         return {
+#             "attack_graph": mermaid_code,
+#             "messages": [
+#                 AIMessage(
+#                     content=f"攻击实体关系网状图(Mermaid)已生成：\n\n```mermaid\n{mermaid_code}\n```"
+#                 )
+#             ],
+#         }
+# 
+#     except Exception as e:
+#         logger.error("Error generating attack graph Mermaid: %s", e)
+#         return {
+#             "attack_graph": None,
+#             "messages": [AIMessage(content=f"攻击实体关系图(Mermaid)生成失败，发生异常: {e}")],
+#         }
+# 
+
+def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
+    """Node 11: Graph Filter Node """
+    logger.info("Executing Graph Filter Node: Reconstructing attack_graph_data from report...")
+
+    graph_data = state.get("attack_graph_data")
+    if not graph_data:
+        return {"attack_graph_data": None}
+
+    entities: list[dict] = graph_data.get("entities", [])
+    relations: list[dict] = graph_data.get("relations", [])
+
+    if not entities:
+        return {"attack_graph_data": None}
+
+    final_report = state.get("final_report", "")
+
+    entity_list_str = json.dumps(
+        [{"id": e["id"], "type": e["type"], "name": e["name"], "properties": e.get("properties", {})}
+         for e in entities],
+        ensure_ascii=False, indent=2,
+    )
+    relation_list_str = json.dumps(
+        [{"source": r["source"], "target": r["target"], "relation": r["relation"], "timestamp": r.get("timestamp")}
+         for r in relations],
+        ensure_ascii=False, indent=2,
+    )
+
+    system_prompt = """You are a cybersecurity entity graph reconstructor. Your primary input is the final attack attribution REPORT. The provided entity/relation list from raw logs is supplementary reference.
+
+**Entity format:**
+{{
+    "id": "proc_<pid> | file_<N> | ip_<addr> | reg_<N> | user_<name> | other_<N>",
+    "type": "process | file | ip | registry | user_account | other",
+    "name": "<human readable label>",
+    "properties": {{}}
+}}
+
+**Relation format:**
+{{
+    "source": "<entity id>",
+    "target": "<entity id>",
+    "relation": "create | modify | execute | communicate | authenticate"
+}}
+
+**Relation types (with entity type constraints):**
+- create: process→process (spawn) OR process→file (create/write)
+- modify: process→file OR process→registry
+- execute: process→process (inject/DLL) OR file→process (file executed)
+- communicate: process→ip (connection) OR ip→ip (DNS) — NEVER process→file
+- authenticate: process→user_account
+
+**Your task (in order):**
+
+1. **Report-first filtering**: The REPORT is the ground truth. Only keep entities and relations that are explicitly or implicitly described in the report. Drop anything not traceable to the report.
+   - System noise (svchost.exe routine, RuntimeBroker.exe normal windows, explorer.exe benign) → REMOVE.
+   - Internal-only infrastructure with no attack relevance → REMOVE.
+   - When in doubt, KEEP.
+
+2. **Deduplication**: Merge duplicate entities that represent the same real-world object. For example, if file_2 and file_3 both point to the same file path, merge them into one entity and update all relations to use the surviving ID. Remove duplicate relations (same source, target, relation).
+
+3. **Trim auxiliary nodes**: For nodes like user_account that are not directly participating in process/file/network chains:
+   - In a single-host scenario: keep at most 1 authenticate relation per user account. Remove excessive authenticate relations that add clutter.
+   - If a user_account node ends up with zero relations after trimming, remove it entirely.
+   - The graph should focus on the core chain: process → process, process → file, process → network, process → registry.
+
+4. **Report-driven supplementation (CRITICAL — focus on FILES and IPs)**: The REPORT is the ground truth. After filtering, re-scan the report and:
+   - **Files**: For ANY file path or filename mentioned in the report that is NOT already in the entity list → CREATE a new file entity with a unique `file_<N>` id (use the next available N). For `name`, use just the filename. In `properties`, fill `path` with the full path from the report. If the path is incomplete or missing, set `path` to an empty string `""`.
+   - **IPs / Domains**: For ANY external IP address or domain mentioned in the report that is NOT already in the entity list → CREATE a new ip entity with `id` = `ip_<address>` (or `ip_<domain>` for domains). For `name`, use the IP/domain as-is. In `properties`, fill `address` with the IP/domain from the report. If port info is available, add `port`; otherwise omit it.
+   - **Relations for new entities**: For each newly created file or ip entity, infer its relationship to existing process entities from the report context:
+     * If report says a process created/wrote/downloaded the file → add `create` relation (source=process, target=file).
+     * If report says a process connected to the IP/domain → add `communicate` relation (source=process, target=ip).
+     * If report says a process loaded/executed the file → add `execute` relation (source=file, target=process).
+     * If the relation direction or source/target is unclear, make your best guess based on typical attack patterns and set `timestamp` to `null`.
+   - **Missing parameters**: If the report does not provide certain properties (e.g., no PID, no full path, no port), simply leave those fields empty or omit them. Do NOT hallucinate values.
+   - **Noise check for new entities**: Apply the same noise filter — do NOT add well-known benign system files (svchost.exe, explorer.exe, etc.) as new entities unless they are explicitly flagged as abused/malicious in the report.
+
+**Output ONLY a JSON object:**
+{{"entities": [...], "relations": [...]}}
+
+Example output:
+{{"entities": [
+    {{"id": "proc_7672", "type": "process", "name": "powershell.exe (PID: 7672)", "properties": {{"pid": 7672}}}},
+    {{"id": "file_1", "type": "file", "name": "payload.dll", "properties": {{"path": "C:\\\\Users\\\\Public\\\\payload.dll"}}}}
+],
+"relations": [
+    {{"source": "proc_7672", "target": "file_1", "relation": "create"}}
+]}}
+"""
+
+    human_prompt = (
+        "### CURRENT ENTITIES\n```json\n{entity_list}\n```\n\n"
+        "### CURRENT RELATIONS\n```json\n{relation_list}\n```\n\n"
+        "### ATTACK ATTRIBUTION REPORT (GROUND TRUTH)\n{report}\n\n"
+        "Reconstruct the entities and relations based on the report. "
+        "Remove noise, merge duplicates, trim unnecessary auxiliary connections, "
+        "and supplement any missing files/IPs mentioned in the report but absent from the current entity list."
+    )
+
+    prompt_template = ChatPromptTemplate.from_messages(
+        [("system", system_prompt), ("human", human_prompt)]
+    )
+
+    try:
+        chain = prompt_template | model
+        result = chain.invoke({
+            "entity_list": entity_list_str,
+            "relation_list": relation_list_str,
+            "report": final_report[:10000],
+        })
+
+        raw = result.content
+        if isinstance(raw, list):
+            raw = "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in raw)
+
+        json_match = re.search(r"\{[\s\S]*\}", str(raw))
+        if json_match:
+            parsed = json.loads(json_match.group())
+            filtered_entities = parsed.get("entities", entities)
+            filtered_relations = parsed.get("relations", relations)
+        else:
+            filtered_entities = entities
+            filtered_relations = relations
+
+        logger.info("Graph filter: %d entities, %d relations → %d entities, %d relations.",
+                    len(entities), len(relations), len(filtered_entities), len(filtered_relations))
+
+        return {
+            "attack_graph_data": {
+                "_replace": True,
+                "entities": filtered_entities,
+                "relations": filtered_relations,
+            } if filtered_entities else None,
+        }
+
+    except Exception as e:
+        logger.error("Graph filter failed, keeping original data: %s", e)
+        return {"attack_graph_data": {"_replace": True, "entities": entities, "relations": relations}}
+
+
+def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
+    """Node 12: Attack Graph Node — 基于 attack_graph_data 生成攻击实体关系网状图 SVG"""
+    logger.info("Executing Attack Graph Node (Node 12): Generating entity relationship graph SVG from structured data...")
+
+    graph_data = state.get("attack_graph_data")
+    if not graph_data:
+        logger.warning("No attack_graph_data found. Skipping attack graph generation.")
+        return {
+            "attack_graph": None,
+            "messages": [AIMessage(content="[Attack Graph] 缺少攻击图谱数据，无法生成实体关系图。")],
+        }
+
+    entities: list[dict] = graph_data.get("entities", [])
+    relations: list[dict] = graph_data.get("relations", [])
+
+    if not entities:
+        return {
+            "attack_graph": None,
+            "messages": [AIMessage(content="[Attack Graph] 图谱数据为空。")],
+        }
+
+    # --- build lookup & adjacency ---
+    entity_map: dict[str, dict] = {e["id"]: e for e in entities}
+    in_degree: dict[str, int] = {e["id"]: 0 for e in entities}
+    adj: dict[str, list[str]] = {e["id"]: [] for e in entities}
+
+    for rel in relations:
+        src = rel.get("source", "")
+        tgt = rel.get("target", "")
+        if src in adj and tgt in entity_map:
+            adj[src].append(tgt)
+            in_degree[tgt] = in_degree.get(tgt, 0) + 1
+
+    # --- topological BFS to assign layers ---
+    layers: dict[str, int] = {}
+    queue: deque[str] = deque()
+
+    # --- Kahn-based longest-path DAG layering ---
+    layers: dict[str, int] = {}
+    indeg: dict[str, int] = dict(in_degree)
+    queue: deque[str] = deque()
+
+    for eid, deg in indeg.items():
+        if deg == 0:
+            layers[eid] = 0
+            queue.append(eid)
+
+    while queue:
+        current = queue.popleft()
+        for neighbor in adj.get(current, []):
+            # longest path: layer must be strictly greater than all parent layers
+            candidate = layers[current] + 1
+            if candidate > layers.get(neighbor, -1):
+                layers[neighbor] = candidate
+            indeg[neighbor] -= 1
+            if indeg[neighbor] == 0:
+                queue.append(neighbor)
+
+    # handle disconnected / cycle nodes
+    next_layer = max(layers.values()) + 1 if layers else 0
+    for eid in entity_map:
+        if eid not in layers:
+            layers[eid] = next_layer
+            next_layer += 1
+
+    # --- group by layer ---
+    layer_groups: dict[int, list[str]] = {}
+    for eid, layer in layers.items():
+        layer_groups.setdefault(layer, []).append(eid)
+
+    # --- layout constants ---
+    NODE_WIDTH = 230
+    NODE_HEIGHT = 62
+    LAYER_GAP_X = 400
+    NODE_GAP_Y = 16
+    MARGIN = 40
+    TITLE_H = 36
+    LEGEND_H = 90
+
+    max_in_layer = max((len(v) for v in layer_groups.values()), default=1)
+    body_height = max_in_layer * (NODE_HEIGHT + NODE_GAP_Y) + MARGIN * 2 + TITLE_H
+    canvas_width = (max(layer_groups.keys()) + 1) * LAYER_GAP_X + MARGIN * 2 if layer_groups else 800
+    canvas_height = max(400, body_height + LEGEND_H)
+
+    legend_base_y = canvas_height - 70
+
+    # --- color scheme ---
+    type_colors: dict[str, dict[str, str]] = {
+        "process":      {"bg": "#fee2e2", "border": "#ef4444", "text": "#991b1b", "arrow": "arrow-red"},
+        "file":         {"bg": "#fff7ed", "border": "#f97316", "text": "#9a3412", "arrow": "arrow-orange"},
+        "ip":           {"bg": "#eff6ff", "border": "#3b82f6", "text": "#1e40af", "arrow": "arrow-blue"},
+        "registry":     {"bg": "#f0fdf4", "border": "#22c55e", "text": "#166534", "arrow": "arrow-green"},
+        "user_account": {"bg": "#faf5ff", "border": "#a855f7", "text": "#6b21a8", "arrow": "arrow-purple"},
+        "other":        {"bg": "#f1f5f9", "border": "#94a3b8", "text": "#475569", "arrow": "arrow-gray"},
+    }
+
+    rel_labels: dict[str, str] = {
+        "create": "创建", "modify": "修改", "execute": "执行",
+        "communicate": "通信", "authenticate": "认证",
+    }
+    # edge style per relation: (stroke-width, stroke-dasharray, color, arrow-marker-id)
+    rel_styles: dict[str, tuple[str, str, str, str]] = {
+        "create":       ("3", "none", "#22c55e", "arrow-create"),        # thick solid green
+        "modify":       ("2", "6,4",  "#f59e0b", "arrow-modify"),        # dashed amber
+        "execute":      ("2", "2,3",  "#ef4444", "arrow-execute"),       # dotted red
+        "communicate":  ("2", "none", "#3b82f6", "arrow-communicate"),   # normal solid blue
+        "authenticate": ("1.5", "4,3","#a855f7", "arrow-authenticate"),  # thin dashed purple
+    }
+
+    # --- position nodes ---
+    node_pos: dict[str, tuple[int, int]] = {}
+    for layer_num in sorted(layer_groups.keys()):
+        ids = layer_groups[layer_num]
+        total_h = len(ids) * (NODE_HEIGHT + NODE_GAP_Y) - NODE_GAP_Y
+        safe_top = MARGIN + TITLE_H
+        safe_bottom = legend_base_y - 20
+        safe_height = safe_bottom - safe_top
+        start_y = safe_top + max(0, (safe_height - total_h) // 2)
+        x = MARGIN + layer_num * LAYER_GAP_X
+        for i, eid in enumerate(ids):
+            node_pos[eid] = (x, start_y + i * (NODE_HEIGHT + NODE_GAP_Y))
+
+    # --- build SVG ---
+    lines: list[str] = []
+
+    lines.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {canvas_width} {canvas_height}" width="100%" height="100%">')
+    lines.append('<style>')
+    lines.append('.legend-text { font-family: sans-serif; font-size: 10px; fill: #cbd5e1; }')
+    lines.append('</style>')
+    lines.append(f'<rect width="{canvas_width}" height="{canvas_height}" fill="#0f172a"/>')
+    lines.append(f'<text x="{canvas_width // 2}" y="26" text-anchor="middle" font-size="15" font-weight="bold" fill="#e2e8f0" font-family="sans-serif">攻击实体关系图</text>')
+
+    # arrow markers (entity type arrows + relation type arrows)
+    lines.append('<defs>')
+    ent_arrows = [("arrow-red","#ef4444"),("arrow-orange","#f97316"),("arrow-blue","#3b82f6"),
+                  ("arrow-green","#22c55e"),("arrow-purple","#a855f7"),("arrow-gray","#94a3b8")]
+    rel_arrows = [("arrow-create","#22c55e"),("arrow-modify","#f59e0b"),("arrow-execute","#ef4444"),
+                  ("arrow-communicate","#3b82f6"),("arrow-authenticate","#a855f7")]
+    for name, color in ent_arrows + rel_arrows:
+        lines.append(f'<marker id="{name}" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">')
+        lines.append(f'<path d="M 0 0 L 10 5 L 0 10 z" fill="{color}"/>')
+        lines.append('</marker>')
+    lines.append('</defs>')
+
+    # edges — collect paths and labels separately
+    target_entry_slots: dict[str, int] = {}
+    edge_paths: list[str] = []
+    edge_labels: list[str] = []
+    for rel in relations:
+        src, tgt = rel.get("source", ""), rel.get("target", "")
+        if src not in node_pos or tgt not in node_pos:
+            continue
+        x1, y1 = node_pos[src]
+        x2, y2 = node_pos[tgt]
+        sx, sy = x1 + NODE_WIDTH, y1 + NODE_HEIGHT // 2
+        tx, ty_base = x2, y2 + NODE_HEIGHT // 2
+
+        rel_type = rel.get("relation", "")
+        sw, dash, edge_color, arrow_id = rel_styles.get(rel_type, ("2", "none", "#94a3b8", "arrow-gray"))
+        dash_attr = f' stroke-dasharray="{dash}"' if dash != "none" else ""
+
+        # offset entry point when multiple sources connect to the same target
+        slot = target_entry_slots.get(tgt, 0)
+        target_entry_slots[tgt] = slot + 1
+        offset_sign = 1 if slot % 2 == 0 else -1
+        offset_idx = (slot + 1) // 2
+        ty = ty_base + offset_sign * offset_idx * 20
+        corner_x = tx - 90 - offset_sign * offset_idx * 8
+
+        edge_paths.append(f'<path d="M {sx} {sy} L {corner_x} {sy} L {corner_x} {ty} L {tx} {ty}" fill="none" stroke="{edge_color}" stroke-width="{sw}"{dash_attr} marker-end="url(#{arrow_id})"/>')
+
+        label = rel_labels.get(rel_type, rel_type)
+        lx = (corner_x + tx) / 2
+        edge_labels.append(f'<text x="{lx}" y="{ty}" font-family="sans-serif" font-size="10" fill="#cbd5e1" stroke="#0f172a" stroke-width="4" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">{label}</text>')
+
+    lines.extend(edge_paths)
+    lines.extend(edge_labels)
+
+    # nodes
+    for entity in entities:
+        eid = entity.get("id", "")
+        if eid not in node_pos:
+            continue
+        x, y = node_pos[eid]
+        etype = entity.get("type", "other")
+        tc = type_colors.get(etype, type_colors["other"])
+        name = (entity.get("name") or eid).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+        dash = "5,4" if etype != "process" else "none"
+
+        lines.append(f'<foreignObject x="{x}" y="{y}" width="{NODE_WIDTH}" height="{NODE_HEIGHT}">')
+        lines.append(f'<div xmlns="http://www.w3.org/1999/xhtml" style="border:2px {tc["border"]}; border-style:solid; border-radius:8px; background:{tc["bg"]}; padding:6px 10px; font-family:sans-serif; font-size:11px; box-sizing:border-box; height:100%; display:flex; flex-direction:column; justify-content:center; overflow:hidden; stroke-dasharray:{dash};">')
+        lines.append(f'<div style="font-weight:bold; color:{tc["text"]}; font-size:11px; word-wrap:break-word;">{name}</div>')
+        props = entity.get("properties", {})
+        detail = ""
+        etype = entity.get("type", "")
+        if etype == "ip":
+            port = props.get("port")
+            if port is not None:
+                detail = f"端口: {port}"
+        elif etype == "registry":
+            vn = props.get("value_name")
+            if vn:
+                detail = vn
+        if detail:
+            detail = detail.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+            lines.append(f'<div style="color:{tc["text"]}; font-size:9px; opacity:0.75; margin-top:2px; word-wrap:break-word; line-height:1.2;">{detail[:40]}</div>')
+        lines.append('</div>')
+        lines.append('</foreignObject>')
+
+    # --- legend ---
+    # entity legend (right side)
+    ent_items = [
+        ("process",      "进程"),
+        ("file",         "文件"),
+        ("ip",           "网络"),
+        ("registry",     "注册表"),
+        ("user_account", "用户账户"),
+        ("other",        "其他"),
+    ]
+    ent_start_x = canvas_width - 580
+    ent_box_w = len(ent_items) * 90 + 16
+    # entity legend: box + title first, then items
+    lines.append(f'<rect x="{ent_start_x - 8}" y="{legend_base_y}" width="{ent_box_w}" height="46" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>')
+    lines.append(f'<text x="{ent_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#f8fafc" font-weight="bold" font-family="sans-serif">实体</text>')
+    for i, (key, label) in enumerate(ent_items):
+        lx = ent_start_x + i * 90
+        tc = type_colors[key]
+        lines.append(f'<rect x="{lx}" y="{legend_base_y + 24}" width="14" height="14" rx="3" fill="{tc["bg"]}" stroke="{tc["border"]}" stroke-width="1.5"/>')
+        lines.append(f'<text x="{lx + 19}" y="{legend_base_y + 35}" font-size="10" fill="#cbd5e1" font-family="sans-serif">{label}</text>')
+
+    # behavior legend (left side)
+    act_items = [
+        ("create",       "创建"),
+        ("modify",       "修改"),
+        ("execute",      "执行"),
+        ("communicate",  "通信"),
+        ("authenticate", "认证"),
+    ]
+    act_start_x = 50
+    act_box_w = len(act_items) * 90 + 16
+    # behavior legend: box + title first, then items
+    lines.append(f'<rect x="{act_start_x - 8}" y="{legend_base_y}" width="{act_box_w}" height="46" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>')
+    lines.append(f'<text x="{act_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#f8fafc" font-weight="bold" font-family="sans-serif">行为</text>')
+    for i, (rel_type, label) in enumerate(act_items):
+        lx = act_start_x + i * 90
+        sw, dash, color, _ = rel_styles[rel_type]
+        dash_attr = f' stroke-dasharray="{dash}"' if dash != "none" else ""
+        lines.append(f'<line x1="{lx}" y1="{legend_base_y + 31}" x2="{lx + 40}" y2="{legend_base_y + 31}" stroke="{color}" stroke-width="{sw}"{dash_attr}/>')
+        lines.append(f'<text x="{lx + 48}" y="{legend_base_y + 35}" font-size="10" fill="#cbd5e1" font-family="sans-serif">{label}</text>')
+
+    lines.append('</svg>')
+
+    svg_code = "\n".join(lines)
+
+    logger.info("Attack graph SVG generated successfully from structured data (%d entities, %d relations).",
+                len(entities), len(relations))
+
+    return {
+        "attack_graph": svg_code,
+        "messages": [
+            AIMessage(
+                content=f"攻击实体关系网状图(SVG)已生成：\n\n```xml\n{svg_code}\n```"
+            )
+        ],
+    }

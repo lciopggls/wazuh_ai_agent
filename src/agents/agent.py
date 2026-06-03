@@ -19,7 +19,7 @@ model = ChatOpenAI(
 custom_http_client = httpx.Client(
     timeout=httpx.Timeout(
         connect=30.0,
-        read=180.0,  # 将读取超时延长至 3 分钟，给足大模型输出的时间
+        read=300.0,  # 将读取超时延长至 5 分钟，给足大模型输出的时间
         write=30.0,
         pool=30.0,
     )
