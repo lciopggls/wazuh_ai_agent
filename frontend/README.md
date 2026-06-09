@@ -110,3 +110,14 @@ pnpm dev
 
 - 只看前端页面时，不要求先配置 Python 虚拟环境
 - 需要实时拓扑数据时，才需要在仓库根目录使用 `uv run` 启动小后端
+
+### 启动智能体记忆功能
+
+```bash
+python -m src.service.memory
+```
+
+### 智能体markdown格式回答
+```bash
+pnpm install vue-markdown-render
+```

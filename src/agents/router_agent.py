@@ -206,6 +206,7 @@ def get_router_agent(
     router_model: BaseChatModel,
     rule_model: BaseChatModel | None = None,
     attack_model: BaseChatModel | None = None,
+    checkpointer=None,
 ):
     rule_agent = get_rule_agent(rule_model or router_model)
     attack_agent = get_attack_attribution_agent(attack_model or router_model)
@@ -403,4 +404,5 @@ def get_router_agent(
         model=router_model,
         tools=[write_task_plan, delegate_rule_agent, delegate_attack_attribution],
         system_prompt=system_prompt,
+        checkpointer=checkpointer,
     )

@@ -73,7 +73,7 @@ def route_attribution_planner(state: AttributionState) -> str:
 
 
 # 构建图
-def get_attack_attribution_agent(model: BaseChatModel):
+def get_attack_attribution_agent(model: BaseChatModel, checkpointer=None):
     """
     Creates the Attack Attribution Agent Graph.
     Args:
@@ -147,7 +147,7 @@ def get_attack_attribution_agent(model: BaseChatModel):
     graph.add_edge("User_Input_Node", END)
     graph.add_edge("Simple_Log_Query_Node", END)
 
-    app = graph.compile()
+    app = graph.compile(checkpointer=checkpointer)
 
     logger.info("Attribution Graph successfully compiled!")
     return app.with_config({"configurable": {"model": model}})
