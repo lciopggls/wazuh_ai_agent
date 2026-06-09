@@ -3,11 +3,13 @@ import { ref, onMounted, nextTick, computed, watch } from "vue";
 import VueMarkdown from 'vue-markdown-render';
 
 // --- 1. 配置与状态定义 ---
+// ⚡ 修改点：将 agentId 提升为从父组件传入，便于全局共享当前选中状态
 const props = defineProps<{
   sessions: Record<string, any[]>;
+  agentId: string; 
 }>();
 
-const emit = defineEmits(['update:sessions']);
+const emit = defineEmits(['update:sessions', 'update:agentId']);
 
 // 智能体配置列表（保持标准的系统标识命名）
 const agents = [
@@ -15,8 +17,11 @@ const agents = [
   { id: 'attack_attributor', name: '攻击溯源' }
 ];
 
-// 当前选中的智能体 ID，默认指向攻击溯源
-const currentAgentId = ref("attack_attributor");
+// ⚡ 修改点：将原有的私有 currentAgentId 改为基于 prop 的计算属性，切换时通知父组件
+const currentAgentId = computed({
+  get: () => props.agentId || "attack_attributor",
+  set: (val: string) => emit('update:agentId', val)
+});
 
 // 智能体与线程 ID 的映射表（本地持久化）
 const agentThreadMap = ref<Record<string, string>>(
@@ -95,7 +100,7 @@ const createNewThread = () => {
   emit('update:sessions', updatedSessions);
 };
 
-// 💡 动态拼装 Markdown 代码块辅助函数，防止特殊反引号在传输/编译时发生嵌套截断
+// 💡 动态拼装 Markdown 代码块辅助函数
 const formatMarkdownSource = (msg: any) => {
   if (!msg || !msg.content) return "";
   if (msg.node === 'tools') {
@@ -126,7 +131,7 @@ const handleSend = async () => {
   emit('update:sessions', initSessions);
 
   let lastNodeName = "";
-  let currentAiMsgIndex = -1; // 用于定位当前正在写入的 AI 原始节点气泡
+  let currentAiMsgIndex = -1; 
 
   await nextTick();
   scrollToBottom();
@@ -167,7 +172,6 @@ const handleSend = async () => {
           if (nodeName === 'tools') {
             isJsonNode = true;
             
-            // 💡 核心修复：后端 tools 节点的 data.content 是双重转义的 JSON 字符串，我们需要在此处对其进行二次反序列化
             let parsedInnerContent: any = null;
             if (data.content) {
               try {
@@ -178,21 +182,17 @@ const handleSend = async () => {
             }
 
             if (parsedInnerContent) {
-              // 1. tools 节点展示排版美化后的完整 JSON 树
               incomingContent = JSON.stringify(parsedInnerContent, null, 2);
-              // 2. 从二次解析后的内部数据中精准提取 reply
               if (parsedInnerContent.reply) {
                 extractedReply = parsedInnerContent.reply;
               }
             } else {
-              // 降级兜底：万一二次解析失败，保留外层原封不动的 content
               incomingContent = typeof data.content === 'string' ? data.content : JSON.stringify(data, null, 2);
             }
           } else if (data.content) {
             incomingContent = data.content;
           }
         } catch (e) {
-          // 纯文本流兜底
           incomingContent = dataStr;
           nodeName = "model";
         }
@@ -201,7 +201,6 @@ const handleSend = async () => {
           const currentSessions = { ...props.sessions };
           const sessionData = currentSessions[sessionKey] ? [...currentSessions[sessionKey]] : [];
 
-          // 1. 用节点名发生切换，或者第一次渲染作为判断
           if (nodeName !== lastNodeName || currentAiMsgIndex === -1) {
             lastNodeName = nodeName;
             
@@ -213,7 +212,6 @@ const handleSend = async () => {
             });
             currentAiMsgIndex = sessionData.length - 1;
 
-            // 🌟 核心分裂展示：如果是 tools 节点且成功提取到了真正的 reply 文本，立刻无缝追加独立的 reply 气泡
             if (isJsonNode && extractedReply) {
               sessionData.push({
                 role: 'assistant',
@@ -223,21 +221,17 @@ const handleSend = async () => {
               });
             }
           } else {
-            // 2. 属于同一节点的流式内容增量更新
             if (currentAiMsgIndex !== -1 && sessionData[currentAiMsgIndex]) {
               const targetMsg = { ...sessionData[currentAiMsgIndex] };
               
               if (isJsonNode) {
-                // 持续写入 tools 气泡更新的完整格式化 JSON 数据
                 targetMsg.content = incomingContent; 
                 sessionData[currentAiMsgIndex] = targetMsg;
                 
-                // 同步流式更新紧随其后的 reply 独立文本气泡
                 const nextMsgIndex = currentAiMsgIndex + 1;
                 if (extractedReply && sessionData[nextMsgIndex] && sessionData[nextMsgIndex].node === 'reply') {
                   sessionData[nextMsgIndex].content = extractedReply;
                 } else if (extractedReply && (!sessionData[nextMsgIndex] || sessionData[nextMsgIndex].node !== 'reply')) {
-                  // 如果未检索到后续 reply 气泡则弹性插队创建
                   sessionData.splice(nextMsgIndex, 0, {
                     role: 'assistant',
                     content: extractedReply,
@@ -246,7 +240,6 @@ const handleSend = async () => {
                   });
                 }
               } else {
-                // model 节点常规流式文本追加
                 targetMsg.content += incomingContent;
                 sessionData[currentAiMsgIndex] = targetMsg;
               }
@@ -285,6 +278,7 @@ const scrollToBottom = async () => {
     <!-- 顶部导航栏 -->
     <div class="top_bar">
       <div class="agent_tabs">
+        <!-- ⚡ 修改点：将点击事件直接绑定给具备双向回传特性的 currentAgentId 计算属性 -->
         <div 
           v-for="agent in agents" 
           :key="agent.id"
@@ -319,9 +313,7 @@ const scrollToBottom = async () => {
       >
         <div class="avatar">{{ msg.role === 'user' ? 'ME' : 'AI' }}</div>
         
-        <!-- 气泡主体：AI 气泡和用户气泡采用统一的主样式结构 -->
         <div class="content_box">
-          <!-- 动态步骤标签展示 -->
           <div v-if="msg.role === 'assistant' && msg.node" class="node_tag">
             <template v-if="msg.node === 'tools'">⚙️ 原始工具输出 (完整数据)</template>
             <template v-else-if="msg.node === 'reply'">🎯 溯源结论 (提取结果)</template>
@@ -329,9 +321,7 @@ const scrollToBottom = async () => {
             <template v-else>⚡ 步骤: {{ msg.node }}</template>
           </div>
           
-          <!-- Markdown 渲染 -->
           <div class="markdown_body">
-            <!-- 使用 formatMarkdownSource 动态包装，保持外观一致性的同时渲染代码高亮 -->
             <vue-markdown 
               :source="formatMarkdownSource(msg)" 
               v-if="msg.content" 

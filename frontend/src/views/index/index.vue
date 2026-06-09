@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import ItemWrap from "@/components/item-wrap";
 // 第一页组件
 import LeftTop from "./left-top.vue";
@@ -10,16 +10,18 @@ import CenterBottom from "./center-bottom.vue";
 import RightTop from "./right-top.vue";
 import RightCenter from "./right-center.vue";
 import RightBottom from "./right-bottom.vue";
-import second_left from './second_left.vue';
+
+// 第二页组件
+import second_left from './second_left.vue';     // 👈 期望放入战术卡片/摘要的地方
 import second_middle from './second_middle.vue';
-import second_right from './second_right.vue';
+import second_right from './second_right.vue';   // 👈 AI 聊天窗口组件
+
 // 控制页面切换
 const currentPage = ref(1);
 const globalSessions = ref<Record<string, any[]>>({});
 
-// 2. 定义当前选中的智能体和会话ID（应与智能体组件内的逻辑对应）
-const currentAgentId = ref("attack_attribution"); 
-const currentThreadId = ref(""); // 可以在初始化时或由左侧组件传回
+// 💡 确保此处的 ID 与你的 second_right 智能体组件内的 id: 'attack_attributor' 保持完全一致
+const currentAgentId = ref("attack_attributor"); 
 
 // 1. 初始化加载
 onMounted(() => {
@@ -45,17 +47,72 @@ const handleGlobalClear = (agentId: string) => {
   });
   updateAndSaveSessions(updated);
 };
+
+// ⚡ 核心：动态实时从当前的会话流中提取 attack_abstract 数据，供第二页的左侧组件使用
+const latestAttackAbstract = computed(() => {
+  // 从本地持久化中动态获取当前智能体激活的 thread_id
+  const threadMap = JSON.parse(localStorage.getItem('wazuh_agent_thread_map') || '{}');
+  const currentThreadId = threadMap[currentAgentId.value] || "";
+  
+  const sessionKey = `${currentAgentId.value}_${currentThreadId}`;
+  const currentChatList = globalSessions.value[sessionKey] || [];
+
+  // 从后往前寻找最新生成的 tools 数据节点
+  for (let i = currentChatList.length - 1; i >= 0; i--) {
+    const msg = currentChatList[i];
+    if (msg.role === 'assistant' && msg.node === 'tools' && msg.content) {
+      try {
+        const toolData = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
+        
+        if (toolData?.artifacts?.attack_abstract) {
+          return toolData.artifacts.attack_abstract; // 成功提取到战术摘要对象
+        }
+      } catch (e) {
+        console.warn("第二页主组件解析 artifacts 失败:", e);
+      }
+    }
+  }
+  return null;
+});
+// ⚡ 核心：动态实时从当前的会话流中提取 svg_chart 和 attack_graph 数据
+const latestAttackSvgs = computed(() => {
+  const threadMap = JSON.parse(localStorage.getItem('wazuh_agent_thread_map') || '{}');
+  const currentThreadId = threadMap[currentAgentId.value] || "";
+  
+  const sessionKey = `${currentAgentId.value}_${currentThreadId}`;
+  const currentChatList = globalSessions.value[sessionKey] || [];
+
+  // 从后往前寻找最新生成的 tools 数据节点
+  for (let i = currentChatList.length - 1; i >= 0; i--) {
+    const msg = currentChatList[i];
+    if (msg.role === 'assistant' && msg.node === 'tools' && msg.content) {
+      try {
+        const toolData = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
+        
+        // 只要 artifacts 存在，哪怕流式传输时只出来了其中一个图，也能兼容拿到
+        if (toolData?.artifacts) {
+          return {
+            svgChart: toolData.artifacts.svg_chart || null,
+            attackGraph: toolData.artifacts.attack_graph || null
+          };
+        }
+      } catch (e) {
+        // 流式解析未闭合时允许报错跳过
+        continue;
+      }
+    }
+  }
+  return { svgChart: null, attackGraph: null };
+});
 </script>
 
 <template>
   <div class="main-container">
-    <!-- 切换按钮（示例用，可根据业务逻辑触发） -->
     <div class="page-controls">
       <button @click="currentPage = 1" :class="{ active: currentPage === 1 }">第一页</button>
       <button @click="currentPage = 2" :class="{ active: currentPage === 2 }">第二页</button>
     </div>
 
-    <!-- 第一页布局：保持原有逻辑完全不动 -->
     <div v-if="currentPage === 1" class="index-box">
       <div class="contetn_left">
         <ItemWrap class="contetn_left-top contetn_lr-item" title="设备总览"><LeftTop /></ItemWrap>
@@ -73,20 +130,25 @@ const handleGlobalClear = (agentId: string) => {
       </div>
     </div>
 
-    <!-- 第二页布局：新增三个固定大小的长方形 -->
     <div v-else class="second-page-box">
       <div class="column-wrapper">
+        
         <ItemWrap class="fixed-column" title="业务模块一">
-          <!-- 这里放入你的新组件 -->
-          <second_left />
+          <second_left :attack-abstract="latestAttackAbstract" />
         </ItemWrap>
         
         <ItemWrap class="fixed-column" title="业务模块二">
-          <second_middle :all-sessions="globalSessions" :agent-id="currentAgentId" @clear-sessions="handleGlobalClear" />
+          <second_middle 
+          :all-sessions="globalSessions" 
+          :agent-id="currentAgentId" 
+          @clear-sessions="handleGlobalClear"
+          :svgs="latestAttackSvgs" />
         </ItemWrap>
         
         <ItemWrap class="fixed-column" title="业务模块三">
-          <second_right v-model:sessions="globalSessions" :agent-id="currentAgentId" />
+          <second_right 
+          v-model:sessions="globalSessions" 
+          v-model:agent-id="currentAgentId" />
         </ItemWrap>
       </div>
     </div>
@@ -94,13 +156,11 @@ const handleGlobalClear = (agentId: string) => {
 </template>
 
 <style scoped lang="scss">
-// 共有容器
+/* 你的原始样式保持绝对不变 */
 .main-container {
   width: 100%;
   height: 100%;
 }
-
-// 第一页样式（保留你原始的所有样式）
 .index-box {
   width: 100%;
   display: flex;
@@ -126,7 +186,6 @@ const handleGlobalClear = (agentId: string) => {
 }
 .contetn_lr-item { height: 310px; }
 
-// 第二页样式：新增
 .second-page-box {
   flex: 1;
   margin: 0 54px;
@@ -136,18 +195,16 @@ const handleGlobalClear = (agentId: string) => {
   
   .column-wrapper {
     display: flex;
-    gap: 40px; // 三个长方形之间的间距
+    gap: 40px;
   }
 
   .fixed-column {
-    // 设定固定宽高，防止由于拉伸导致的“巨大感”
     width: 540px; 
     height: 960px; 
     flex-shrink: 0;
   }
 }
 
-// 辅助样式
 .page-controls {
   position: absolute;
   top: 44px;
@@ -163,10 +220,5 @@ const handleGlobalClear = (agentId: string) => {
     cursor: pointer;
     &.active { background: #00c0ff; }
   }
-}
-.content-placeholder {
-  color: #fff;
-  text-align: center;
-  padding-top: 100px;
 }
 </style>
