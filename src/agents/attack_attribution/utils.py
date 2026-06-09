@@ -316,6 +316,54 @@ def eids_to_investigation(eids: list[str]) -> str:
     return ", ".join(labels)
 
 
+def _fix_svg_viewbox_height(svg_code: str) -> str:
+    """Post-process SVG to ensure viewBox height accommodates all elements."""
+    vb_match = re.search(r'viewBox="([^"]*)"', svg_code)
+    if not vb_match:
+        return svg_code
+    vb_parts = vb_match.group(1).split()
+    if len(vb_parts) < 4:
+        return svg_code
+    vb_x, vb_y, vb_w, vb_h = vb_parts
+
+    try:
+        current_height = float(vb_h)
+    except ValueError:
+        return svg_code
+
+    max_bottom = 0
+    for fo in re.finditer(
+        r'<foreignObject[^>]*\s+y="([^"]*)"[^>]*\s+height="([^"]*)"',
+        svg_code,
+        re.IGNORECASE,
+    ):
+        try:
+            y, h = float(fo.group(1)), float(fo.group(2))
+            max_bottom = max(max_bottom, y + h)
+        except ValueError:
+            pass
+    for line in re.finditer(r'<line[^>]*\s+y2="([^"]*)"', svg_code, re.IGNORECASE):
+        try:
+            max_bottom = max(max_bottom, float(line.group(1)))
+        except ValueError:
+            pass
+
+    required = max_bottom + 80
+    if required <= current_height:
+        return svg_code
+
+    fixed_vb = f'viewBox="{vb_x} {vb_y} {vb_w} {int(required)}"'
+    svg_code = svg_code[: vb_match.start()] + fixed_vb + svg_code[vb_match.end() :]
+
+    logger.info(
+        "Fixed SVG viewBox height from %s to %d (max_bottom=%.0f)",
+        vb_h,
+        int(required),
+        max_bottom,
+    )
+    return svg_code
+
+
 def fp_target(tool_name: str, args: dict) -> str:
     if "keyword" in tool_name:
         return (args.get("keyword") or "-")[:60]

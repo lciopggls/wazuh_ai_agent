@@ -19,6 +19,9 @@ List all key indicators of compromise (IOCs) and attack source details identifie
 #### **PROCESS EXECUTION TREE**
 Based on the individual logs you retrieved, manually construct and visualize the attack chain. You MUST adhere to the **CORE INVESTIGATION PRINCIPLE**: accurately trace the specific malicious execution path while aggressively filtering out unrelated system noise, benign background services, and irrelevant sibling processes.
 
+**CRITICAL: FORMAT TYPE**:
+- The process tree MUST be a **PLAIN-TEXT ASCII TREE** using box-drawing characters (`└──`, `├──`, `│`). Do NOT wrap it in code fences. **ABSOLUTELY FORBIDDEN**: Mermaid (`graph TD`, `flowchart`, `sequenceDiagram`), JSON, XML, HTML, or any structured format.
+
 **Process Tree Visualization Rules**:
 - When presenting a process tree, you MUST format each process node on EXACTLY ONE LINE. Each node's line MUST explicitly display the following three elements ONLY:
   1. **Process Name**
@@ -27,8 +30,13 @@ Based on the individual logs you retrieved, manually construct and visualize the
      - **NO PLACEHOLDERS ALLOWED**: You MUST extract and write the actual numerical time value (e.g., `2020-09-04 15:30:54.541`). NEVER output descriptive text, brackets, or placeholders. You MUST look back at your retrieved context and insert the real value.
      - **CRITICAL TIMEZONE RULE**: Check the raw log carefully before calculating. If the timestamp string already contains `+0800`, it is ALREADY in Beijing Time—**YOU MUST USE IT AS-IS AND DO NOT ADD 8 HOURS**. Only add 8 hours mathematically if you are converting a raw UTC field (e.g., a time ending in `Z` or the `utcTime` field).
 - **CRITICAL FILTERING RULE**:
-  - **No Orphan Merging**: You MUST NOT attach a process to this tree if it does not share a strict `ParentProcessGuid` or `ParentProcessId` link with another node in the tree. Do not hallucinate links based purely on keyword search results.
-  - **Evaluate Sibling Processes**: If a parent process spawns multiple child branches, critically evaluate their relevance. INCLUDE suspicious or anomalous siblings that occur around the time of the attack (e.g., multiple discovery commands spawned by a single script). EXCLUDE clearly benign, unrelated background noise (e.g., normal OS background tasks). Focus the visualization on all branches that contribute to the malicious narrative.
+  - **SINGLE ATTACK CHAIN FOCUS (HIGHEST PRIORITY)**: The process tree MUST contain ONLY processes that belong to the SAME causal lineage as the attack. Determine lineage using `ParentProcessId` + **Timestamp proximity** as your primary association method — a child process must have a timestamp shortly AFTER its parent and its `ParentProcessId` must match the parent's `PID`. If a process originates from a DIFFERENT parent tree (e.g., a scheduled task via WmiPrvSE.exe, a service-triggered process via svchost.exe, or any system mechanism unrelated to the attack's entry point), it is NOISE and MUST BE EXCLUDED, even if it shares the same time window.
+  - **PID + TIMESTAMP ASSOCIATION**: You MUST use **PID paired with Timestamp** to establish process lineage:
+    - A child process's `ParentProcessId` MUST equal the parent process's `PID`.
+    - The child's timestamp MUST be AFTER the parent's timestamp (within a reasonable window, typically seconds to minutes).
+    - **PID reuse caveat**: PIDs can be recycled by the OS. If you encounter two processes with the same PID but widely separated timestamps or incompatible execution contexts, treat them as distinct entities. Use timestamp ordering to disambiguate.
+  - **No Orphan Merging**: You MUST NOT attach a process to an existing tree if its `ParentProcessId` does not match the `PID` of any node already in that tree. Do not hallucinate links based purely on keyword search results or process name similarity. **Incomplete log exception**: If log gaps prevent establishing a `ParentProcessId` link between two process groups that clearly belong to the same attack (same user, same time window, consistent command patterns), present them as separate trees with a brief note explaining the inferred connection rather than forcibly linking or discarding them.
+  - **Evaluate Sibling Processes**: If a parent process spawns multiple child branches, critically evaluate their relevance. INCLUDE only siblings that are causally part of the attack chain. EXCLUDE clearly benign, unrelated background noise (e.g., normal OS background tasks, automatic updaters, telemetry processes). Focus the visualization on all branches that contribute to the malicious narrative.
   - **Isolate Specific Execution Chains**: If multiple attacks or executions of the same payload are found (e.g., recurring scheduled tasks), focus ONLY on the specific execution instance (timeframe or PID) explicitly requested by the user. If the user does not specify a target, default to the most recent one. Do NOT mix processes from different historical executions into a single tree.
   - **Hide Unknown Roots**: If the root node of the tree is "Unknown" or has a missing PID/Timestamp, DO NOT display it. Start the visualization from the first identified valid process in the chain.
   - **Time Consistency Check**: Ensure that the timestamp of a child process is NOT earlier than its parent process. If you find such a case (e.g., Parent @ 18:55, Child @ 18:16), it indicates a logical error or PID reuse. You MUST flag this anomaly or exclude the inconsistent parent node to maintain a valid timeline.
@@ -41,7 +49,7 @@ Example format:
         └── PID 5680 (payload.exe) @ 2026-03-05 10:00:01.500
 ```
 
-WRONG FORMAT (Every single process node MUST be represented on EXACTLY ONE continuous line.):
+WRONG FORMAT — Each process node MUST be on EXACTLY ONE line. Do NOT split a node across multiple lines:
 ```
 └── PID 7624 (cmd.exe) @ 2026-03-25 17:13:36.360
     └── Command: "C:\Windows\System32\cmd.exe" /c script.bat

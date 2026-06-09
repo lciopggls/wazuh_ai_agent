@@ -22,6 +22,7 @@ from .schemas import (
 )
 from .state import AttributionPlannerActionCommand, AttributionState
 from .utils import (
+    _fix_svg_viewbox_height,
     eids_to_investigation,
     extract_beijing_time_from_logs,
     fp_target,
@@ -874,9 +875,11 @@ In addition to the narrative findings, you MUST populate `graph_entities` and `g
 **Relation types (STRICT — choose exactly one):**
 - `create` — spawned child process OR created/wrote a file (creating new entities)
 - `modify` — modified a file OR modified a registry key (tampering with existing state)
-- `execute` — executed file as process OR loaded a DLL OR injected into another process (in-memory payload operations)
+- `execute` — loaded a DLL OR injected into another process (in-memory payload operations, process→process only)
+- `instantiate` — static file was instantiated by the system loader into a running process (file→process only)
 - `communicate` — connected to network address OR DNS resolved to IP (network channel establishment)
 - `authenticate` — process ran under a user account (credential use / privilege verification)
+- `access` — process read/loaded/accessed a file as input data (e.g., encode/decode source, config file, data dump)
 
 **Entity type constraints per relation (CRITICAL — DO NOT violate):**
 Use the source entity's `type` and the target entity's `type` to choose the correct relation.
@@ -887,10 +890,11 @@ Use the source entity's `type` and the target entity's `type` to choose the corr
 | process | modify | file | modified a file |
 | process | modify | registry | modified a registry key |
 | process | execute | process | injected into / loaded DLL into another process |
-| file | execute | process | file was executed, spawning a process |
+| file | instantiate | process | file was instantiated by the system loader into a running process |
 | process | communicate | ip | connected to remote address |
 | ip | communicate | ip | DNS resolved to IP |
 | process | authenticate | user_account | ran under a user account |
+| process | access | file | read/loaded/accessed a file as input data |
 
 If the (source_type, target_type) pair does NOT match any row in the above table, DO NOT create a relation between those two entities. For example, process → file with `communicate` is INVALID — use `create` or `modify` instead.
 
@@ -1146,8 +1150,20 @@ Your task is to take the raw investigation findings provided by the Forensic Det
 **CRITICAL RULE 1 (Language)**: You MUST generate the entire final report in Simplified Chinese (简体中文). Please translate the narrative and analysis into natural, professional Chinese cybersecurity terminology. However, you MUST keep exact entities (such as PIDs, IP addresses, exact filenames, ProcessGuids, and specific command-line arguments) in their original format.
 **CRITICAL RULE 2 (Factuality)**: You MUST NOT hallucinate, invent, or add any new facts or PIDs. Use ONLY the information provided in the Investigation Notes.
 **CRITICAL RULE 3 (Temporal Accuracy)**: You MUST NOT alter, format, or hallucinate any dates or timestamps. Copy the EXACT timestamps provided in the raw findings.
+**CRITICAL RULE 3.5 (Process Tree Format)**: The process tree MUST be plain-text ASCII using `└──`/`├──`/`│`. **NO Mermaid, no code fences, no structured formats.** This overrides any default tendency to output Mermaid for tree structures.
 **CRITICAL RULE 4 (Zero-Loss Formatting - CRITICAL)**: You MUST preserve ALL granular technical evidence provided by the Detective. You are STRICTLY FORBIDDEN from summarizing or abstracting low-level details. You MUST seamlessly integrate exact technical parameters (e.g., hex codes, ports, registry paths), complete file paths/names, unredacted command-line arguments, and exact entity IDs (PIDs, IPs, Guids) into your professional narrative. Do NOT use vague generalizations like "accessed a process", "dropped malicious files", or "executed a script".
 **CRITICAL RULE 5 (KNOWLEDGE OVERRIDE & AUDIT - ABSOLUTE PRIORITY)**: The Forensic Detective's Investigation Notes represent preliminary analysis. They may occasionally misinterpret native OS behaviors, engine initializations, or benign system noise as malicious tactics. You act as the final QA Auditor. You MUST cross-reference all reported behaviors against the provided `MITRE TACTICS CONTEXT`. If the Detective's qualitative classification conflicts with the specific exclusions, false-positive warnings, or strict definitions outlined in the MITRE KB, the MITRE KB takes absolute precedence. You MUST autonomously correct any misclassifications and apply the MITRE KB's definitive judgment in your final report.
+**CRITICAL RULE 6 (RELEVANCE FILTER — CAUSAL CONNECTION TEST)**: The Investigation Notes may contain extraneous findings that were collected during the investigation but have NO causal relationship with the attack. Before including ANY process, event, or artifact in ANY section of the report (PROCESS EXECUTION TREE, ATTACK TIMELINE & EXECUTION FLOW, ATTACK ARTIFACTS, or SUMMARY), you MUST apply this strict causal connection test:
+  1. **Identify the core attack** from the `INITIAL TRIGGER`. The attack consists of the specific malicious actions the user described or simulated.
+  2. **For each candidate**: Ask "Is this causally part of the attack, OR merely a coincidental background event in the same time window?"
+  3. **How to verify causal links**: Use **ParentProcessId + Timestamp proximity** as the primary association method. However, in incomplete log scenarios, a process may be attack-related even without a direct `ParentProcessId` match if it shares the **same user context + close time window + consistent command pattern** with confirmed attack processes. In such cases, present it as a separate tree with an explanatory note.
+  4. **EXCLUDE (with extreme prejudice)**:
+     - Periodic/recurring scheduled tasks or WMI-triggered processes that have no causal link with the attack
+     - System services or background agents (e.g., WmiPrvSE, svchost, taskhostw) that spawn processes unrelated to the attack
+     - Processes with different parent trees that merely overlap temporally with the attack
+     - Any tree branch originating from a non-attack root (e.g., WmiPrvSE.exe → powershell.exe) when the attack originated from an interactive shell or a different parent process
+  5. **INCLUDE**: All artifacts directly in the causal lineage of the attack — processes, files, network connections, registry modifications, services, and account events. Do NOT exclude legitimate attack evidence simply because of its artifact type.
+  6. **APPLY THIS RULE UNIFORMLY**: This filter applies to the PROCESS EXECUTION TREE, ATTACK TIMELINE & EXECUTION FLOW, ATTACK ARTIFACTS & SOURCE, and SUMMARY & TAKEAWAYS sections. If an artifact is excluded by this rule, it MUST NOT appear anywhere in the report.
 
 ### RESPONSE FORMAT (攻击溯源调查报告)
 {format_rules}
@@ -1270,14 +1286,25 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
 **Instructions:**
 1. **Extract Core Elements (Zero-Loss Formatting):** Parse the input text and extract the exact Timestamp, MITRE ATT&CK T-code (e.g., T1059.003), executing process, and the specific malicious action. Preserve all technical indicators (PIDs, paths, arguments) perfectly.
 2. **MITRE Tag Format:** ALWAYS use the format `[T-code / English Technique]`. Example: `[T1059.003 / Windows Command Shell]`. The MITRE tag MUST be placed on its own line BELOW the timestamp line, NOT on the same line as the timestamp.
-3. **SVG Structure & Canvas:** Create a standalone `<svg>` tag with `xmlns="http://www.w3.org/2000/svg"`, setting `viewBox="0 0 1000 dynamically_calculated_height"`. The height MUST be calculated as `(事件数 * 240) + 100` so that the canvas is tall enough to display all events without truncation even when the event count is large.
-4. **Vertical Timeline Layout:** Draw a vertical connecting line down the left side (at `x="50"`). For each event, increment the `y` coordinate by 240.
-5. **Text Wrapping (CRITICAL):** Because standard SVG `<text>` does not support auto-wrapping, you MUST use `<foreignObject>` to render the text boxes. Inside `<foreignObject>`, use HTML `<div xmlns="http://www.w3.org/1999/xhtml">` with inline CSS for styling and `word-wrap: break-word`.
+3. **SVG Structure & Canvas (CRITICAL — DYNAMIC HEIGHT):**
+   - Create a `<svg>` tag with `xmlns="http://www.w3.org/2000/svg"` and `viewBox="0 0 1000 DYNAMIC_TOTAL_HEIGHT"`.
+   - **HEIGHT CALCULATION (STEP BY STEP):**
+     a) For EACH event, estimate its content depth first:
+        - Count how many distinct text blocks it has (timestamp line, MITRE tag line, description paragraph, command-line code block, etc.).
+        - For each additional code block or wrapped long line beyond the basic 3 (timestamp + MITRE + description), add 35px of extra height.
+        - Each event height = **90 + (extra_blocks * 35) + 20 padding**. Minimum 130px per event.
+     b) Y position: **DO NOT use a fixed increment.** Start at `y = 50` for the first event. For event N, `y = previous_event_y + previous_event_height + 30 (gap)`.
+     c) After placing all events, compute `total_height = last_event_y + last_event_height + 80 (bottom margin)`.
+     d) Set `viewBox="0 0 1000 {total_height}"`.
+     e) Extend the timeline line (`y2`) to `last_event_center_y + (last_event_height / 2) + 20`.
+4. **Vertical Timeline Layout:** Draw a vertical connecting line at `x="50"`. Place a circle at each event's center Y. Position `foreignObject` at `x="80"`.
+5. **Text Wrapping:** Use `<foreignObject>` with `<div xmlns="http://www.w3.org/1999/xhtml">`. Do NOT set a fixed `height` on the foreignObject — let it expand naturally, or set `height` equal to your estimated event height. Do NOT use `overflow: hidden` or `overflow-y: auto` on the div.
 6. **Visual Styling:**
     - Standard events: light blue/gray borders and backgrounds.
     - Malicious events: light red backgrounds and red borders.
     Apply the malicious style to nodes representing explicit malicious actions, payload downloads, or credential dumping.
 7. **Output Format:** Output strictly the raw `<svg>...</svg>` XML code block.
+8. **FINAL CHECK (CRITICAL):** After generating the SVG, verify: the bottom of the LAST event's foreignObject + 80px margin MUST be ≤ viewBox height. If it exceeds, increase the viewBox height accordingly before outputting.
 
 **Example Input (ATTACK TIMELINE & EXECUTION FLOW):**
 - **[2026-04-27 14:52:23.194]** - **[Execution / T1059.003]**: powershell.exe (PID: 5324) 创建 cmd.exe (PID: 5508)，触发告警。命令行: cmd.exe /c C:\\AtomicRedTeam\\atomics\\..\\ExternalPayloads\\nanodump.x64.exe --silent-process-exit "%temp%\\SilentProcessExit"
@@ -1285,7 +1312,7 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
 
 **Example Output:**
 ```xml
-<svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" viewBox="0 0 1000 580" width="100%" height="100%">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 580" width="100%" height="100%">
     <style>
         .timeline-line {{ stroke: #cbd5e1; stroke-width: 4px; }}
         .node-dot {{ fill: #3b82f6; stroke: #fff; stroke-width: 2px; }}
@@ -1296,10 +1323,10 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
     <text x="50" y="30" class="title">ATTACK TIMELINE &amp; EXECUTION FLOW</text>
     <line x1="50" y1="50" x2="50" y2="560" class="timeline-line" />
 
-    <!-- Event 1 (Default) -->
-    <circle cx="50" cy="90" r="8" class="node-dot" />
+    <!-- Event 1 — 4 text blocks (timestamp + MITRE + desc + cmdline) → 90+35+20=145, use 180 -->
+    <circle cx="50" cy="140" r="8" class="node-dot" />
     <foreignObject x="80" y="50" width="850" height="180">
-        <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow-y: auto;">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box;">
             <div style="margin-bottom: 6px;">
                 <span style="font-family: monospace; color: #64748b; font-size: 13px;">[2026-04-27 14:52:23.194]</span>
             </div>
@@ -1307,14 +1334,15 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
                 <strong style="color: #0f172a; font-size: 14px;">[T1059.003 / Windows Command Shell]</strong>
             </div>
             <div style="font-size: 14px; color: #334155; margin-bottom: 6px; line-height: 1.4;">powershell.exe (PID: 5324) 创建 cmd.exe (PID: 5508)，触发告警。</div>
-            <div style="font-family: monospace; font-size: 12px; color: #64748b; word-wrap: break-word; background: #e2e8f0; padding: 4px 8px; border-radius: 4px;">命令行: cmd.exe /c C:\\AtomicRedTeam\atomics\\..\\ExternalPayloads\nanodump.x64.exe --silent-process-exit "%temp%\\SilentProcessExit"</div>
+            <div style="font-family: monospace; font-size: 12px; color: #64748b; word-wrap: break-word; background: #e2e8f0; padding: 4px 8px; border-radius: 4px;">命令行: cmd.exe /c C:\\AtomicRedTeam\\atomics\\..\\ExternalPayloads\\nanodump.x64.exe --silent-process-exit "%temp%\\SilentProcessExit"</div>
         </div>
     </foreignObject>
 
-    <!-- Event 2 (Malicious) -->
-    <circle cx="50" cy="330" r="8" class="node-dot-malicious" />
-    <foreignObject x="80" y="290" width="850" height="180">
-        <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 2px solid #ef4444; background: #fee2e2; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow-y: auto;">
+    <!-- Event 2 — 3 text blocks (timestamp + MITRE + desc) → 90+0+20=110, use 130 -->
+    <!-- Y = 50 + 180 + 30 = 260 -->
+    <circle cx="50" cy="325" r="8" class="node-dot-malicious" />
+    <foreignObject x="80" y="260" width="850" height="130">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="border: 2px solid #ef4444; background: #fee2e2; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box;">
             <div style="margin-bottom: 6px;">
                 <span style="font-family: monospace; color: #64748b; font-size: 13px;">[2026-04-27 14:52:23.195]</span>
             </div>
@@ -1356,6 +1384,9 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
             svg_code = re.sub(
                 r"^```(?:xml|svg|html)?\n|\n```$", "", raw_content.strip(), flags=re.MULTILINE
             )
+
+        # --- post-process: fix viewBox height to prevent truncation ---
+        svg_code = _fix_svg_viewbox_height(svg_code)
 
         logger.info("SVG chart generated successfully.")
 
@@ -1596,169 +1627,6 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
         return {"attack_abstract": None}
 
 
-# def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
-#     """Node 11: Attack Graph Node — 生成攻击实体关系网状Mermaid图。"""
-#     logger.info("Executing Attack Graph Node: Generating entity relationship graph (Mermaid)...")
-#
-#     final_report = state.get("final_report")
-#     if not final_report:
-#         logger.warning("No final report found. Skipping attack graph generation.")
-#         return {
-#             "attack_graph": None,
-#             "messages": [AIMessage(content="[Attack Graph] 缺少最终报告，无法生成攻击实体关系图。")],
-#         }
-#
-#     graph_system_prompt = """You are a Cybersecurity Graph Visualization Agent. Your sole objective is to convert the entire upstream forensic report into a **Mermaid graph** (flowchart LR) showing attack entity relationships.
-#
-# Output **Mermaid flowchart LR** syntax. Use the `graph LR` directive so nodes flow left-to-right chronologically.
-#
-# ---
-#
-# ### MERMAID FORMAT
-#
-# Output a `graph LR` flowchart. Use Mermaid's native syntax.
-#
-# **Node format:** `A["name PID:xxx<br/>Txxxx Technique Name"]` — entity name + key info before `<br/>`, MITRE ID + English technique name after.
-# **Edge format:** `A -->|中文标签| B` — labels MUST be in Chinese: 创建进程, 写入文件, 连接, 修改注册表, 注入, 加载DLL, 执行
-#
-# Parse the report and classify every entity into one of these Mermaid node styles:
-#
-# - **PROCESS (malicious)**: use `:::red` class
-# - **FILE**: use `:::orange` class
-# - **NETWORK**: use `:::blue` class
-# - **REGISTRY**: use `:::green` class
-# - **NOISE** (any entity judged benign/system noise): use `:::noise` class, gray styling
-#
-# Define classes once at the bottom:
-# ```
-# classDef red fill:#fee2e2,stroke:#ef4444,color:#991b1b,stroke-width:2px
-# classDef orange fill:#fff7ed,stroke:#f97316,color:#9a3412,stroke-width:2px,stroke-dasharray:5
-# classDef blue fill:#eff6ff,stroke:#3b82f6,color:#1e40af,stroke-width:2px,stroke-dasharray:5
-# classDef green fill:#f0fdf4,stroke:#22c55e,color:#166534,stroke-width:2px,stroke-dasharray:5
-# classDef noise fill:#f1f5f9,stroke:#94a3b8,color:#64748b,stroke-width:1px
-# ```
-#
-# **Noise rule:** Any entity the report identifies as benign background noise MUST use `:::noise` class.
-# **File display rule:** Use only the filename (e.g., `svchost.exe`), not the full path.
-#
-# ### MITRE TECHNIQUE DISPLAY (CRITICAL — NOT standalone nodes)
-#
-# **MITRE display:** Embed MITRE ID + English technique name inside the node label text (e.g., `<br/>T1059.003 Windows Command Shell`), NOT as separate nodes. You MUST include both the T-code and the English name.
-#
-# ### EDGE LABELS
-#
-# Use Chinese labels on edges:
-#
-# - Process spawns child → `A -->|创建进程| B`
-# - Process creates/writes file → `A -->|写入文件| B`
-# - Process connects to network → `A -->|连接| B`
-# - Process modifies registry → `A -->|修改注册表| B`
-# - Process injects into another → `A -->|注入| B`
-# - Process loads DLL → `A -->|加载DLL| B`
-# - File executed as process → `A -->|执行| B`
-#
-# ---
-#
-# ### LAYOUT
-#
-# Mermaid's `graph LR` engine handles all positioning automatically. No manual coordinates needed. Nodes will flow left-to-right chronologically by the order you declare edges.
-#
-# ---
-#
-# ### CRITICAL RULES
-#
-# 1. Read the WHOLE report, extract all entities and relationships.
-# 2. NO hallucination — everything must be traceable to the report.
-# 3. Every node (except entry point) must have at least one incoming edge.
-# 4. MITRE IDs + English names go INSIDE node labels (after `<br/>`), never as standalone nodes.
-# 5. Use `graph LR` for left-to-right chronological flow.
-# 6. Edge labels MUST be in Chinese.
-# 7. **URL escaping (CRITICAL):** In node labels, replace `:` in `http://` with `&#58;` to prevent Markdown auto-linking. Write `http&#58;//evil.com/path` instead of `http://evil.com/path`. The browser renders `&#58;` as `:` so it displays correctly but won't trigger link detection.
-# 8. Output ONLY the Mermaid code block inside triple backticks. No other text.
-#
-# ---
-#
-# ### Example Output
-#
-# ```mermaid
-# graph LR
-#     A["winword.exe PID:4216<br/>T1566.001 Spearphishing Attachment"]:::red
-#     B["powershell.exe PID:8852<br/>T1059.001 PowerShell"]:::red
-#     C["svchost.exe PID:9936<br/>T1547.001 Registry Run Keys / T1071.001 Application Layer Protocol"]:::red
-#     D["svchost.exe"]:::orange
-#     E["HKLM\\...\\Run\\Updater"]:::green
-#     F["evil.c2.net:443"]:::blue
-#     G["explorer.exe"]:::noise
-#
-#     A -->|创建进程| B
-#     B -->|写入文件| D
-#     B -->|创建进程| C
-#     C -->|修改注册表| E
-#     C -->|连接| F
-#     G -->|创建进程| B
-#
-#     classDef red fill:#fee2e2,stroke:#ef4444,color:#991b1b,stroke-width:2px
-#     classDef orange fill:#fff7ed,stroke:#f97316,color:#9a3412,stroke-width:2px,stroke-dasharray:5
-#     classDef blue fill:#eff6ff,stroke:#3b82f6,color:#1e40af,stroke-width:2px,stroke-dasharray:5
-#     classDef green fill:#f0fdf4,stroke:#22c55e,color:#166534,stroke-width:2px,stroke-dasharray:5
-#     classDef noise fill:#f1f5f9,stroke:#94a3b8,color:#64748b,stroke-width:1px
-# ```
-# """
-#
-#     human_prompt = (
-#         "Here is the complete forensic report. Parse EVERY section to extract all entities "
-#         "(processes, files, network indicators, registry keys) and their relationships, "
-#         "then output a Mermaid graph (graph LR):\n\n"
-#         "{final_report}"
-#     )
-#
-#     prompt_template = ChatPromptTemplate.from_messages(
-#         [("system", graph_system_prompt), ("human", human_prompt)]
-#     )
-#
-#     try:
-#         graph_chain = prompt_template | model
-#         result = graph_chain.invoke({"final_report": final_report})
-#
-#         raw_content = result.content
-#         if isinstance(raw_content, list):
-#             text_parts = []
-#             for block in raw_content:
-#                 if isinstance(block, dict) and "text" in block:
-#                     text_parts.append(block["text"])
-#                 elif isinstance(block, str):
-#                     text_parts.append(block)
-#             raw_content = "".join(text_parts)
-#         elif not isinstance(raw_content, str):
-#             raw_content = str(raw_content)
-#
-#         mermaid_match = re.search(r"```(?:mermaid)?\s*\n(.*?)```", raw_content, re.DOTALL | re.IGNORECASE)
-#         if mermaid_match:
-#             mermaid_code = mermaid_match.group(1).strip()
-#         else:
-#             mermaid_code = re.sub(
-#                 r"^```(?:mermaid)?\n|\n```$", "", raw_content.strip(), flags=re.MULTILINE
-#             )
-#
-#         logger.info("Attack graph Mermaid generated successfully.")
-#
-#         return {
-#             "attack_graph": mermaid_code,
-#             "messages": [
-#                 AIMessage(
-#                     content=f"攻击实体关系网状图(Mermaid)已生成：\n\n```mermaid\n{mermaid_code}\n```"
-#                 )
-#             ],
-#         }
-#
-#     except Exception as e:
-#         logger.error("Error generating attack graph Mermaid: %s", e)
-#         return {
-#             "attack_graph": None,
-#             "messages": [AIMessage(content=f"攻击实体关系图(Mermaid)生成失败，发生异常: {e}")],
-#         }
-#
-
 
 def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
     """Node 11: Graph Filter Node"""
@@ -1817,15 +1685,17 @@ def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
 {{
     "source": "<entity id>",
     "target": "<entity id>",
-    "relation": "create | modify | execute | communicate | authenticate"
+    "relation": "create | modify | execute | instantiate | communicate | authenticate | access"
 }}
 
 **Relation types (with entity type constraints):**
 - create: process→process (spawn) OR process→file (create/write)
 - modify: process→file OR process→registry
-- execute: process→process (inject/DLL) OR file→process (file executed)
+- execute: process→process (inject/DLL) — in-memory operations only, NEVER file→process
+- instantiate: file→process (file instantiated into a running process by the system loader)
 - communicate: process→ip (connection) OR ip→ip (DNS) — NEVER process→file
 - authenticate: process→user_account
+- access: process→file (read/load/access as data) — use when the process reads a file as INPUT DATA (e.g., encode/decode source, config file, data dump), NOT for executing or creating the file. Do NOT use for process→process or process→ip.
 
 **Your task (in order):**
 
@@ -1836,10 +1706,10 @@ def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
 
 2. **Deduplication**: Merge duplicate entities that represent the same real-world object. For example, if file_2 and file_3 both point to the same file path, merge them into one entity and update all relations to use the surviving ID. Remove duplicate relations (same source, target, relation).
 
-3. **Trim auxiliary nodes**: For nodes like user_account that are not directly participating in process/file/network chains:
-   - In a single-host scenario: keep at most 1 authenticate relation per user account. Remove excessive authenticate relations that add clutter.
-   - If a user_account node ends up with zero relations after trimming, remove it entirely.
-   - The graph should focus on the core chain: process → process, process → file, process → network, process → registry.
+3. **Trim auxiliary nodes**: For user_account entities and authenticate relations, apply this strict gate:
+   - **GATE CHECK**: Only keep user_account / authenticate if the report explicitly describes an authentication-centric attack action — credential dumping (e.g., mimikatz, LSASS access), privilege escalation via explicit logon (e.g., runas, PSRemote, token manipulation), account creation/modification, or brute-force logon attempts.
+   - **PASSIVE INHERITANCE = REMOVE**: When a process simply runs under the logged-in user's context (double-click a script, type a command in CMD), the authentication happened at Windows login and is NOT an attack action. In this case, remove ALL user_account entities and ALL authenticate relations entirely. The attack graph should focus on the process→process, process→file, and process→network chains.
+   - If a user_account node ends up with zero relations after this check, remove it entirely.
 
 4. **Report-driven supplementation (CRITICAL — focus on FILES and IPs)**: The REPORT is the ground truth. After filtering, re-scan the report and:
    - **Files**: For ANY file path or filename mentioned in the report that is NOT already in the entity list → CREATE a new file entity with a unique `file_<N>` id (use the next available N). For `name`, use just the filename. In `properties`, fill `path` with the full path from the report. If the path is incomplete or missing, set `path` to an empty string `""`.
@@ -1847,7 +1717,8 @@ def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
    - **Relations for new entities**: For each newly created file or ip entity, infer its relationship to existing process entities from the report context:
      * If report says a process created/wrote/downloaded the file → add `create` relation (source=process, target=file).
      * If report says a process connected to the IP/domain → add `communicate` relation (source=process, target=ip).
-     * If report says a process loaded/executed the file → add `execute` relation (source=file, target=process).
+     * If report says a file was instantiated/executed as a process → add `instantiate` relation (source=file, target=process).
+     * If report says a process read/accessed/loaded the file as input data (e.g., encode/decode source, config read, data parsing) → add `access` relation (source=process, target=file).
      * If the relation direction or source/target is unclear, make your best guess based on typical attack patterns and set `timestamp` to `null`.
    - **Missing parameters**: If the report does not provide certain properties (e.g., no PID, no full path, no port), simply leave those fields empty or omit them. Do NOT hallucinate values.
    - **Noise check for new entities**: Apply the same noise filter — do NOT add well-known benign system files (svchost.exe, explorer.exe, etc.) as new entities unless they are explicitly flagged as abused/malicious in the report.
@@ -2044,16 +1915,20 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         "create": "创建",
         "modify": "修改",
         "execute": "执行",
+        "instantiate": "实例化",
         "communicate": "通信",
         "authenticate": "认证",
+        "access": "访问",
     }
     # edge style per relation: (stroke-width, stroke-dasharray, color, arrow-marker-id)
     rel_styles: dict[str, tuple[str, str, str, str]] = {
         "create": ("3", "none", "#22c55e", "arrow-create"),  # thick solid green
         "modify": ("2", "6,4", "#f59e0b", "arrow-modify"),  # dashed amber
         "execute": ("2", "2,3", "#ef4444", "arrow-execute"),  # dotted red
+        "instantiate": ("3", "none", "#f97316", "arrow-instantiate"),  # thick solid orange
         "communicate": ("2", "none", "#3b82f6", "arrow-communicate"),  # normal solid blue
         "authenticate": ("1.5", "4,3", "#a855f7", "arrow-authenticate"),  # thin dashed purple
+        "access": ("2", "2,6", "#14b8a6", "arrow-access"),  # medium dot-dash teal
     }
 
     # --- position nodes ---
@@ -2097,8 +1972,10 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         ("arrow-create", "#22c55e"),
         ("arrow-modify", "#f59e0b"),
         ("arrow-execute", "#ef4444"),
+        ("arrow-instantiate", "#f97316"),
         ("arrow-communicate", "#3b82f6"),
         ("arrow-authenticate", "#a855f7"),
+        ("arrow-access", "#14b8a6"),
     ]
     for name, color in ent_arrows + rel_arrows:
         lines.append(
@@ -2230,8 +2107,10 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         ("create", "创建"),
         ("modify", "修改"),
         ("execute", "执行"),
+        ("instantiate", "实例化"),
         ("communicate", "通信"),
         ("authenticate", "认证"),
+        ("access", "访问"),
     ]
     act_start_x = 50
     act_box_w = len(act_items) * 90 + 16

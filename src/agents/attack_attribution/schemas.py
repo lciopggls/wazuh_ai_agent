@@ -67,14 +67,18 @@ class GraphRelation(BaseModel):
         "execute",
         "communicate",
         "authenticate",
+        "access",
+        "instantiate",
     ] = Field(
         description=(
             "Relationship type (simplified): "
             "create = spawned child process OR created/wrote a file; "
             "modify = modified a file OR modified a registry key; "
-            "execute = executed a file as process OR loaded a DLL OR injected into another process; "
+            "execute = loaded a DLL OR injected into another process (in-memory operations); "
             "communicate = connected to network address OR DNS resolved to IP; "
-            "authenticate = process ran under a user account (credential use / privilege verification)."
+            "authenticate = process ran under a user account (credential use / privilege verification); "
+            "access = process read/loaded/accessed a file as input data (e.g., encode/decode source, config file, data dump); "
+            "instantiate = static file was instantiated by the system loader into a running process (file→process only)."
         )
     )
     timestamp: str | None = Field(
