@@ -30,6 +30,7 @@ llm_attribution_params = {
     "api_key": settings.ATTRIBUTION_API_KEY,
     "base_url": settings.ATTRIBUTION_LLM_BASE_URL,
     "http_client": custom_http_client,
+    "max_retries": 2,
 }
 
 special_kwargs = get_model_kwargs(settings.ATTRIBUTION_LLM_MODEL)

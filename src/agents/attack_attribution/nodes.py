@@ -1,9 +1,12 @@
 import json
 import logging
 import re
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -505,21 +508,53 @@ intended query against this table before routing to Log_Retrieval_Node.
     parser = PydanticOutputParser(pydantic_object=AttributionPlannerActionCommand)
     format_instructions = parser.get_format_instructions()
 
-    try:
-        llm_msg = (prompt | model).invoke(
-            {
-                "messages": messages,
-                "mitre_instructions": mitre_instructions,
-                "multi_host_instructions": multi_host_instructions,
-                "query_history": query_history,
-                "kb_str": kb_str,
-                "default_start": default_start,
-                "default_end": default_end,
-                "format_instructions": format_instructions,
-            }
-        )
+    MAX_RETRIES = 2
+    RETRY_DELAY = 2
 
-        raw_text = getattr(llm_msg, "content", str(llm_msg))
+    llm_msg = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            if attempt == 0:
+                current_model = model
+            else:
+                logger.warning(
+                    "Retry attempt %d/%d: switching to non-streaming mode",
+                    attempt, MAX_RETRIES,
+                )
+                if hasattr(model, "model_copy"):
+                    current_model = model.model_copy(update={"streaming": False})
+                else:
+                    import copy as _copy
+
+                    current_model = _copy.deepcopy(model)
+                    current_model.streaming = False
+
+            llm_msg = (prompt | current_model).invoke(
+                {
+                    "messages": messages,
+                    "mitre_instructions": mitre_instructions,
+                    "multi_host_instructions": multi_host_instructions,
+                    "query_history": query_history,
+                    "kb_str": kb_str,
+                    "default_start": default_start,
+                    "default_end": default_end,
+                    "format_instructions": format_instructions,
+                }
+            )
+            break
+        except httpx.RemoteProtocolError as e:
+            if attempt < MAX_RETRIES:
+                logger.warning(
+                    "RemoteProtocolError on attempt %d/%d, retrying in %ds: %s",
+                    attempt + 1, MAX_RETRIES + 1, RETRY_DELAY, e,
+                )
+                time.sleep(RETRY_DELAY)
+            else:
+                raise
+
+    raw_text = getattr(llm_msg, "content", str(llm_msg))
+
+    try:
 
         # 如果 raw_text 是 JSON 数组，只取第一个元素
         stripped = raw_text.strip()
@@ -580,7 +615,15 @@ intended query against this table before routing to Log_Retrieval_Node.
 
     except Exception as final_e:
         logger.error("Error in attribution planner node: %s", final_e)
-        return {"next_action_fromAttributionPlannerNode": None}
+        return {
+            "next_action_fromAttributionPlannerNode": None,
+            "messages": [
+                AIMessage(
+                    content="攻击溯源规划器执行失败，与 LLM 服务器的连接出现异常。请稍后重试。\n"
+                    f"错误详情：{final_e}"
+                )
+            ],
+        }
 
 
 def log_retrieval_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
@@ -1295,7 +1338,7 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
         - Each event height = **90 + (extra_blocks * 35) + 20 padding**. Minimum 130px per event.
      b) Y position: **DO NOT use a fixed increment.** Start at `y = 50` for the first event. For event N, `y = previous_event_y + previous_event_height + 30 (gap)`.
      c) After placing all events, compute `total_height = last_event_y + last_event_height + 80 (bottom margin)`.
-     d) Set `viewBox="0 0 1000 {total_height}"`.
+     d) Set `viewBox="0 0 1000 {{total_height}}"`.
      e) Extend the timeline line (`y2`) to `last_event_center_y + (last_event_height / 2) + 20`.
 4. **Vertical Timeline Layout:** Draw a vertical connecting line at `x="50"`. Place a circle at each event's center Y. Position `foreignObject` at `x="80"`.
 5. **Text Wrapping:** Use `<foreignObject>` with `<div xmlns="http://www.w3.org/1999/xhtml">`. Do NOT set a fixed `height` on the foreignObject — let it expand naturally, or set `height` equal to your estimated event height. Do NOT use `overflow: hidden` or `overflow-y: auto` on the div.
@@ -1882,12 +1925,39 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     TITLE_H = 36
     LEGEND_H = 90
 
+    # legend layout constants (used for minimum-width guarantees)
+    BEHAVIOR_LEGEND_ITEMS = 7
+    ENTITY_LEGEND_ITEMS = 6
+    LEGEND_ITEM_WIDTH = 90
+    LEGEND_BOX_PAD = 16
+    BEHAVIOR_LEGEND_START = 50
+    BEHAVIOR_LEGEND_WIDTH = BEHAVIOR_LEGEND_ITEMS * LEGEND_ITEM_WIDTH + LEGEND_BOX_PAD  # 646
+    ENTITY_LEGEND_WIDTH = ENTITY_LEGEND_ITEMS * LEGEND_ITEM_WIDTH + LEGEND_BOX_PAD  # 556
+    ENTITY_LEGEND_LEFT_PAD = 8
+    ENTITY_LEGEND_RIGHT_MARGIN = 32
+    ENTITY_LEGEND_SLOT = ENTITY_LEGEND_LEFT_PAD + ENTITY_LEGEND_WIDTH + ENTITY_LEGEND_RIGHT_MARGIN  # 596
+    LEGEND_GAP = 40
+
     max_in_layer = max((len(v) for v in layer_groups.values()), default=1)
     body_height = max_in_layer * (NODE_HEIGHT + NODE_GAP_Y) + MARGIN * 2 + TITLE_H
-    canvas_width = (
-        (max(layer_groups.keys()) + 1) * LAYER_GAP_X + MARGIN * 2 if layer_groups else 800
+
+    # canvas width: must satisfy two constraints
+    #   (a) all nodes fit horizontally
+    #   (b) two legends sit side-by-side without overlapping
+    graph_width = (
+        max(layer_groups.keys()) * LAYER_GAP_X + NODE_WIDTH
+        if layer_groups else 0
     )
+    min_for_nodes = MARGIN * 2 + graph_width
+    min_for_legends = (
+        BEHAVIOR_LEGEND_START + BEHAVIOR_LEGEND_WIDTH
+        + LEGEND_GAP + ENTITY_LEGEND_SLOT + MARGIN
+    )
+    canvas_width = max(min_for_nodes, min_for_legends)
     canvas_height = max(400, body_height + LEGEND_H)
+
+    # horizontal centering offset so the node graph sits in the middle of the canvas
+    center_offset_x = max(0, (canvas_width - graph_width) // 2)
 
     legend_base_y = canvas_height - 70
 
@@ -1940,7 +2010,7 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         safe_bottom = legend_base_y - 20
         safe_height = safe_bottom - safe_top
         start_y = safe_top + max(0, (safe_height - total_h) // 2)
-        x = MARGIN + layer_num * LAYER_GAP_X
+        x = center_offset_x + layer_num * LAYER_GAP_X
         for i, eid in enumerate(ids):
             node_pos[eid] = (x, start_y + i * (NODE_HEIGHT + NODE_GAP_Y))
 
@@ -2083,8 +2153,8 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         ("user_account", "用户账户"),
         ("other", "其他"),
     ]
-    ent_start_x = canvas_width - 580
-    ent_box_w = len(ent_items) * 90 + 16
+    ent_start_x = canvas_width - ENTITY_LEGEND_SLOT + ENTITY_LEGEND_RIGHT_MARGIN
+    ent_box_w = ENTITY_LEGEND_WIDTH
     # entity legend: box + title first, then items
     lines.append(
         f'<rect x="{ent_start_x - 8}" y="{legend_base_y}" width="{ent_box_w}" height="46" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>'
@@ -2093,7 +2163,7 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         f'<text x="{ent_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#f8fafc" font-weight="bold" font-family="sans-serif">实体</text>'
     )
     for i, (key, label) in enumerate(ent_items):
-        lx = ent_start_x + i * 90
+        lx = ent_start_x + i * LEGEND_ITEM_WIDTH
         tc = type_colors[key]
         lines.append(
             f'<rect x="{lx}" y="{legend_base_y + 24}" width="14" height="14" rx="3" fill="{tc["bg"]}" stroke="{tc["border"]}" stroke-width="1.5"/>'
@@ -2112,8 +2182,8 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         ("authenticate", "认证"),
         ("access", "访问"),
     ]
-    act_start_x = 50
-    act_box_w = len(act_items) * 90 + 16
+    act_start_x = BEHAVIOR_LEGEND_START
+    act_box_w = BEHAVIOR_LEGEND_WIDTH
     # behavior legend: box + title first, then items
     lines.append(
         f'<rect x="{act_start_x - 8}" y="{legend_base_y}" width="{act_box_w}" height="46" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>'
@@ -2122,7 +2192,7 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         f'<text x="{act_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#f8fafc" font-weight="bold" font-family="sans-serif">行为</text>'
     )
     for i, (rel_type, label) in enumerate(act_items):
-        lx = act_start_x + i * 90
+        lx = act_start_x + i * LEGEND_ITEM_WIDTH
         sw, dash, color, _ = rel_styles[rel_type]
         dash_attr = f' stroke-dasharray="{dash}"' if dash != "none" else ""
         lines.append(
