@@ -1,230 +1,277 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from "vue";
-import { ElMessage } from "element-plus";
+import { ref, onMounted, computed } from "vue";
 import axios from 'axios';
 
 const indexerUser = import.meta.env.VITE_WAZUH_INDEXER_USER;
 const indexerPass = import.meta.env.VITE_WAZUH_INDEXER_PASSWORD;
 const INDEXER_AUTH = btoa(`${indexerUser}:${indexerPass}`);
 
-// --- 状态管理 ---
-const searchText = ref("");
-const allFields = ref<string[]>([]);
-const showPanel = ref(false);
-const logs = ref<any[]>([]);
-const loading = ref(false);
+// ── 高频告警状态 ──
+interface TopAlert {
+  label: string;
+  count: number;
+  level: number;
+  ruleId: number;
+}
+const topAlerts = ref<TopAlert[]>([]);
+const topLoading = ref(false);
 
-// --- 详情弹窗状态 ---
-const detailVisible = ref(false);
-const currentLog = ref<any>(null);
-
-// 1. 获取字段字典 (Mapping)
-const fetchAvailableFields = async () => {
-  try {
-    const res = await axios.get('/wazuh-indexer/wazuh-alerts-*/_mapping', {
-      headers: { 'Authorization': `Basic ${INDEXER_AUTH}` }
-    });
-    const fields: string[] = [];
-    const extractFields = (obj: any, path = '') => {
-      for (const key in obj) {
-        const fullPath = path ? `${path}.${key}` : key;
-        if (obj[key].properties) extractFields(obj[key].properties, fullPath);
-        else fields.push(fullPath);
-      }
-    };
-    const firstIndex = Object.keys(res.data)[0];
-    extractFields(res.data[firstIndex].mappings.properties);
-    allFields.value = Array.from(new Set(fields));
-  } catch (err) { console.error("字段加载失败", err); }
-};
-
-// 2. 字段搜索建议逻辑
-const filteredFields = computed(() => {
-  if (!searchText.value) return [];
-  const words = searchText.value.split(/\s+/);
-  const lastWord = words[words.length - 1].toLowerCase();
-  if (!lastWord) return [];
-  return allFields.value.filter(f => f.toLowerCase().includes(lastWord)).slice(0, 8);
-});
-
-const selectField = (fieldName: string) => {
-  const words = searchText.value.split(/\s+/);
-  words[words.length - 1] = `${fieldName}: `;
-  searchText.value = words.join(' ');
-  showPanel.value = false;
-};
-
-// 3. 执行查询
-const getData = async () => {
-  if (!searchText.value.includes(':')) {
-    ElMessage.info("请完成查询表达式 (例如 agent.id: 001)");
-    return;
-  }
-  loading.value = true;
-  const [field, value] = searchText.value.split(':').map(s => s.trim());
+// ── 获取高频告警（客户端分组，避免 API 500） ──
+const fetchTopAlerts = async () => {
+  topLoading.value = true;
   try {
     const res = await axios.post('/wazuh-indexer/wazuh-alerts-*/_search', {
-      size: 30,
+      size: 500,
       sort: [{ "timestamp": "desc" }],
-      query: { match_phrase: { [field]: value } }
+      query: {
+        range: { timestamp: { gte: 'now-24h' } }
+      },
+      _source: ['rule.description', 'rule.level', 'rule.id']
     }, {
       headers: { 'Authorization': `Basic ${INDEXER_AUTH}`, 'Content-Type': 'application/json' }
     });
-    // 注意：这里我们将整个 item._source 存下来供详情查看
-    logs.value = res.data.hits.hits;
-  } catch (err) { ElMessage.error("查询失败"); }
-  finally { loading.value = false; }
+
+    const hits: any[] = res.data.hits?.hits || [];
+
+    // 客户端分组：按 rule.description 聚合
+    const groups = new Map<string, { count: number; maxLevel: number; ruleId: number }>();
+
+    for (const hit of hits) {
+      const src = hit._source;
+      const desc = src.rule?.description || '未知告警';
+      const level = src.rule?.level || 0;
+      const id = src.rule?.id || 0;
+
+      const existing = groups.get(desc);
+      if (existing) {
+        existing.count++;
+        if (level > existing.maxLevel) existing.maxLevel = level;
+      } else {
+        groups.set(desc, { count: 1, maxLevel: level, ruleId: id });
+      }
+    }
+
+    // 过滤 ≥7 级告警，按频次排序，取 TOP 8
+    topAlerts.value = Array.from(groups.entries())
+      .filter(([, v]) => v.maxLevel >= 7)
+      .map(([label, v]) => ({
+        label,
+        count: v.count,
+        level: v.maxLevel,
+        ruleId: v.ruleId
+      }))
+      .sort((a, b) => b.count - a.count || b.level - a.level)
+      .slice(0, 8);
+  } catch (err) {
+    console.error('获取高频告警失败', err);
+  } finally {
+    topLoading.value = false;
+  }
 };
 
-// 4. 打开详情弹窗
-const openDetail = (logSource: any) => {
-  currentLog.value = logSource;
-  detailVisible.value = true;
+// 取色函数：根据 level 返回颜色
+const levelColor = (level: number) => {
+  if (level >= 13) return '#f5023d';
+  if (level >= 10) return '#e3b337';
+  if (level >= 7)  return '#31ABE3';
+  return '#7c8a9e';
 };
 
-onMounted(() => { fetchAvailableFields(); });
+// 按数量缩放字体大小（词云效果）
+const fontSizeByCount = (count: number, maxCount: number) => {
+  const min = 11, max = 18;
+  if (maxCount === 0) return min;
+  return Math.round(min + (count / maxCount) * (max - min));
+};
+
+// 最大 count（用于字体缩放）
+const maxCount = computed(() => {
+  if (topAlerts.value.length === 0) return 0;
+  return Math.max(...topAlerts.value.map(a => a.count));
+});
+
+// ── 导航到第二页告警查询 ──
+const navigateToAlerts = () => {
+  window.dispatchEvent(new CustomEvent('navigate-to-alerts'));
+};
+
+onMounted(() => {
+  fetchTopAlerts();
+});
 </script>
 
 <template>
-  <div class="right_bottom">
-    <div class="search_group">
-      <div class="input_container">
-        <input 
-          v-model="searchText" 
-          placeholder="输入字段关键词 (如 data.win...)"
-          @focus="showPanel = true"
-          @keyup.enter="getData"
-        />
-        <div v-if="showPanel && filteredFields.length > 0" class="field_dropdown">
-          <div v-for="field in filteredFields" :key="field" class="field_item" @mousedown="selectField(field)">
-            <span class="icon">f</span> {{ field }}
-          </div>
-        </div>
-      </div>
-      <button class="update_btn" @click="getData" :disabled="loading">
-        {{ loading ? '...' : '查询' }}
-      </button>
+  <div class="rc-root">
+    <div class="rc-header">
+      <span class="rc-header-icon">🔥</span>
+      <span class="rc-header-title">高频告警 TOP 8</span>
+      <span class="rc-header-badge">24h</span>
     </div>
 
-    <div class="log_list">
-      <div v-if="logs.length === 0" class="empty_tip">等待查询指令...</div>
-      <div 
-        v-for="item in logs" 
-        :key="item._id" 
-        class="log_card" 
-        @click="openDetail(item._source)"
-      >
-        <div class="card_header">
-          <span class="time">{{ new Date(item._source.timestamp).toLocaleString() }}</span>
-          <span class="level" :style="{ color: item._source.rule.level >= 12 ? '#f5023d' : '#e3b337' }">
-            Level {{ item._source.rule.level }}
-          </span>
-        </div>
-        <div class="card_body">{{ item._source.rule.description }}</div>
-        <div class="card_footer">点击查看完整详情</div>
+    <!-- 词云区域 -->
+    <div class="rc-top-content">
+      <div v-if="topLoading" class="rc-loading-hint">加载中...</div>
+      <div v-else-if="topAlerts.length === 0" class="rc-empty-hint">近 24 小时暂无告警数据</div>
+      <div v-else class="rc-tag-cloud">
+        <span
+          v-for="(item, idx) in topAlerts"
+          :key="idx"
+          class="rc-tag"
+          :style="{
+            fontSize: fontSizeByCount(item.count, maxCount) + 'px',
+            borderColor: levelColor(item.level),
+            color: levelColor(item.level)
+          }"
+          :title="`${item.label} · Level ${item.level} · 出现 ${item.count} 次`"
+        >
+          <span class="rc-tag-text">{{ item.label }}</span>
+          <sup class="rc-tag-count">{{ item.count }}</sup>
+        </span>
       </div>
     </div>
 
-    <el-dialog
-      v-model="detailVisible"
-      title="告警日志完整详情"
-      width="60%"
-      destroy-on-close
-      custom-class="dark_dialog"
-    >
-      <div class="detail_content">
-        <pre v-if="currentLog">{{ JSON.stringify(currentLog, null, 2) }}</pre>
-      </div>
-      <template #footer>
-        <button class="close_btn" @click="detailVisible = false">确 定</button>
-      </template>
-    </el-dialog>
+    <!-- 导航按钮 -->
+    <button class="rc-goto" @click="navigateToAlerts">
+      查看全部告警
+      <span class="rc-goto-arrow">→</span>
+    </button>
   </div>
 </template>
 
 <style scoped lang="scss">
-.right_bottom {
-  box-sizing: border-box;
-  padding: 0 16px;
+.rc-root {
   height: 100%;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
+  padding: 4px 0;
 }
 
-// 搜索栏样式保持之前风格
-.search_group {
-  display: flex; gap: 10px; margin-bottom: 15px; position: relative;
-  .input_container {
-    flex: 1; position: relative;
-    input {
-      width: 100%; background: rgba(0, 0, 0, 0.5); border: 1px solid #31ABE3;
-      border-radius: 4px; padding: 8px 12px; color: #fff; outline: none; font-family: monospace;
-    }
-  }
-  .update_btn {
-    background: #31ABE3; border: none; color: white; padding: 0 15px;
-    border-radius: 4px; cursor: pointer; font-weight: bold;
-    &:disabled { opacity: 0.5; }
-  }
-}
+// ── Header ──
+.rc-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 8px;
+  border-bottom: 1px solid rgba(49, 171, 227, 0.08);
+  flex-shrink: 0;
 
-.field_dropdown {
-  position: absolute; top: 100%; left: 0; width: 100%; background: #1a222a;
-  border: 1px solid #31ABE3; z-index: 999; max-height: 200px; overflow-y: auto;
-  .field_item {
-    padding: 8px 12px; color: #eee; cursor: pointer; font-size: 13px;
-    &:hover { background: rgba(49, 171, 227, 0.3); }
-    .icon { color: #31ABE3; margin-right: 8px; font-weight: bold; }
-  }
-}
-
-// 日志卡片样式
-.log_list {
-  flex: 1; overflow-y: auto;
-  &::-webkit-scrollbar { width: 4px; }
-  &::-webkit-scrollbar-thumb { background: #31ABE3; }
-  .log_card {
-    background: rgba(255, 255, 255, 0.03); border-radius: 4px; padding: 12px;
-    margin-bottom: 10px; border-left: 3px solid #31ABE3; cursor: pointer;
-    transition: transform 0.2s;
-    &:hover { background: rgba(255, 255, 255, 0.08); transform: translateX(5px); }
-    .card_header {
-      display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 8px;
-      .time { color: #aaa; }
-    }
-    .card_body { font-size: 13px; color: #eee; line-height: 1.5; }
-    .card_footer { font-size: 10px; color: #31ABE3; margin-top: 10px; text-align: right; opacity: 0.7; }
-  }
-}
-
-// 弹窗深度样式定制
-:deep(.el-dialog) {
-  background: #1a222a !important;
-  border: 1px solid #31ABE3;
-  .el-dialog__title { color: #31ABE3; }
-  .el-dialog__body { color: #ddd; }
-}
-
-.detail_content {
-  background: #0d1117;
-  padding: 15px;
-  border-radius: 4px;
-  max-height: 500px;
-  overflow-y: auto;
-  pre {
-    margin: 0;
-    font-family: 'Courier New', Courier, monospace;
+  .rc-header-icon { font-size: 14px; line-height: 1; }
+  .rc-header-title {
     font-size: 12px;
-    white-space: pre-wrap; // 自动换行
-    word-break: break-all;
-    color: #a5d6ff; // 科技蓝配色
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.6);
+    letter-spacing: 0.5px;
+  }
+  .rc-header-badge {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 600;
+    font-family: ui-monospace, monospace;
+    color: rgba(49, 171, 227, 0.7);
+    background: rgba(49, 171, 227, 0.08);
+    padding: 1px 8px;
+    border-radius: 999px;
   }
 }
 
-.close_btn {
-  background: #31ABE3; border: none; color: #fff;
-  padding: 6px 20px; border-radius: 4px; cursor: pointer;
+// ── 词云内容 ──
+.rc-top-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+  min-height: 0;
 }
 
-.empty_tip { text-align: center; color: #555; padding-top: 50px; }
+.rc-loading-hint,
+.rc-empty-hint {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.2);
+}
+
+.rc-tag-cloud {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  gap: 8px 10px;
+  padding: 4px 0;
+  overflow-y: auto;
+}
+
+.rc-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid;
+  border-radius: 999px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  line-height: 1.4;
+  cursor: default;
+  max-width: 100%;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: 0 0 10px currentColor;
+  }
+
+  .rc-tag-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 140px;
+  }
+}
+
+.rc-tag-count {
+  font-size: 10px;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+  opacity: 0.7;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+// ── 导航按钮 ──
+.rc-goto {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 0;
+  background: rgba(49, 171, 227, 0.06);
+  border: 1px solid rgba(49, 171, 227, 0.15);
+  color: #31ABE3;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  flex-shrink: 0;
+  margin-top: 4px;
+
+  &:hover {
+    background: rgba(49, 171, 227, 0.12);
+    border-color: rgba(49, 171, 227, 0.3);
+    gap: 10px;
+  }
+
+  .rc-goto-arrow {
+    font-size: 14px;
+    transition: transform 0.25s ease;
+  }
+
+  &:hover .rc-goto-arrow {
+    transform: translateX(3px);
+  }
+}
 </style>

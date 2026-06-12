@@ -11,15 +11,14 @@ const props = defineProps<{
 
 const emit = defineEmits(['update:sessions', 'update:agentId']);
 
-// 智能体配置列表（保持标准的系统标识命名）
+// 智能体配置列表（当前仅保留路由智能体）
 const agents = [
-  { id: 'router_agent', name: '路由智能体' },
-  { id: 'attack_attributor', name: '攻击溯源' }
+  { id: 'router_agent', name: '路由智能体' }
 ];
 
-// ⚡ 修改点：将原有的私有 currentAgentId 改为基于 prop 的计算属性，切换时通知父组件
+// 当前活跃智能体（基于 prop 的计算属性，切换时通知父组件）
 const currentAgentId = computed({
-  get: () => props.agentId || "attack_attributor",
+  get: () => props.agentId || "router_agent",
   set: (val: string) => emit('update:agentId', val)
 });
 
@@ -315,8 +314,8 @@ const scrollToBottom = async () => {
         
         <div class="content_box">
           <div v-if="msg.role === 'assistant' && msg.node" class="node_tag">
-            <template v-if="msg.node === 'tools'">⚙️ 原始工具输出 (完整数据)</template>
-            <template v-else-if="msg.node === 'reply'">🎯 溯源结论 (提取结果)</template>
+            <template v-if="msg.node === 'tools'">⚙️ 工具输出 (原始数据)</template>
+            <template v-else-if="msg.node === 'reply'">📋 提取结论</template>
             <template v-else-if="msg.node === 'model'">🤖 AI 文本回复</template>
             <template v-else>⚡ 步骤: {{ msg.node }}</template>
           </div>

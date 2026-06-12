@@ -1,349 +1,377 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick, computed } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 
-// --- 1. 配置与状态定义 ---
-const agents = [
-  { id: 'demo_agent', name: '测试智能体' },
-  { id: 'attack_attribution', name: '攻击溯源' }
-];
+// ── Props（来自父组件 index.vue，作为数据源之一） ──
+const props = defineProps<{
+  sessions?: Record<string, any[]>;
+  agentId?: string;
+}>();
 
-// 当前选中的智能体 ID
-const currentAgentId = ref("demo_agent");
+// ── 常量 ──
+const SSKEY = "wazuh_all_sessions";
+const TMKEY = "wazuh_agent_thread_map";
+const DEFAULT_AGENT = props.agentId || "router_agent";
 
-// 核心：智能体与线程 ID 的映射表，确保记忆隔离
-// 结构：{ "demo_agent": "tid_xxx", "attack_attribution": "tid_yyy" }
-const agentThreadMap = ref<Record<string, string>>({});
+// ── 状态 ──
+const currentThreadId = ref("加载中...");
+const userMessageCount = ref(0);
+const copied = ref(false);
 
-// 核心：存储所有对话记录
-// 结构：{ "agentId_threadId": [messages] }
-const allSessions = ref<Record<string, any[]>>({});
+// ── 数据刷新（优先使用 localStorage 以保证跨页面实时同步） ──
+const refreshData = () => {
+  // 1. 读取当前线程 ID
+  const threadMap: Record<string, string> = JSON.parse(
+    localStorage.getItem(TMKEY) || "{}"
+  );
+  const tid = threadMap[DEFAULT_AGENT] || "";
+  currentThreadId.value = tid || "暂无活跃会话";
 
-const userInput = ref("");
-const isTyping = ref(false);
-const scrollRef = ref<HTMLElement | null>(null);
+  // 2. 统计当前会话的用户消息数
+  if (tid) {
+    const key = `${DEFAULT_AGENT}_${tid}`;
+    let messages: any[] = [];
 
-// --- 2. 计算属性 ---
+    // 优先从 props 读取（实时性最高），fallback 到 localStorage
+    if (props.sessions && props.sessions[key]) {
+      messages = props.sessions[key];
+    } else {
+      const allSessions: Record<string, any[]> = JSON.parse(
+        localStorage.getItem(SSKEY) || "{}"
+      );
+      messages = allSessions[key] || [];
+    }
 
-// 获取当前活跃的线程 ID
-const currentThreadId = computed(() => {
-  return agentThreadMap.value[currentAgentId.value] || "";
+    userMessageCount.value = messages.filter(
+      (m: any) => m.role === "user"
+    ).length;
+  } else {
+    userMessageCount.value = 0;
+  }
+};
+
+// ── 线程 ID 截断显示 ──
+const truncatedId = computed(() => {
+  const id = currentThreadId.value;
+  if (!id || id === "暂无活跃会话" || id === "加载中...") return id;
+  return id.length > 22
+    ? id.substring(0, 10) + "..." + id.substring(id.length - 8)
+    : id;
 });
 
-// 获取当前应该显示的聊天列表
-const chatList = computed(() => {
-  const key = `${currentAgentId.value}_${currentThreadId.value}`;
-  return allSessions.value[key] || [];
-});
+// ── 复制线程 ID ──
+const copyThreadId = async () => {
+  if (
+    !currentThreadId.value ||
+    currentThreadId.value === "暂无活跃会话" ||
+    currentThreadId.value === "加载中..."
+  )
+    return;
+  try {
+    await navigator.clipboard.writeText(currentThreadId.value);
+    copied.value = true;
+    setTimeout(() => {
+      copied.value = false;
+    }, 2000);
+  } catch {
+    // 降级：选中文本
+  }
+};
 
-// --- 3. 生命周期与持久化 ---
+// ── 导航到第二页 AI 对话 ──
+const navigateToAIChat = () => {
+  window.dispatchEvent(new CustomEvent("navigate-to-ai-chat"));
+};
+
+// ── 轮询刷新（保证跨页面数据同步） ──
+let refreshTimer: any = null;
 
 onMounted(() => {
-  // 从本地存储恢复数据
-  const savedMap = localStorage.getItem('wazuh_agent_thread_map');
-  const savedSessions = localStorage.getItem('wazuh_all_sessions');
-  
-  if (savedMap) agentThreadMap.value = JSON.parse(savedMap);
-  if (savedSessions) allSessions.value = JSON.parse(savedSessions);
-
-  // 初始化检查：确保每个智能体都有一个初始线程
-  agents.forEach(agent => {
-    if (!agentThreadMap.value[agent.id]) {
-      const initialId = `tid_${Math.random().toString(36).substr(2, 9)}`;
-      agentThreadMap.value[agent.id] = initialId;
-      
-      const sessionKey = `${agent.id}_${initialId}`;
-      if (!allSessions.value[sessionKey]) {
-        allSessions.value[sessionKey] = [];
-      }
-    }
-  });
+  refreshData();
+  refreshTimer = setInterval(refreshData, 3000);
 });
 
-const saveToLocal = () => {
-  localStorage.setItem('wazuh_agent_thread_map', JSON.stringify(agentThreadMap.value));
-  localStorage.setItem('wazuh_all_sessions', JSON.stringify(allSessions.value));
-};
-
-// 创建新线程逻辑
-const createNewThread = () => {
-  const newId = `tid_${Math.random().toString(36).substr(2, 9)}`;
-  
-  // 只更新当前智能体的线程，实现清空效果
-  agentThreadMap.value[currentAgentId.value] = newId;
-  
-  const newKey = `${currentAgentId.value}_${newId}`;
-  allSessions.value[newKey] = [];
-  
-  saveToLocal();
-};
-
-// --- 4. 核心发送逻辑 ---
-
-const handleSend = async () => {
-  if (!userInput.value.trim() || isTyping.value) return;
-
-  const msg = userInput.value;
-  const agentId = currentAgentId.value;
-  const threadId = currentThreadId.value;
-  const sessionKey = `${agentId}_${threadId}`;
-
-  // 1. 存入用户消息
-  allSessions.value[sessionKey].push({ role: 'user', content: msg });
-  userInput.value = "";
-  isTyping.value = true;
-
-  // 2. 存入 AI 占位符
-  const aiMsgIndex = allSessions.value[sessionKey].push({ 
-    role: 'assistant', content: "", node: "" 
-  }) - 1;
-
-  await nextTick();
-  scrollToBottom();
-
-  try {
-    const response = await fetch('http://127.0.0.1:8001/api/chat/stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: msg,
-        thread_id: threadId,
-        agent_id: agentId
-      })
-    });
-
-    if (!response.body) throw new Error("ReadableStream not supported");
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
-
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const dataStr = line.replace('data: ', '').trim();
-          
-          if (dataStr === '[DONE]') {
-            isTyping.value = false;
-            saveToLocal();
-            break;
-          }
-
-          try {
-            const data = JSON.parse(dataStr);
-            if (data.content) {
-              // 关键：更新对应 Session 中的消息
-              allSessions.value[sessionKey][aiMsgIndex].content += `\n**[${data.node}]**: ${data.content}\n`;
-              allSessions.value[sessionKey][aiMsgIndex].node = data.node;
-              
-              await nextTick();
-              scrollToBottom();
-            }
-          } catch (e) {}
-        }
-      }
-    }
-  } catch (error: any) {
-    allSessions.value[sessionKey][aiMsgIndex].content = `❌ 错误: ${error.message}`;
-  } finally {
-    isTyping.value = false;
-    await nextTick();
-    scrollToBottom();
-  }
-};
-
-const scrollToBottom = () => {
-  if (scrollRef.value) {
-    scrollRef.value.scrollTop = scrollRef.value.scrollHeight;
-  }
-};
+onBeforeUnmount(() => {
+  if (refreshTimer) clearInterval(refreshTimer);
+});
 </script>
 
 <template>
-  <div class="ai_chat_container">
-    <!-- 顶部导航栏 -->
-    <div class="top_bar">
-      <div class="agent_tabs">
-        <div 
-          v-for="agent in agents" 
-          :key="agent.id"
-          :class="['tab_item', currentAgentId === agent.id ? 'active' : '']"
-          @click="currentAgentId = agent.id"
+  <div class="ai-monitor-panel">
+    <!-- 当前线程 ID -->
+    <div class="info-card">
+      <div class="info-label">
+        <span class="info-icon">🧵</span>
+        <span>当前线程 ID</span>
+      </div>
+      <div class="info-value-row">
+        <span class="thread-id" :class="{ 'thread-id--empty': currentThreadId === '暂无活跃会话' || currentThreadId === '加载中...' }">
+          {{ truncatedId }}
+        </span>
+        <button
+          class="copy-btn"
+          :class="{ 'copy-btn--done': copied }"
+          :disabled="currentThreadId === '暂无活跃会话' || currentThreadId === '加载中...'"
+          :title="copied ? '已复制' : '复制到剪贴板'"
+          @click="copyThreadId"
         >
-          {{ agent.name }}
-        </div>
-      </div>
-      
-      <div class="thread_controls">
-        <span class="thread_id_tag">SID: {{ currentThreadId }}</span>
-        <button @click="createNewThread" class="new_btn">+ 新对话</button>
+          {{ copied ? "✓" : "📋" }}
+        </button>
       </div>
     </div>
 
-    <!-- 聊天视窗 -->
-    <div class="chat_window" ref="scrollRef">
-      <div v-if="chatList.length === 0" class="empty_box">
-        已切换至 <strong>{{ currentAgentId }}</strong>，当前会话暂无数据。
+    <!-- 已发送消息计数 -->
+    <div class="info-card">
+      <div class="info-label">
+        <span class="info-icon">💬</span>
+        <span>已发送消息</span>
       </div>
-      
-      <div
-        v-for="(msg, index) in chatList"
-        :key="index"
-        :class="['msg_row', msg.role === 'user' ? 'row_user' : 'row_ai']"
-      >
-        <div class="avatar">{{ msg.role === 'user' ? 'ME' : 'AI' }}</div>
-        <div class="content_box">
-          <div v-if="msg.role === 'assistant' && msg.node" class="node_tag">
-            执行节点: {{ msg.node }}
-          </div>
-          <p class="text">{{ msg.content || (isTyping && index === chatList.length -1 ? '正在处理...' : '') }}</p>
-        </div>
-      </div>
-      <div v-if="isTyping" class="typing_indicator">智能体正在响应请求...</div>
+      <div class="count-value">{{ userMessageCount }}</div>
+      <div class="info-footer">当前会话用户消息总数</div>
     </div>
 
-    <!-- 输入区 -->
-    <div class="input_area">
-      <input
-        v-model="userInput"
-        type="text"
-        placeholder="发送指令给当前智能体..."
-        @keyup.enter="handleSend"
-      />
-      <button @click="handleSend" :disabled="isTyping">发送</button>
-    </div>
+    <!-- 导航按钮 -->
+    <button class="nav-btn" @click="navigateToAIChat">
+      <span class="nav-btn-bg"></span>
+      <span class="nav-btn-content">
+        <span class="nav-btn-icon">➤</span>
+        <span>前往 AI 终端</span>
+      </span>
+    </button>
+
+    <!-- 状态栏 -->
+    <!-- <div class="status-bar">
+      <span class="status-dot"></span>
+      <span class="status-text">数据实时更新中</span>
+    </div> -->
   </div>
 </template>
 
 <style scoped lang="scss">
-.ai_chat_container {
+.ai-monitor-panel {
+  padding: 16px;
   display: flex;
   flex-direction: column;
+  gap: 14px;
   height: 100%;
-  max-height: 85vh;
-  background: rgba(0, 15, 30, 0.6);
-  border: 1px solid rgba(49, 171, 227, 0.3);
+  box-sizing: border-box;
+}
+
+// ── 信息卡片 ──
+.info-card {
+  background: var(--card, #111827);
+  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
   border-radius: 8px;
-  padding: 15px;
-  overflow: hidden;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.2s;
 
-  .top_bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-bottom: 12px;
-    border-bottom: 1px solid rgba(49, 171, 227, 0.2);
-    margin-bottom: 15px;
-
-    .agent_tabs {
-      display: flex;
-      gap: 8px;
-      .tab_item {
-        padding: 5px 15px;
-        font-size: 13px;
-        color: #31ABE3;
-        border: 1px solid #31ABE3;
-        border-radius: 4px;
-        cursor: pointer;
-        transition: 0.2s;
-        &.active { background: #31ABE3; color: #fff; box-shadow: 0 0 10px rgba(49, 171, 227, 0.5); }
-      }
-    }
-
-    .thread_controls {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      .thread_id_tag { font-size: 11px; color: rgba(255,255,255,0.4); font-family: monospace; }
-      .new_btn {
-        background: transparent;
-        border: 1px dashed #00fdfa;
-        color: #00fdfa;
-        padding: 3px 10px;
-        font-size: 12px;
-        cursor: pointer;
-        border-radius: 4px;
-        &:hover { background: rgba(0, 253, 250, 0.1); }
-      }
-    }
-  }
-
-  .chat_window {
-    flex: 1;
-    overflow-y: auto;
-    padding-right: 8px;
-    margin-bottom: 15px;
-
-    .empty_box { text-align: center; color: rgba(255,255,255,0.2); margin-top: 40px; font-size: 13px; }
-
-    &::-webkit-scrollbar { width: 4px; }
-    &::-webkit-scrollbar-thumb { background: #31ABE3; border-radius: 2px; }
-
-    .msg_row {
-      display: flex;
-      margin-bottom: 20px;
-      animation: fadeIn 0.3s ease;
-
-      .avatar { width: 32px; height: 32px; border-radius: 50%; font-size: 10px; line-height: 32px; text-align: center; flex-shrink: 0; }
-      .content_box {
-        max-width: 80%;
-        padding: 10px 14px;
-        border-radius: 8px;
-        font-size: 13.5px;
-        .node_tag { font-size: 10px; color: #31ABE3; margin-bottom: 6px; font-weight: bold; }
-        .text { white-space: pre-wrap; margin: 0; }
-      }
-    }
-
-    .row_ai {
-      .avatar { background: #31ABE3; color: #fff; margin-right: 12px; }
-      .content_box { background: rgba(49, 171, 227, 0.08); border: 1px solid rgba(49, 171, 227, 0.2); color: #e0e0e0; }
-    }
-
-    .row_user {
-      flex-direction: row-reverse;
-      .avatar { background: #00fdfa; color: #000; margin-left: 12px; }
-      .content_box { background: rgba(0, 253, 250, 0.08); border: 1px solid rgba(0, 253, 250, 0.2); color: #fff; }
-    }
-  }
-
-  .typing_indicator { font-size: 12px; color: #31ABE3; margin-bottom: 10px; font-style: italic; opacity: 0.8; }
-
-  .input_area {
-    display: flex;
-    gap: 10px;
-    height: 45px;
-    input {
-      flex: 1;
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid rgba(49, 171, 227, 0.4);
-      border-radius: 6px;
-      color: #fff;
-      padding: 0 15px;
-      outline: none;
-      &:focus { border-color: #00fdfa; box-shadow: 0 0 5px rgba(0, 253, 250, 0.2); }
-    }
-    button {
-      width: 70px;
-      background: #31ABE3;
-      border: none;
-      border-radius: 6px;
-      color: #fff;
-      font-weight: bold;
-      cursor: pointer;
-      transition: 0.3s;
-      &:disabled { opacity: 0.4; cursor: not-allowed; }
-      &:hover:not(:disabled) { background: #00fdfa; color: #000; }
-    }
+  &:hover {
+    border-color: rgba(49, 171, 227, 0.3);
   }
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+.info-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground, #7c8a9e);
+
+  .info-icon {
+    font-size: 14px;
+    line-height: 1;
+  }
+}
+
+.info-value-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+// ── 线程 ID ──
+.thread-id {
+  font-family: "Consolas", "Fira Code", monospace;
+  font-size: 13px;
+  color: #00fdfa;
+  letter-spacing: 0.5px;
+  text-shadow: 0 0 8px rgba(0, 253, 250, 0.15);
+  user-select: all;
+
+  &--empty {
+    color: var(--muted-foreground, #7c8a9e);
+    text-shadow: none;
+    user-select: none;
+  }
+}
+
+// ── 复制按钮 ──
+.copy-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(49, 171, 227, 0.2);
+  border-radius: 6px;
+  background: rgba(49, 171, 227, 0.08);
+  color: #31abe3;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+
+  &:hover:not(:disabled) {
+    background: rgba(49, 171, 227, 0.16);
+    border-color: #31abe3;
+    box-shadow: 0 0 10px rgba(49, 171, 227, 0.15);
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  &--done {
+    background: rgba(0, 253, 250, 0.12);
+    border-color: #00fdfa;
+    color: #00fdfa;
+  }
+}
+
+// ── 消息计数 ──
+.count-value {
+  font-family: "Consolas", "Fira Code", monospace;
+  font-size: 24px;
+  font-weight: 400;
+  color: #31abe3;
+  text-shadow: 0 0 20px rgba(49, 171, 227, 0.2);
+  line-height: 1.1;
+}
+
+.info-footer {
+  font-size: 0px;
+  color: var(--muted-foreground, #7c8a9e);
+  opacity: 0.5;
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.3px;
+}
+
+// ── 导航按钮（霓虹科技风） ──
+.nav-btn {
+  position: relative;
+  width: 50%;
+  margin: 0 auto;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid rgba(49, 171, 227, 0.25);
+  border-radius: 6px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: all 0.35s ease;
+  flex-shrink: 0;
+
+  .nav-btn-bg {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      135deg,
+      rgba(49, 171, 227, 0.08),
+      rgba(0, 253, 250, 0.04)
+    );
+    transition: opacity 0.35s ease;
+  }
+
+  .nav-btn-content {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    z-index: 1;
+
+    .nav-btn-icon {
+      font-size: 12px;
+      color: #00fdfa;
+      transition: transform 0.35s ease;
+    }
+
+    span:last-child {
+      font-size: 11px;
+      font-weight: 600;
+      color: #31abe3;
+      letter-spacing: 0.5px;
+      transition: color 0.35s ease;
+    }
+  }
+
+  &:hover {
+    border-color: #31abe3;
+    box-shadow:
+      0 0 16px rgba(49, 171, 227, 0.18),
+      inset 0 0 16px rgba(49, 171, 227, 0.05);
+
+    .nav-btn-bg {
+      background: linear-gradient(
+        135deg,
+        rgba(49, 171, 227, 0.14),
+        rgba(0, 253, 250, 0.08)
+      );
+    }
+
+    .nav-btn-content {
+      .nav-btn-icon {
+        transform: translateX(4px);
+      }
+
+      span:last-child {
+        color: #00fdfa;
+        text-shadow: 0 0 8px rgba(0, 253, 250, 0.3);
+      }
+    }
+  }
+
+  &:active {
+    transform: scale(0.97);
+  }
+}
+
+// ── 状态栏 ──
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-top: auto;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #07f7a8;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+.status-text {
+  font-size: 10px;
+  color: var(--muted-foreground, #7c8a9e);
+  opacity: 0.4;
+  letter-spacing: 0.3px;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 </style>

@@ -1,338 +1,504 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { ElMessage } from "element-plus";
 import axios from 'axios';
+import CountUp from "@/components/count-up";
 
-// --- 配置与状态 ---
+// ── Wazuh 认证 ──
 const wazuhUser = import.meta.env.VITE_WAZUH_SERVER_API_USERNAME;
 const wazuhPass = import.meta.env.VITE_WAZUH_SERVER_API_PASSWORD;
 const AUTH_PAYLOAD = btoa(`${wazuhUser}:${wazuhPass}`);
-const token = ref("");
 
-const searchText = ref("");
-const rules = ref<any[]>([]);
+// ── 状态 ──
+const totalRules = ref(0);
+const highRiskRules = ref(0);
 const loading = ref(false);
-const detailVisible = ref(false);
+const error = ref(false);
+const duration = ref(2);
 
-const currentRule = ref<any>(null);      // 存储当前选中的规则 JSON 信息
-const currentRuleXml = ref("");          // 存储从 API 获取的原始 XML 字符串
+const HIGH_RISK_THRESHOLD = 12; // level >= 12 视为高危
 
-const showPanel = ref(false);
-const searchStage = ref<'field' | 'operator' | 'value'>('field');
-const selectedField = ref("");
-const selectedOperator = ref("");
+let refreshTimer: any = null;
 
-// 字段映射
-const fieldOptions = [
-  { label: 'id', display: 'id', desc: 'Rule ID', color: '#e06c75' },
-  { label: 'level', display: 'level', desc: 'Severity level', color: '#d19a66' },
-  { label: 'groups', display: 'group', desc: 'Rule group', color: '#c678dd' },
-  { label: 'filename', display: 'file', desc: 'XML Filename', color: '#98c379' }
-];
-
-const operators = [{ label: '=', desc: 'equality' }, { label: '>', desc: 'gt' }, { label: '<', desc: 'lt' }];
-
-const valueSuggestions = computed(() => {
-  const field = selectedField.value;
-  if (selectedField.value === 'level') return ['3', '5', '10', '15'];
-  if (field === 'id') {
-    // 给出一些常见的规则 ID 起始值作为建议
-    return ['100', '500', '1000', '2501', '92145'];
-  }
-  return ['sysmon', 'windows', 'sshd'];
+// ── 计算属性 ──
+const highRiskPercent = computed(() => {
+  if (totalRules.value === 0) return 0;
+  return +(highRiskRules.value / totalRules.value * 100).toFixed(1);
 });
 
-// --- 核心方法：认证 ---
+const riskLevelText = computed(() => {
+  const p = highRiskPercent.value;
+  if (p >= 30) return { label: '高风险', color: '#f5023d' };
+  if (p >= 15) return { label: '中风险', color: '#e3b337' };
+  return { label: '低风险', color: '#07f7a8' };
+});
+
+// ── 认证 ──
 const authenticate = async () => {
   try {
     const res = await axios.get('/wazuh-api/security/user/authenticate', {
       headers: { 'Authorization': `Basic ${AUTH_PAYLOAD}` }
     });
-    token.value = res.data.data.token;
-    return true;
+    return res.data.data.token;
   } catch (err) {
     ElMessage.error("Wazuh 认证失败");
-    return false;
+    return null;
   }
 };
 
-// --- 获取规则列表 ---
+// ── 获取规则数据（本地计算高危占比） ──
 const fetchRules = async (isRetry = false) => {
-  if (!token.value) {
-    const success = await authenticate();
-    if (!success) return;
-  }
-
   loading.value = true;
-  const hasLogic = /(=|>|<)/.test(searchText.value);
-  const params: any = { limit: 50, sort: '-level' };
-  if (hasLogic) params.q = searchText.value;
-  else if (searchText.value.trim()) params.search = searchText.value;
+  error.value = false;
+
+  const token = await authenticate();
+  if (!token) {
+    loading.value = false;
+    error.value = true;
+    return;
+  }
 
   try {
     const res = await axios.get('/wazuh-api/rules', {
-      params,
-      headers: { 'Authorization': `Bearer ${token.value}` }
+      params: { limit: 10000, sort: '-level' },
+      headers: { 'Authorization': `Bearer ${token}` }
     });
-    rules.value = res.data.data?.affected_items || [];
+
+    const items: any[] = res.data.data?.affected_items || [];
+    totalRules.value = items.length;
+    highRiskRules.value = items.filter(r => Number(r.level) >= HIGH_RISK_THRESHOLD).length;
   } catch (err: any) {
     if (err.response?.status === 401 && !isRetry) {
-      token.value = "";
       await fetchRules(true);
-    } else {
-      ElMessage.error("获取列表失败");
+      return;
     }
+    error.value = true;
+    console.error("规则数据获取失败:", err);
   } finally {
     loading.value = false;
   }
 };
 
-const fetchRuleXml = async (rule: any) => {
-  loading.value = true;
-  currentRule.value = rule;
-  currentRuleXml.value = ""; 
-
-  try {
-    const res = await axios.get(`/wazuh-api/rules/files/${rule.filename}`, {
-      headers: { 
-        'Authorization': `Bearer ${token.value}`,
-        'Accept': 'application/xml, text/plain' 
-      }
-    });
-
-    // 如果返回的是纯文本字符串且不以 { 开头，说明拿到了原始 XML
-    if (typeof res.data === 'string' && !res.data.trim().startsWith('{')) {
-      currentRuleXml.value = res.data;
-    } else {
-      // 否则说明拿到的是 JSON 结构，需要手动还原 XML
-      const jsonData = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-      const content = jsonData.data?.affected_items?.[0];
-      
-      if (content) {
-        currentRuleXml.value = jsonToXml(content);
-      }
-    }
-    
-    detailVisible.value = true;
-  } catch (err: any) {
-    console.error("XML获取失败:", err);
-    ElMessage.error("获取规则内容失败");
-  } finally {
-    loading.value = false;
-  }
+// ── 页面导航 ──
+const navigateToRules = () => {
+  window.dispatchEvent(new CustomEvent('navigate-to-rules'));
 };
 
-/**
- * 强力还原函数：将 Wazuh 的 JSON 对象重新构造为标准的 XML 字符串
- */
-const jsonToXml = (obj: any) => {
-  let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+// ── 生命周期 ──
+onMounted(() => {
+  fetchRules();
+  refreshTimer = setInterval(fetchRules, 60000);
+});
 
-  // 辅助函数：确保数据始终以数组形式处理，解决 .forEach 报错
-  const ensureArray = (item: any) => {
-    if (!item) return [];
-    return Array.isArray(item) ? item : [item];
-  };
-
-  // 1. 处理变量 (var)
-  ensureArray(obj.var).forEach((v: any) => {
-    xml += `<var name="${v['@name']}">${v['#text'] || ''}</var>\n`;
-  });
-
-  // 2. 处理组 (group)
-  ensureArray(obj.group).forEach((g: any) => {
-    xml += `<group name="${g['@name']}">\n`;
-    
-    // 3. 处理组内的规则 (rule)
-    ensureArray(g.rule).forEach((r: any) => {
-      xml += `  <rule id="${r['@id']}" level="${r['@level']}">\n`;
-      
-      // 遍历规则内的所有属性（如 match, decoded_as, description 等）
-      Object.keys(r).forEach(key => {
-        if (key.startsWith('@')) return; // 跳过属性标签
-        
-        const value = r[key];
-        ensureArray(value).forEach(val => {
-          if (typeof val === 'object') {
-            // 处理带属性的标签，如 <field name="user">
-            const attr = val['@name'] ? ` name="${val['@name']}"` : '';
-            xml += `    <${key}${attr}>${val['#text'] || ''}</${key}>\n`;
-          } else {
-            xml += `    <${key}>${val}</${key}>\n`;
-          }
-        });
-      });
-      
-      xml += `  </rule>\n`;
-    });
-    
-    xml += `</group>\n\n`;
-  });
-
-  return xml;
-};
-
-
-// --- 交互逻辑 ---
-const handleSelect = (item: any) => {
-  if (searchStage.value === 'field') {
-    selectedField.value = item.label;
-    searchText.value = item.label;
-    searchStage.value = 'operator';
-  } else if (searchStage.value === 'operator') {
-    selectedOperator.value = item.label;
-    searchText.value = `${selectedField.value}${item.label}`;
-    searchStage.value = 'value';
-  } else if (searchStage.value === 'value') {
-    searchText.value = `${selectedField.value}${selectedOperator.value}${item}`;
-    showPanel.value = false;
-    searchStage.value = 'field';
-    fetchRules();
-  }
-};
-
-const getLevelColor = (level: any) => {
-  const l = Number(level);
-  if (l >= 12) return '#f5023d';
-  if (l >= 8) return '#e3b337';
-  return '#31ABE3';
-};
-
-onMounted(() => fetchRules());
+onBeforeUnmount(() => {
+  if (refreshTimer) clearInterval(refreshTimer);
+});
 </script>
 
 <template>
-  <div class="rules_container">
-    <!-- 搜索栏 -->
-    <div class="search_group">
-      <div class="input_container">
-        <div class="input_wrapper" :class="{ 'focus': showPanel }">
-          <span class="prefix">🔍</span>
-          <input 
-            v-model="searchText" 
-            placeholder="输入查询 (如 level>10) 或使用下拉构造..."
-            @focus="showPanel = true"
-            @keyup.enter="fetchRules()"
-          />
-          <button v-if="searchText" class="clear" @click="searchText=''; searchStage='field'">×</button>
-        </div>
-
-        <!-- 交互式构造面板 -->
-        <div v-if="showPanel" class="interactive_panel">
-          <template v-if="searchStage === 'field'">
-            <div class="p_item action" @click="showPanel=false; fetchRules()"><strong>Search</strong><span>执行当前查询</span></div>
-            <div v-for="f in fieldOptions" :key="f.label" class="p_item" @click="handleSelect(f)">
-              <b :style="{color: f.color}">⊚ {{ f.display }}</b> <span>{{ f.desc }}</span>
-            </div>
-          </template>
-
-          <template v-else-if="searchStage === 'operator'">
-            <div v-for="op in operators" :key="op.label" class="p_item" @click="handleSelect(op)">
-              <b>{{ op.label }}</b> <span>{{ op.desc }}</span>
-            </div>
-          </template>
-
-          <template v-else-if="searchStage === 'value'">
-            <div v-for="v in valueSuggestions" :key="v" class="p_item" @click="handleSelect(v)">
-              <b>{{ v }}</b> <span>建议值</span>
-            </div>
-          </template>
-        </div>
-      </div>
-      <button class="refresh_btn" @click="fetchRules(false)">刷新</button>
+  <div class="risk-dashboard">
+    <!-- 加载遮罩 -->
+    <div v-if="loading && totalRules === 0" class="loading-overlay">
+      <div class="loader"></div>
+      <span>正在采集规则数据...</span>
     </div>
 
-    <!-- 列表展示 -->
-    <div class="rule_list" v-loading="loading" element-loading-background="rgba(0, 0, 0, 0.7)">
-      <div v-for="rule in rules" :key="rule.id" class="rule_card" @click="fetchRuleXml(rule)">
-        <div class="header">
-          <span class="id">ID: {{ rule.id }}</span>
-          <span class="lvl" :style="{color: getLevelColor(rule.level)}">Level {{ rule.level }}</span>
-        </div>
-        <div class="body">{{ rule.description }}</div>
-        <div class="footer_info">{{ rule.filename }}</div>
-      </div>
+    <!-- 错误提示 -->
+    <div v-else-if="error && totalRules === 0" class="error-overlay">
+      <span class="error-icon">⚠</span>
+      <span>数据获取失败，请检查 Wazuh API 连接</span>
+      <button class="retry-btn" @click="fetchRules()">重试</button>
     </div>
 
-    <!-- XML 详情弹窗 -->
-    <el-dialog 
-      v-model="detailVisible" 
-      :title="`规则源码: ${currentRule?.filename}`" 
-      width="75%"
-      destroy-on-close
-    >
-      <div class="xml_viewer">
-        <div class="xml_header">
-          <span>Path: {{ currentRule?.relative_dirname }}/{{ currentRule?.filename }}</span>
+    <!-- 主内容 -->
+    <template v-else>
+      <!-- 顶部指标卡片 -->
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">
+            <span class="stat-icon">📜</span>
+            <span>规则总数</span>
+          </div>
+          <div class="stat-value stat-value--total">
+            <CountUp :endVal="totalRules" :duration="duration" />
+          </div>
+          <div class="stat-footer">Total Rules</div>
         </div>
-        <pre class="xml_content">{{ currentRuleXml }}</pre>
+
+        <div class="stat-card">
+          <div class="stat-label">
+            <span class="stat-icon">🔴</span>
+            <span>高危规则</span>
+          </div>
+          <div class="stat-value stat-value--highrisk">
+            <CountUp :endVal="highRiskRules" :duration="duration" />
+          </div>
+          <div class="stat-footer">High-Risk Rules (Level ≥ {{ HIGH_RISK_THRESHOLD }})</div>
+        </div>
       </div>
-      <template #footer>
-        <button class="close_btn" @click="detailVisible = false">关闭预览</button>
-      </template>
-    </el-dialog>
+
+      <!-- 进度条区域 -->
+      <div class="progress-section">
+        <div class="progress-header">
+          <span class="progress-title">高危占比</span>
+          <div class="progress-meta">
+            <span class="progress-percent" :style="{ color: riskLevelText.color }">
+              {{ highRiskPercent }}%
+            </span>
+            <span class="risk-badge" :style="{ background: riskLevelText.color + '22', color: riskLevelText.color, borderColor: riskLevelText.color + '44' }">
+              {{ riskLevelText.label }}
+            </span>
+          </div>
+        </div>
+
+        <div class="progress-track">
+          <div
+            class="progress-fill"
+            :style="{ width: highRiskPercent + '%', background: riskLevelText.color, boxShadow: `0 0 12px ${riskLevelText.color}66` }"
+          ></div>
+          <div class="progress-glow" :style="{ background: riskLevelText.color }"></div>
+        </div>
+
+        <div class="progress-legend">
+          <span class="legend-item">
+            <span class="legend-dot" style="background: #31ABE3;"></span>
+            低危 (Level &lt; {{ HIGH_RISK_THRESHOLD }})
+          </span>
+          <span class="legend-item">
+            <span class="legend-dot" :style="{ background: riskLevelText.color }"></span>
+            高危 (Level ≥ {{ HIGH_RISK_THRESHOLD }})
+          </span>
+        </div>
+      </div>
+
+      <!-- 底部操作栏 -->
+      <div class="action-bar">
+        <div class="update-bar">
+          <span class="update-dot" :class="{ 'update-dot--error': error }"></span>
+          <span class="update-text">{{ error ? '数据异常' : '实时更新中' }}</span>
+        </div>
+        <button class="nav-btn" @click="navigateToRules">
+          <span class="nav-btn-icon">📜</span>
+          <span>查询所有规则</span>
+          <span class="nav-btn-arrow">→</span>
+        </button>
+      </div>
+    </template>
   </div>
 </template>
 
 <style scoped lang="scss">
-.rules_container { padding: 15px; height: 100vh; display: flex; flex-direction: column; background: #0a0a0a; color: #eee; }
-
-.search_group { display: flex; gap: 10px; margin-bottom: 15px; position: relative; }
-.input_container { flex: 1; position: relative; }
-.input_wrapper {
-  display: flex; align-items: center; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 0 10px;
-  &.focus { border-color: #31ABE3; box-shadow: 0 0 8px rgba(49, 171, 227, 0.2); }
-  input { flex: 1; background: transparent; border: none; padding: 12px; color: #fff; outline: none; font-family: 'Fira Code', monospace; }
-  .clear { background: none; border: none; color: #666; cursor: pointer; font-size: 18px; }
+.risk-dashboard {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 18px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-sizing: border-box;
+  min-height: 0;
 }
 
-.interactive_panel {
-  position: absolute; top: 105%; left: 0; width: 100%; background: #151515; border: 1px solid #31ABE3; z-index: 1000;
-  max-height: 300px; overflow-y: auto; border-radius: 4px; box-shadow: 0 10px 20px rgba(0,0,0,0.5);
-  .p_item {
-    padding: 12px 15px; display: flex; justify-content: space-between; cursor: pointer; border-bottom: 1px solid #222;
-    &:hover { background: #222; }
-    b { font-family: monospace; }
-    span { color: #555; font-size: 12px; }
-    &.action { background: #1a1a1a; color: #31ABE3; border-bottom: 2px solid #31ABE3; }
+// ── Loading / Error ──
+.loading-overlay,
+.error-overlay {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--muted-foreground, #7c8a9e);
+  font-size: 12px;
+}
+
+.loader {
+  width: 28px;
+  height: 28px;
+  border: 2px solid rgba(49, 171, 227, 0.15);
+  border-top-color: #31ABE3;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.error-icon {
+  font-size: 24px;
+  opacity: 0.6;
+}
+
+.retry-btn {
+  margin-top: 4px;
+  padding: 4px 16px;
+  background: transparent;
+  border: 1px solid #31ABE3;
+  color: #31ABE3;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  transition: 0.2s;
+  &:hover {
+    background: rgba(49, 171, 227, 0.1);
   }
 }
 
-.rule_list { flex: 1; overflow-y: auto; padding-right: 5px; }
-.rule_card {
-  background: #161616; padding: 15px; margin-bottom: 10px; border-left: 4px solid #31ABE3; cursor: pointer; transition: 0.2s;
-  &:hover { background: #202020; transform: translateX(4px); }
-  .header { display: flex; justify-content: space-between; margin-bottom: 8px; .id { color: #31ABE3; font-weight: bold; font-family: monospace; } }
-  .body { font-size: 14px; color: #bbb; line-height: 1.4; margin-bottom: 8px; }
-  .footer_info { font-size: 11px; color: #555; text-align: right; font-style: italic; }
+// ── Stat Cards Row ──
+.stats-row {
+  display: flex;
+  gap: 12px;
+  flex-shrink: 0;
 }
 
-.xml_viewer {
-  background: #1e1e1e; border-radius: 4px; overflow: hidden; border: 1px solid #333;
-  .xml_header { background: #2d2d2d; padding: 8px 15px; font-size: 12px; color: #888; border-bottom: 1px solid #111; }
-  .xml_content {
-  margin: 0; 
-  padding: 20px; 
-  
-  /* 更新这里：改为你要求的蓝色 */
-  color: #31ABE3; 
-  
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 14px; 
-  line-height: 1.6; 
-  white-space: pre-wrap; 
-  word-break: break-all;
-  max-height: 60vh; 
-  overflow-y: auto;
-}
+.stat-card {
+  flex: 1;
+  background: var(--card, #111827);
+  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 0.2s;
+
+  &:hover {
+    border-color: rgba(49, 171, 227, 0.3);
+  }
 }
 
-.refresh_btn { background: #31ABE3; border: none; color: #fff; padding: 0 20px; border-radius: 4px; cursor: pointer; font-weight: bold; }
-.close_btn { background: #444; border: none; color: #fff; padding: 10px 25px; border-radius: 4px; cursor: pointer; &:hover { background: #555; } }
+.stat-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground, #7c8a9e);
 
-:deep(.el-dialog) { 
-  background: #151515 !important; 
-  .el-dialog__title { color: #31ABE3; font-weight: bold; }
-  .el-dialog__header { border-bottom: 1px solid #222; margin-right: 0; padding-bottom: 15px; }
+  .stat-icon {
+    font-size: 14px;
+    line-height: 1;
+  }
+}
+
+.stat-value {
+  font-family: 'Consolas', 'Fira Code', monospace;
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: 1px;
+
+  &--total {
+    color: #00fdfa;
+    text-shadow: 0 0 20px rgba(0, 253, 250, 0.2);
+  }
+
+  &--highrisk {
+    color: #ff4d4f;
+    text-shadow: 0 0 20px rgba(255, 77, 79, 0.2);
+  }
+}
+
+.stat-footer {
+  font-size: 10px;
+  color: var(--muted-foreground, #7c8a9e);
+  opacity: 0.5;
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.3px;
+}
+
+// ── Progress Section ──
+.progress-section {
+  flex: 1;
+  background: var(--card, #111827);
+  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border-radius: 8px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  transition: border-color 0.2s;
+
+  &:hover {
+    border-color: rgba(49, 171, 227, 0.3);
+  }
+}
+
+.progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.progress-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground, #d3d6dd);
+  letter-spacing: 0.5px;
+}
+
+.progress-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress-percent {
+  font-family: 'Consolas', 'Fira Code', monospace;
+  font-size: 20px;
+  font-weight: 800;
+  transition: color 0.3s;
+}
+
+.risk-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid;
+  letter-spacing: 0.5px;
+}
+
+// ── Progress Track ──
+.progress-track {
+  position: relative;
+  width: 100%;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  flex-shrink: 0;
+}
+
+.progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 1.2s cubic-bezier(0.4, 0, 0.2, 1), background 0.6s;
+  z-index: 2;
+}
+
+.progress-glow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  opacity: 0.08;
+  z-index: 1;
+}
+
+// ── Legend ──
+.progress-legend {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--muted-foreground, #7c8a9e);
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+// ── Action Bar ──
+.action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: rgba(49, 171, 227, 0.08);
+  border: 1px solid rgba(49, 171, 227, 0.2);
+  border-radius: 6px;
+  color: #31ABE3;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  user-select: none;
+  line-height: 1;
+
+  .nav-btn-icon {
+    font-size: 13px;
+    line-height: 1;
+  }
+
+  .nav-btn-arrow {
+    font-size: 14px;
+    transition: transform 0.25s ease;
+  }
+
+  &:hover {
+    background: rgba(49, 171, 227, 0.16);
+    border-color: rgba(49, 171, 227, 0.4);
+    box-shadow: 0 0 14px rgba(49, 171, 227, 0.08);
+    color: #00fdfa;
+
+    .nav-btn-arrow {
+      transform: translateX(3px);
+    }
+  }
+
+  &:active {
+    background: rgba(49, 171, 227, 0.22);
+    transform: scale(0.98);
+  }
+}
+
+// ── Update Bar ──
+.update-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.update-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #07f7a8;
+  animation: pulse-dot 2s ease-in-out infinite;
+
+  &--error {
+    background: #e3b337;
+  }
+}
+
+.update-text {
+  font-size: 10px;
+  color: var(--muted-foreground, #7c8a9e);
+  opacity: 0.4;
+  letter-spacing: 0.3px;
+}
+
+// ── Keyframes ──
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
 }
 </style>
