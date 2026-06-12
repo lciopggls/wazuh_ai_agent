@@ -17,7 +17,7 @@ from agents.rule_agent.nodes import (
 from agents.rule_agent.state import RuleGeneratorState
 
 
-def get_rule_agent(model: BaseChatModel,checkpointer=None):
+def get_rule_agent(model: BaseChatModel, checkpointer=None):
     """
     Creates the Rule Generator Agent Graph.
     Args:

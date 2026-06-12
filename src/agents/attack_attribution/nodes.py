@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, ToolMessage
@@ -519,7 +518,8 @@ intended query against this table before routing to Log_Retrieval_Node.
             else:
                 logger.warning(
                     "Retry attempt %d/%d: switching to non-streaming mode",
-                    attempt, MAX_RETRIES,
+                    attempt,
+                    MAX_RETRIES,
                 )
                 if hasattr(model, "model_copy"):
                     current_model = model.model_copy(update={"streaming": False})
@@ -546,7 +546,10 @@ intended query against this table before routing to Log_Retrieval_Node.
             if attempt < MAX_RETRIES:
                 logger.warning(
                     "RemoteProtocolError on attempt %d/%d, retrying in %ds: %s",
-                    attempt + 1, MAX_RETRIES + 1, RETRY_DELAY, e,
+                    attempt + 1,
+                    MAX_RETRIES + 1,
+                    RETRY_DELAY,
+                    e,
                 )
                 time.sleep(RETRY_DELAY)
             else:
@@ -1670,7 +1673,6 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
         return {"attack_abstract": None}
 
 
-
 def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
     """Node 11: Graph Filter Node"""
     logger.info("Executing Graph Filter Node: Reconstructing attack_graph_data from report...")
@@ -1935,7 +1937,9 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     ENTITY_LEGEND_WIDTH = ENTITY_LEGEND_ITEMS * LEGEND_ITEM_WIDTH + LEGEND_BOX_PAD  # 556
     ENTITY_LEGEND_LEFT_PAD = 8
     ENTITY_LEGEND_RIGHT_MARGIN = 32
-    ENTITY_LEGEND_SLOT = ENTITY_LEGEND_LEFT_PAD + ENTITY_LEGEND_WIDTH + ENTITY_LEGEND_RIGHT_MARGIN  # 596
+    ENTITY_LEGEND_SLOT = (
+        ENTITY_LEGEND_LEFT_PAD + ENTITY_LEGEND_WIDTH + ENTITY_LEGEND_RIGHT_MARGIN
+    )  # 596
     LEGEND_GAP = 40
 
     max_in_layer = max((len(v) for v in layer_groups.values()), default=1)
@@ -1944,14 +1948,10 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     # canvas width: must satisfy two constraints
     #   (a) all nodes fit horizontally
     #   (b) two legends sit side-by-side without overlapping
-    graph_width = (
-        max(layer_groups.keys()) * LAYER_GAP_X + NODE_WIDTH
-        if layer_groups else 0
-    )
+    graph_width = max(layer_groups.keys()) * LAYER_GAP_X + NODE_WIDTH if layer_groups else 0
     min_for_nodes = MARGIN * 2 + graph_width
     min_for_legends = (
-        BEHAVIOR_LEGEND_START + BEHAVIOR_LEGEND_WIDTH
-        + LEGEND_GAP + ENTITY_LEGEND_SLOT + MARGIN
+        BEHAVIOR_LEGEND_START + BEHAVIOR_LEGEND_WIDTH + LEGEND_GAP + ENTITY_LEGEND_SLOT + MARGIN
     )
     canvas_width = max(min_for_nodes, min_for_legends)
     canvas_height = max(400, body_height + LEGEND_H)
@@ -2021,11 +2021,11 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {canvas_width} {canvas_height}" width="100%" height="100%">'
     )
     lines.append("<style>")
-    lines.append(".legend-text { font-family: sans-serif; font-size: 10px; fill: #cbd5e1; }")
+    lines.append(".legend-text { font-family: sans-serif; font-size: 10px; fill: #334155; }")
     lines.append("</style>")
-    lines.append(f'<rect width="{canvas_width}" height="{canvas_height}" fill="#0f172a"/>')
+    lines.append(f'<rect width="{canvas_width}" height="{canvas_height}" fill="#f1f5f9"/>')
     lines.append(
-        f'<text x="{canvas_width // 2}" y="26" text-anchor="middle" font-size="15" font-weight="bold" fill="#e2e8f0" font-family="sans-serif">攻击实体关系图</text>'
+        f'<text x="{canvas_width // 2}" y="26" text-anchor="middle" font-size="15" font-weight="bold" fill="#0f172a" font-family="sans-serif">攻击实体关系图</text>'
     )
 
     # arrow markers (entity type arrows + relation type arrows)
@@ -2089,7 +2089,7 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         label = rel_labels.get(rel_type, rel_type)
         lx = (corner_x + tx) / 2
         edge_labels.append(
-            f'<text x="{lx}" y="{ty}" font-family="sans-serif" font-size="10" fill="#cbd5e1" stroke="#0f172a" stroke-width="4" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">{label}</text>'
+            f'<text x="{lx}" y="{ty}" font-family="sans-serif" font-size="10" fill="#334155" stroke="#f1f5f9" stroke-width="4" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">{label}</text>'
         )
 
     lines.extend(edge_paths)
@@ -2157,10 +2157,10 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     ent_box_w = ENTITY_LEGEND_WIDTH
     # entity legend: box + title first, then items
     lines.append(
-        f'<rect x="{ent_start_x - 8}" y="{legend_base_y}" width="{ent_box_w}" height="46" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>'
+        f'<rect x="{ent_start_x - 8}" y="{legend_base_y}" width="{ent_box_w}" height="46" rx="5" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>'
     )
     lines.append(
-        f'<text x="{ent_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#f8fafc" font-weight="bold" font-family="sans-serif">实体</text>'
+        f'<text x="{ent_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#0f172a" font-weight="bold" font-family="sans-serif">实体</text>'
     )
     for i, (key, label) in enumerate(ent_items):
         lx = ent_start_x + i * LEGEND_ITEM_WIDTH
@@ -2169,7 +2169,7 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
             f'<rect x="{lx}" y="{legend_base_y + 24}" width="14" height="14" rx="3" fill="{tc["bg"]}" stroke="{tc["border"]}" stroke-width="1.5"/>'
         )
         lines.append(
-            f'<text x="{lx + 19}" y="{legend_base_y + 35}" font-size="10" fill="#cbd5e1" font-family="sans-serif">{label}</text>'
+            f'<text x="{lx + 19}" y="{legend_base_y + 35}" font-size="10" fill="#334155" font-family="sans-serif">{label}</text>'
         )
 
     # behavior legend (left side)
@@ -2186,10 +2186,10 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     act_box_w = BEHAVIOR_LEGEND_WIDTH
     # behavior legend: box + title first, then items
     lines.append(
-        f'<rect x="{act_start_x - 8}" y="{legend_base_y}" width="{act_box_w}" height="46" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>'
+        f'<rect x="{act_start_x - 8}" y="{legend_base_y}" width="{act_box_w}" height="46" rx="5" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>'
     )
     lines.append(
-        f'<text x="{act_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#f8fafc" font-weight="bold" font-family="sans-serif">行为</text>'
+        f'<text x="{act_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#0f172a" font-weight="bold" font-family="sans-serif">行为</text>'
     )
     for i, (rel_type, label) in enumerate(act_items):
         lx = act_start_x + i * LEGEND_ITEM_WIDTH
@@ -2199,7 +2199,7 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
             f'<line x1="{lx}" y1="{legend_base_y + 31}" x2="{lx + 40}" y2="{legend_base_y + 31}" stroke="{color}" stroke-width="{sw}"{dash_attr}/>'
         )
         lines.append(
-            f'<text x="{lx + 48}" y="{legend_base_y + 35}" font-size="10" fill="#cbd5e1" font-family="sans-serif">{label}</text>'
+            f'<text x="{lx + 48}" y="{legend_base_y + 35}" font-size="10" fill="#334155" font-family="sans-serif">{label}</text>'
         )
 
     lines.append("</svg>")
