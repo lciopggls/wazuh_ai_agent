@@ -38,8 +38,11 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 CURRENT_DIR = Path(__file__).parent
-SKILL_FILE_PATH = (
-    CURRENT_DIR.parent.parent / "documents" / "skill" / "attribution_skills" / "report_format.md"
+# SKILL_FILE_PATH = (
+#     CURRENT_DIR.parent.parent / "documents" / "skill" / "attribution_skills" / "report_format.md"
+# )
+SKILL_FILE_PATH_CN = (
+    CURRENT_DIR.parent.parent / "documents" / "skill" / "attribution_skills" / "report_format_cn.md"
 )
 MITRE_KB_FILE_PATH = (
     CURRENT_DIR.parent.parent
@@ -1171,7 +1174,7 @@ def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseCh
     else:
         investigation_notes = "No detailed investigation notes found in the history."
 
-    skill_data = load_skill(SKILL_FILE_PATH)
+    skill_data = load_skill(SKILL_FILE_PATH_CN)
     format_rules = (
         skill_data.get("content")
         or "Please generate a structured and professional forensic report."
@@ -1199,17 +1202,42 @@ Your task is to take the raw investigation findings provided by the Forensic Det
 **CRITICAL RULE 3.5 (Process Tree Format)**: The process tree MUST be plain-text ASCII using `└──`/`├──`/`│`. **NO Mermaid, no code fences, no structured formats.** This overrides any default tendency to output Mermaid for tree structures.
 **CRITICAL RULE 4 (Zero-Loss Formatting - CRITICAL)**: You MUST preserve ALL granular technical evidence provided by the Detective. You are STRICTLY FORBIDDEN from summarizing or abstracting low-level details. You MUST seamlessly integrate exact technical parameters (e.g., hex codes, ports, registry paths), complete file paths/names, unredacted command-line arguments, and exact entity IDs (PIDs, IPs, Guids) into your professional narrative. Do NOT use vague generalizations like "accessed a process", "dropped malicious files", or "executed a script".
 **CRITICAL RULE 5 (KNOWLEDGE OVERRIDE & AUDIT - ABSOLUTE PRIORITY)**: The Forensic Detective's Investigation Notes represent preliminary analysis. They may occasionally misinterpret native OS behaviors, engine initializations, or benign system noise as malicious tactics. You act as the final QA Auditor. You MUST cross-reference all reported behaviors against the provided `MITRE TACTICS CONTEXT`. If the Detective's qualitative classification conflicts with the specific exclusions, false-positive warnings, or strict definitions outlined in the MITRE KB, the MITRE KB takes absolute precedence. You MUST autonomously correct any misclassifications and apply the MITRE KB's definitive judgment in your final report.
-**CRITICAL RULE 6 (RELEVANCE FILTER — CAUSAL CONNECTION TEST)**: The Investigation Notes may contain extraneous findings that were collected during the investigation but have NO causal relationship with the attack. Before including ANY process, event, or artifact in ANY section of the report (PROCESS EXECUTION TREE, ATTACK TIMELINE & EXECUTION FLOW, ATTACK ARTIFACTS, or SUMMARY), you MUST apply this strict causal connection test:
-  1. **Identify the core attack** from the `INITIAL TRIGGER`. The attack consists of the specific malicious actions the user described or simulated.
-  2. **For each candidate**: Ask "Is this causally part of the attack, OR merely a coincidental background event in the same time window?"
-  3. **How to verify causal links**: Use **ParentProcessId + Timestamp proximity** as the primary association method. However, in incomplete log scenarios, a process may be attack-related even without a direct `ParentProcessId` match if it shares the **same user context + close time window + consistent command pattern** with confirmed attack processes. In such cases, present it as a separate tree with an explanatory note.
-  4. **EXCLUDE (with extreme prejudice)**:
-     - Periodic/recurring scheduled tasks or WMI-triggered processes that have no causal link with the attack
-     - System services or background agents (e.g., WmiPrvSE, svchost, taskhostw) that spawn processes unrelated to the attack
-     - Processes with different parent trees that merely overlap temporally with the attack
-     - Any tree branch originating from a non-attack root (e.g., WmiPrvSE.exe → powershell.exe) when the attack originated from an interactive shell or a different parent process
-  5. **INCLUDE**: All artifacts directly in the causal lineage of the attack — processes, files, network connections, registry modifications, services, and account events. Do NOT exclude legitimate attack evidence simply because of its artifact type.
-  6. **APPLY THIS RULE UNIFORMLY**: This filter applies to the PROCESS EXECUTION TREE, ATTACK TIMELINE & EXECUTION FLOW, ATTACK ARTIFACTS & SOURCE, and SUMMARY & TAKEAWAYS sections. If an artifact is excluded by this rule, it MUST NOT appear anywhere in the report.
+**CRITICAL RULE 6 (ATTACK LOGIC MATCHING & ORPHAN FILTERING — ABSOLUTE PRIORITY)**:
+The report MUST only contain content causally linked to the trigger source defined in
+`INITIAL TRIGGER`. Before including ANY process, event, or artifact in ANY section of
+the report (PROCESS EXECUTION TREE, ATTACK TIMELINE & EXECUTION FLOW, ATTACK ARTIFACTS,
+or SUMMARY), you MUST apply the following causal connection test. If an artifact is
+excluded by this rule, it MUST NOT appear anywhere in the report.
+
+  1. **Identify the trigger source** from `INITIAL TRIGGER`: extract the specific
+     alerting process (name + PID if available), the compromised agent, and the
+     malicious behavior described. This is the root of the attack chain you are
+     investigating.
+
+  2. **For each candidate process/event**: verify it has a causal link to the trigger
+     source. A causal link is established by ANY of the following:
+     a) **Process lineage**: the candidate is an ancestor or descendant of the trigger
+        process via ParentProcessId chain.
+     b) **IPC interaction**: the candidate has documented process injection, process
+        access, or process tampering FROM or TO a trigger-chain process.
+     c) **Resource interaction**: the candidate operates on the SAME file path, SAME
+        registry key, or SAME network endpoint as a trigger-chain process.
+
+  3. **Orphan filtering — EXCLUDE (HARD)**. A process that fails ALL three causal tests
+     above is an orphan and MUST be excluded, along with all of its descendants.
+     Typical orphan patterns:
+     - explorer.exe 直接派生的孤立 PowerShell/Cmd 进程，与触发链无任何交互
+     - WmiPrvSE.exe / svchost.exe / taskhostw.exe 派生的独立进程，与触发链无交互
+     - 与触发链仅有时间重叠但无进程血缘、IPC、资源交互的独立执行流
+
+  4. **INCLUDE**:
+     - All processes/artifacts directly in the causal lineage of the trigger chain.
+     - In incomplete log scenarios, a process that shares the same user context + close
+       time window + consistent command pattern with confirmed trigger-chain processes
+       may be treated as "probably linked" and included with an explanatory note — do
+       NOT drop evidence due to log gaps.
+     - A causally-linked process with no children and no side effects is still valid
+       evidence — isolation does not make it an orphan.
 
 ### RESPONSE FORMAT (攻击溯源调查报告)
 {format_rules}
@@ -1688,6 +1716,7 @@ def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
         return {"attack_graph_data": None}
 
     final_report = state.get("final_report", "")
+    investigation_clue = state.get("investigation_clue", "")
 
     entity_list_str = json.dumps(
         [
@@ -1747,6 +1776,7 @@ def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
 1. **Report-first filtering**: The REPORT is the ground truth. Only keep entities and relations that are explicitly or implicitly described in the report. Drop anything not traceable to the report.
    - System noise (svchost.exe routine, RuntimeBroker.exe normal windows, explorer.exe benign) → REMOVE.
    - Internal-only infrastructure with no attack relevance → REMOVE.
+   - **Orphan check**: The `INVESTIGATION CLUE` below defines the attack's trigger source. Any entity that has NO relation path to a trigger-chain process and is not mentioned in the report → REMOVE. The report has already been filtered by causal relevance; use it as the authority.
    - When in doubt, KEEP.
 
 2. **Deduplication**: Merge duplicate entities that represent the same real-world object. For example, if file_2 and file_3 both point to the same file path, merge them into one entity and update all relations to use the surviving ID. Remove duplicate relations (same source, target, relation).
@@ -1782,6 +1812,7 @@ Example output:
 """
 
     human_prompt = (
+        "### INVESTIGATION CLUE (TRIGGER SOURCE)\n{investigation_clue}\n\n"
         "### CURRENT ENTITIES\n```json\n{entity_list}\n```\n\n"
         "### CURRENT RELATIONS\n```json\n{relation_list}\n```\n\n"
         "### ATTACK ATTRIBUTION REPORT (GROUND TRUTH)\n{report}\n\n"
@@ -1798,6 +1829,7 @@ Example output:
         chain = prompt_template | model
         result = chain.invoke(
             {
+                "investigation_clue": investigation_clue,
                 "entity_list": entity_list_str,
                 "relation_list": relation_list_str,
                 "report": final_report[:10000],
@@ -1869,6 +1901,24 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
             "messages": [AIMessage(content="[Attack Graph] 图谱数据为空。")],
         }
 
+    # --- remove orphan entities (no relation edges) ---
+    connected_ids: set[str] = set()
+    for rel in relations:
+        connected_ids.add(rel.get("source", ""))
+        connected_ids.add(rel.get("target", ""))
+    entities = [e for e in entities if e.get("id", "") in connected_ids]
+    relations = [
+        r
+        for r in relations
+        if r.get("source", "") in connected_ids and r.get("target", "") in connected_ids
+    ]
+
+    if not entities:
+        return {
+            "attack_graph": None,
+            "messages": [AIMessage(content="[Attack Graph] 所有实体均为孤立节点，无法生成攻击实体关系网状图。")],
+        }
+
     # --- build lookup & adjacency ---
     entity_map: dict[str, dict] = {e["id"]: e for e in entities}
     in_degree: dict[str, int] = {e["id"]: 0 for e in entities}
@@ -1907,11 +1957,32 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
                 queue.append(neighbor)
 
     # handle disconnected / cycle nodes
-    next_layer = max(layers.values()) + 1 if layers else 0
-    for eid in entity_map:
-        if eid not in layers:
-            layers[eid] = next_layer
-            next_layer += 1
+    # Use layered BFS on the residual graph so that nodes in the same
+    # dependency cycle stay in the same (or adjacent) layers instead of
+    # each being assigned its own layer.
+    remaining: set[str] = {eid for eid in entity_map if eid not in layers}
+    if remaining:
+        base_layer = max(layers.values()) + 1 if layers else 0
+        residual_indeg: dict[str, int] = {eid: 0 for eid in remaining}
+        for src, targets in adj.items():
+            if src in remaining:
+                for tgt in targets:
+                    if tgt in remaining:
+                        residual_indeg[tgt] = residual_indeg.get(tgt, 0) + 1
+        current_layer = base_layer
+        while remaining:
+            batch = {eid for eid in remaining if residual_indeg.get(eid, 0) == 0}
+            if not batch:
+                # true cycle — break by putting all remaining in the current layer
+                batch = set(remaining)
+            for eid in batch:
+                layers[eid] = current_layer
+                if eid in adj:
+                    for tgt in adj[eid]:
+                        if tgt in residual_indeg:
+                            residual_indeg[tgt] = max(0, residual_indeg[tgt] - 1)
+            remaining -= batch
+            current_layer += 1
 
     # --- group by layer ---
     layer_groups: dict[int, list[str]] = {}
