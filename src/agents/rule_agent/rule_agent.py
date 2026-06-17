@@ -8,6 +8,7 @@ from agents.rule_agent.nodes import (
     decision_node,
     environment_perception_node,
     log_retrieval_feasibility_node,
+    log_sample_processing_node,
     requirement_understanding_node,
     response_node,
     rule_generation_node,
@@ -40,6 +41,7 @@ def get_rule_agent(model: BaseChatModel, checkpointer=None):
     workflow.add_node("rule_generation", partial(rule_generation_node, model=model))
     workflow.add_node("rule_verification", partial(rule_verification_node, model=model))
     workflow.add_node("cleanup_rule", partial(cleanup_rule_node, model=model))
+    workflow.add_node("log_sample_processing", partial(log_sample_processing_node, model=model))
     workflow.add_node("response", partial(response_node, model=model))
 
     # Add edges
@@ -86,13 +88,25 @@ def get_rule_agent(model: BaseChatModel, checkpointer=None):
     def check_missing_params(state):
         if state.get("missing_parameters"):
             return "response"  # Ask user
+        if state.get("generated_rule"):
+            return "rule_generation"  # Skip S3 when modifying existing rule
+        if state.get("rule_requirements", {}).get("user_provided_full_log"):
+            return "log_sample_processing"  # User provided a log, skip ES search
         return "log_retrieval_feasibility"
 
     workflow.add_conditional_edges(
         "requirement_understanding",
         check_missing_params,
-        {"response": "response", "log_retrieval_feasibility": "log_retrieval_feasibility"},
+        {
+            "response": "response",
+            "log_retrieval_feasibility": "log_retrieval_feasibility",
+            "rule_generation": "rule_generation",
+            "log_sample_processing": "log_sample_processing",
+        },
     )
+
+    # Log Sample Processing -> Rule Generation (S4)
+    workflow.add_edge("log_sample_processing", "rule_generation")
 
     # Log Retrieval & Feasibility (S3)
     def check_feasibility(state):
