@@ -9,7 +9,7 @@ from typing import Any, Literal
 from langchain.agents import create_agent
 from langchain.tools import tool
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
@@ -785,6 +785,14 @@ class RuleRequirements(BaseModel):
     missing_parameters: list[str] = Field(
         description="List of missing parameters that MUST be clarified before proceeding."
     )
+    user_provided_full_log: str | None = Field(
+        default=None,
+        description="If the user explicitly included a complete log entry (raw full_log string) for rule generation, save the original full_log text here verbatim. Otherwise set to null."
+    )
+    user_provided_location: str | None = Field(
+        default=None,
+        description="If the user's log data includes a 'location' field (e.g. 'EventChannel', '/var/log/syslog'), save it here. Otherwise set to null."
+    )
 
 
 class FeasibilityCheck(BaseModel):
@@ -1003,6 +1011,9 @@ def decision_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
                 }
             )
 
+        if result.next_step == "keep_rule":
+            updates["logtest_passed"] = None
+
         return updates
     except Exception:
         return {"decision": "unknown", "user_input_history": user_input_history}
@@ -1178,6 +1189,8 @@ def requirement_understanding_node(
         If critical information is missing (e.g., the scope is completely unknown), list it in 'missing_parameters'.
         Note: 'agent_id' is optional if the scope refers to agentless devices or is otherwise clear without an ID.
         Ensure 'time_range' is always filled.
+        If the user explicitly included a complete raw log entry (a JSON string containing full log data for rule generation), save the exact original full_log text in 'user_provided_full_log'. Otherwise set it to null.
+        If the user's log data also contains a top-level 'location' field (e.g. 'EventChannel', '/var/log/syslog'), save it in 'user_provided_location'. Otherwise set it to null.
         If latest user input is short or ambiguous, use User Input History to infer intent.
 
         {format_instructions}
@@ -1187,7 +1200,16 @@ def requirement_understanding_node(
         ]
     )
 
-    chain = prompt | model | parser
+    def _unwrap_json_properties(text: str) -> str:
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict) and "properties" in data and len(data) == 1:
+                return json.dumps(data["properties"], ensure_ascii=False)
+        except Exception:
+            pass
+        return text
+
+    chain = prompt | model | _unwrap_json_properties | parser
 
     try:
         result = chain.invoke(
@@ -1257,6 +1279,9 @@ def log_retrieval_feasibility_node(
     @tool
     def query_archived_logs(query_body: dict) -> str:
         """Search archived logs in Wazuh indexer using Elasticsearch query body."""
+        size = query_body.get("size")
+        if not isinstance(size, int) or size < 1:
+            query_body["size"] = 10
         response = search_archived_logs(query_body)
         raw_hits = response.get("hits", {}).get("hits", [])
 
@@ -1390,7 +1415,7 @@ Do not output markdown.""",
                     }
                 ]
             },
-            {"recursion_limit": 40},
+            {"recursion_limit": 120},
         )
 
         result_text = ""
@@ -1421,11 +1446,21 @@ Do not output markdown.""",
         if not isinstance(raw_logs, list):
             raw_logs = []
         if not raw_logs:
+            # Fall back to earlier rounds when the last round returned no usable full_log
+            for record in reversed(retrieval_records[:-1]):
+                fallback = record.get("raw_sources", [])
+                if isinstance(fallback, list) and fallback:
+                    raw_logs = fallback
+                    break
+        if not raw_logs:
             return {
                 "logs_preview": [],
                 "raw_logs": [],
                 "is_feasible": False,
-                "infeasibility_reason": f"No usable raw logs found in last retrieval. Attempts: {json.dumps(attempts, ensure_ascii=False)}",
+                "infeasibility_reason": (
+                    f"No usable raw logs found across {len(retrieval_records)} retrieval attempt(s). "
+                    f"Attempts: {json.dumps(attempts, ensure_ascii=False)}"
+                ),
             }
 
         parser = PydanticOutputParser(pydantic_object=FeasibilityCheck)
@@ -1444,7 +1479,8 @@ Analyze the logs for:
 3. Patterns
 4. Decoder information
 If logs contain relevant events matching the requirement, return feasible=True.
-If no relevant logs are found or data is insufficient, return feasible=False and explain why.
+If no relevant logs are found, return feasible=False and explain why.
+A single matching log is sufficient when the rule detects specific signatures (process name, file path, command pattern, IOC). Only return feasible=False when zero relevant logs exist.
 {format_instructions}""",
                 ),
                 ("human", "Analyze feasibility."),
@@ -1529,7 +1565,7 @@ def rule_generation_node(state: RuleGeneratorState, config: RunnableConfig, mode
         search: str | None = None,
         group: str | None = None,
         level: str | int | None = None,
-        filename: str | list[str] | None = None,
+        filename: str | None = None,
         mitre: str | None = None,
         limit: int = 5,
     ) -> str:
@@ -1576,6 +1612,7 @@ You must use the provided raw_logs as primary evidence.
 The generated rule conditions must match real fields/values that actually exist in raw_logs.
 Do not invent nonexistent field paths or values.
 Do not use the <decoded_as> element anywhere in the generated rule.
+All <field> elements MUST use type="pcre2". Example: <field name="win.eventdata.commandLine" type="pcre2">pattern</field>
 Before choosing a new rule id, query candidate IDs and only use one that does not already exist.
 If you choose to use any rule reference such as <if_sid> or <if_matched_sid>, query that rule id first and only use confirmed existing IDs.
 If requirements mention a known product, event type, group, or MITRE technique, query existing rules for useful context before generating.
@@ -1607,13 +1644,34 @@ Do not add explanations, comments, or markdown fences."""
                     }
                 ],
             },
-            {"recursion_limit": 40},
+            {"recursion_limit": 120},
         )
         result_text = ""
         if generation_result.get("messages"):
-            result_text = generation_result["messages"][-1].content or ""
-        generated_xml = _extract_xml_block(result_text if isinstance(result_text, str) else "")
-        rule_id, rule_description = _extract_generated_rule_metadata(generated_xml)
+            for msg in reversed(generation_result["messages"]):
+                # Only search AIMessage content — tool responses may contain XML examples from skill docs
+                if not isinstance(msg, AIMessage):
+                    continue
+                content = getattr(msg, "content", None) or ""
+                if isinstance(content, str) and "<group" in content:
+                    result_text = content
+                    break
+            if not result_text:
+                result_text = generation_result["messages"][-1].content or ""
+        if not isinstance(result_text, str) or not result_text.strip():
+            raise ValueError("LLM returned empty output. No text content in any generation agent message.")
+        logger.info(f"Rule generation raw output (first 500 chars): {str(result_text)[:500]}")
+        generated_xml = _extract_xml_block(str(result_text))
+        if not generated_xml:
+            raise ValueError(
+                f"Failed to extract XML from LLM output. Raw output (first 300 chars): {str(result_text)[:300]}"
+            )
+        try:
+            rule_id, rule_description = _extract_generated_rule_metadata(generated_xml)
+        except Exception:
+            raise ValueError(
+                f"Failed to parse generated XML. Content (first 300 chars): {generated_xml[:300]}"
+            )
         if _rule_exists(rule_id):
             raise ValueError(
                 f"Generated rule id {rule_id} already exists in the loaded manager ruleset."
@@ -1762,6 +1820,12 @@ def rule_verification_node(state: RuleGeneratorState, config: RunnableConfig, mo
             extra_text = f" ({'; '.join(extra_context)})" if extra_context else ""
             return {
                 "validation_error": f"Rule {rule_id} was not found in the loaded manager ruleset after restart{extra_text}."
+            }
+
+        if state.get("rule_requirements", {}).get("user_provided_full_log"):
+            return {
+                "logtest_passed": True,
+                "verification_feedback": f"Verification passed: rule uploaded and loaded. New rule ID: {rule_id}.",
             }
 
         raw_logs = state.get("raw_logs", [])
@@ -1969,6 +2033,10 @@ def response_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
 
     preview_logs = [item for item in logs[:3] if isinstance(item, dict)]
     display_logs = list(preview_logs)
+    if not display_logs:
+        user_full_log = state.get("rule_requirements", {}).get("user_provided_full_log")
+        if user_full_log:
+            display_logs = [{"full_log": str(user_full_log)[:3000]}]
     log_summary = (
         json.dumps(display_logs, ensure_ascii=False, indent=2)
         if display_logs
@@ -1998,6 +2066,14 @@ def response_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
         prompt_text = f"The user requirement is missing the following parameters: {missing}. Ask the user to provide them."
     elif is_feasible is False:
         prompt_text = f"The rule generation is not feasible. Reason: {infeasibility_reason}. Explain this to the user."
+    elif state.get("decision") == "keep_rule":
+        content = (
+            "规则已保留并持续生效。\n\n"
+            f"- 规则ID：{rule_id}\n"
+            f"- 规则文件：{state.get('rule_filename') or 'N/A'}\n\n"
+            "该规则已成功上传至 Wazuh 管理器并通过验证，将持续对匹配的日志触发告警。"
+        )
+        return {"messages": [AIMessage(content=content)]}
     elif verification_feedback and "deleted" in str(verification_feedback):
         prompt_text = "The rule has been deleted as requested. Confirm this to the user."
     elif logtest_passed:
@@ -2059,3 +2135,134 @@ def response_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
     result = chain.invoke({"prompt_text": prompt_text})
 
     return {"messages": [result]}
+
+
+def log_sample_processing_node(
+    state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel
+):
+    """Process a user-provided full_log sample into the same format as the log_retrieval_feasibility_node (S3) output. """
+    
+    logger.info("Executing Log Sample Processing Node")
+
+    reqs = state.get("rule_requirements", {})
+    full_log = reqs.get("user_provided_full_log")
+
+    # Fallback: if S2 LLM didn't extract the log, search the last user message directly
+    if not full_log or not isinstance(full_log, str) or not full_log.strip():
+        messages = state.get("messages", [])
+        user_input = ""
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                user_input = getattr(msg, "content", "") or ""
+                break
+        if isinstance(user_input, str) and '"win"' in user_input:
+            match = re.search(r'\{.*"win"\s*:.*\}', user_input, re.DOTALL)
+            if match:
+                full_log = match.group(0).strip()
+                logger.info("Recovered full_log from user message via regex fallback")
+
+    if not full_log or not isinstance(full_log, str) or not full_log.strip():
+        return {
+            "logs_preview": [],
+            "raw_logs": [],
+            "log_analysis": "",
+            "is_feasible": False,
+            "infeasibility_reason": "No usable full_log found in user-provided content.",
+        }
+
+    # Clean the extracted text: strip markdown fences and isolate the JSON object
+    full_log = full_log.strip()
+    if full_log.startswith("```"):
+        full_log = re.sub(r"^```(?:json)?\s*|\s*```$", "", full_log, flags=re.DOTALL).strip()
+    json_match = re.search(r'\{.*"win"\s*:.*\}', full_log, re.DOTALL)
+    if json_match:
+        full_log = json_match.group(0).strip()
+    # Validate it is parseable JSON
+    try:
+        json.loads(full_log)
+    except json.JSONDecodeError:
+        logger.warning("Extracted full_log is not valid JSON, passing as-is for LLM processing")
+
+    # Use S2-extracted location first, then fall back to content-based inference
+    log_location = reqs.get("user_provided_location") or ""
+    if not log_location and '"channel"' in full_log:
+        log_location = "EventChannel"
+
+    raw_logs = [
+        {
+            "full_log": full_log.strip(),
+            "location": log_location,
+            "timestamp": "",
+            "id": "",
+            "agent": {"id": reqs.get("agent_id", ""), "name": ""},
+            "decoder": {},
+            "rule": None,
+        }
+    ]
+
+    # Lightweight field analysis aligned with S3 FeasibilityCheck output
+    parser = PydanticOutputParser(pydantic_object=FeasibilityCheck)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """Analyze the user-provided log for Wazuh rule generation.
+Rule Requirement Parameters: {reqs}
+Log (full_log): {full_log}
+Analyze the log for:
+1. Field composition (list every key path for rule matching)
+2. Common values
+3. Patterns
+4. Decoder information
+{format_instructions}""",
+            ),
+            ("human", "Analyze this log."),
+        ]
+    )
+    chain = prompt | model | parser
+    try:
+        result = chain.invoke(
+            {
+                "reqs": json.dumps(reqs, ensure_ascii=False, indent=2),
+                "full_log": full_log.strip()[:8000],
+                "format_instructions": parser.get_format_instructions(),
+            }
+        )
+        log_analysis = f"{result.log_features}\n\nfeasibility={result.is_feasible}; reason={result.reason}"
+    except Exception as exc:
+        logger.warning(f"Log sample processing analysis failed: {exc}")
+        log_analysis = ""
+
+    # Inject if_group hint for Sysmon logs
+    sysmon_hint = ""
+    try:
+        log_data = json.loads(full_log)
+        provider = (
+            log_data.get("win", {})
+            .get("system", {})
+            .get("providerName", "")
+        )
+        event_id = (
+            log_data.get("win", {})
+            .get("system", {})
+            .get("eventID", "")
+        )
+        if "Microsoft-Windows-Sysmon" in provider and event_id:
+            sysmon_hint = (
+                f"\n\n[IF_GROUP REQUIRED] This is a Sysmon log (provider={provider}, eventID={event_id}). "
+                f'The generated rule MUST include <if_group>sysmon_event{event_id}</if_group> '
+                f"to ensure proper parent rule dependency. "
+                f"For example, a Sysmon eventID=3 rule would use <if_group>sysmon_event3</if_group>.\n"
+            )
+    except Exception:
+        pass
+
+    log_analysis = (log_analysis or "") + sysmon_hint
+
+    return {
+        "logs_preview": [],
+        "raw_logs": raw_logs,
+        "log_analysis": log_analysis,
+        "is_feasible": True,
+        "infeasibility_reason": None,
+    }

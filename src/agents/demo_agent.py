@@ -6,7 +6,6 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from wazuh_api.server_api import get_agents_status_summary, get_wazuh_server_api_info
 
-
 system_prompt = """
 You are an AI agent interacting with Wazuh server API.
 """
@@ -28,10 +27,12 @@ def get_basic_info():
     )
 
 
-def get_demo_agent(model: BaseChatModel,checkpointer=None):
+def get_demo_agent(model: BaseChatModel, checkpointer=None):
     return create_agent(
-        model=model, tools=[get_basic_info, get_wazuh_agents_summary], system_prompt=system_prompt,
-        checkpointer=checkpointer
+        model=model,
+        tools=[get_basic_info, get_wazuh_agents_summary],
+        system_prompt=system_prompt,
+        checkpointer=checkpointer,
     )
 
 

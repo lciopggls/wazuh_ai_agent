@@ -1,30 +1,48 @@
 import json
 import logging
 import re
-from pathlib import Path
+import time
 from collections import deque
-from typing import Any, Literal
+from pathlib import Path
+from typing import Any
 
+import httpx
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel, Field
 
 from .log_retrieval_helper import get_archives_by_eventid, get_archives_by_keyword
 from .prompt import attribution_investigation_prompt_long
+from .schemas import (
+    AttackAbstractModel,
+    InitialClueAnalysis,
+    QueryIntent,
+    SynthesizedFindings,
+)
 from .state import AttributionPlannerActionCommand, AttributionState
-from .utils import extract_beijing_time_from_logs, load_mitre, load_skill
+from .utils import (
+    _fix_svg_viewbox_height,
+    eids_to_investigation,
+    extract_beijing_time_from_logs,
+    fp_target,
+    get_agents_identity,
+    load_mitre,
+    load_skill,
+)
 
 # from .utils import extract_agent_ip_mapping
 
 logger = logging.getLogger(__name__)
 
 CURRENT_DIR = Path(__file__).parent
-SKILL_FILE_PATH = (
-    CURRENT_DIR.parent.parent / "documents" / "skill" / "attribution_skills" / "report_format.md"
+# SKILL_FILE_PATH = (
+#     CURRENT_DIR.parent.parent / "documents" / "skill" / "attribution_skills" / "report_format.md"
+# )
+SKILL_FILE_PATH_CN = (
+    CURRENT_DIR.parent.parent / "documents" / "skill" / "attribution_skills" / "report_format_cn.md"
 )
 MITRE_KB_FILE_PATH = (
     CURRENT_DIR.parent.parent
@@ -33,136 +51,6 @@ MITRE_KB_FILE_PATH = (
     / "attribution_skills"
     / "mitre_knowledgebase.md"
 )
-
-
-class InitialClueAnalysis(BaseModel):
-    agent_id: str = Field(description="提取到的被攻击 Agent ID (如 '005')。若未找到则留空。")
-    start_time_utc8: str = Field(description="调查窗口的起始时间，ISO8601格式 (北京时间/UTC+8)。")
-    end_time_utc8: str = Field(description="调查窗口的结束时间，ISO8601格式 (北京时间/UTC+8)。")
-    refined_clue: str = Field(description="专业中文攻击线索描述（包含北京时间）。")
-
-
-class QueryIntent(BaseModel):
-    is_simple_query: bool = Field(
-        description="True if the user is only querying/searching/viewing logs without asking for attack analysis. "
-        "False if this is an attack investigation, attribution, or forensics request."
-    )
-
-
-class GraphEntity(BaseModel):
-    """攻击实体节点。"""
-
-    id: str = Field(
-        description=(
-            "Unique entity ID. Must follow the convention: "
-            "process → 'proc_<pid>' (e.g., 'proc_5324'), "
-            "file → 'file_<N>' (e.g., 'file_1'), "
-            "ip → 'ip_<address>' (e.g., 'ip_192.168.1.100'), "
-            "registry → 'reg_<N>' (e.g., 'reg_1'), "
-            "user_account → 'user_<name>' (e.g., 'user_Administrator'), "
-            "other → 'other_<N>' (e.g., 'other_1'). "
-            "N is a sequential integer starting from 1 per type."
-        )
-    )
-    type: Literal["process", "file", "ip", "registry", "user_account", "other"] = Field(
-        description="Entity type."
-    )
-    name: str = Field(description="Human-readable entity name, e.g., 'powershell.exe (PID: 5324)'.")
-    timestamp: str | None = Field(
-        default=None, description="First observed ISO8601 timestamp for this entity."
-    )
-    properties: dict = Field(
-        default_factory=dict,
-        description=(
-            "Type-specific key-value dict. "
-            "process: {pid (int), image (str), command_line (str|None)}. "
-            "file: {path (str)}. "
-            "ip: {address (str), port (int|None)}. "
-            "registry: {key_path (str), value_name (str|None)}. "
-            "user_account: {username (str), domain (str|None)}. "
-            "other: {} (empty). "
-            "Omit keys whose values are missing from the raw logs."
-        ),
-    )
-
-
-class GraphRelation(BaseModel):
-    """攻击实体间的关系边。"""
-
-    source: str = Field(description="Source entity ID (must match a GraphEntity.id).")
-    target: str = Field(description="Target entity ID (must match a GraphEntity.id).")
-    relation: Literal[
-        "create",
-        "modify",
-        "execute",
-        "communicate",
-        "authenticate",
-    ] = Field(
-        description=(
-            "Relationship type (simplified): "
-            "create = spawned child process OR created/wrote a file; "
-            "modify = modified a file OR modified a registry key; "
-            "execute = executed a file as process OR loaded a DLL OR injected into another process; "
-            "communicate = connected to network address OR DNS resolved to IP; "
-            "authenticate = process ran under a user account (credential use / privilege verification)."
-        )
-    )
-    timestamp: str | None = Field(
-        default=None, description="ISO8601 timestamp when the relationship was observed."
-    )
-
-
-class SynthesizedFindings(BaseModel):
-    task_description: str = Field(
-        description="Briefly restate the exact investigation instruction you are executing (e.g., 'Downward tracking of PID 10484 on Agent 005 for Process Creation'). DO NOT include any prefixes or markdown headers. Must be in Chinese."
-    )
-    detailed_findings: str = Field(
-        description="""A strict chronological timeline and factual summary of the events.
-        CRITICAL ZERO-LOSS RULE: You MUST embed all exact technical Evidence/IOCs directly into this narrative.
-        Whenever you mention an event, you MUST include its exact timestamp, exact PID, full absolute file path, unredacted command line, and any related IPs/Ports.
-
-        ### ANTI-HALLUCINATION PROTOCOL (CRITICAL) ###
-        1. GROUNDING RULE: You are STRICTLY FORBIDDEN from inventing, inferring, or generating ANY data (timestamps, PIDs, IPs, filenames, actions) that is not EXPLICITLY present in the provided Raw JSON Logs.
-        2. MISSING EVIDENCE RULE: If the Raw Logs do NOT contain the exact behavior requested in the instruction (e.g., the instruction asks for Process Creation, but logs only show File Creation), you MUST explicitly state the discrepancy.
-        3. NULL RESPONSE RULE: If the Raw Logs are empty, irrelevant, or insufficient to fulfill the instruction, you MUST output EXACTLY: "日志检索结果未包含符合预期的行为证据。发现的孤立事件为：[简述实际发现的内容]。" DO NOT fabricate a story.
-
-        ROLE BOUNDARY (CRITICAL): You are a Fact Extractor, NOT the final judge. DO NOT forcefully assign MITRE Tactic IDs unless explicitly supported by the 'MITRE Knowledge'. If in doubt, just describe the objective behavior.
-        FORMATTING RULE: You MUST strictly use the hierarchical Markdown template defined in the System Prompt (using ###, >, -, and ```cmd). Must be in Chinese. """
-    )
-    graph_entities: list[GraphEntity] = Field(
-        default_factory=list,
-        description="Structured attack graph entity nodes extracted from the raw logs. Include every distinct process, file, IP, registry key, and user account observed.",
-    )
-    graph_relations: list[GraphRelation] = Field(
-        default_factory=list,
-        description="Structured attack graph relationship edges linking entities. Every entity in graph_entities that acts as source or target of an observable behavior MUST have at least one relation.",
-    )
-
-
-class AttackAbstractModel(BaseModel):
-    """攻击调查概要结构，用于 attack_abstract_node 的 PydanticOutputParser 解析。"""
-
-    hosts: list[str] = Field(description="涉及的主机列表，格式：主机名（Agent ID）")
-    start_time: str = Field(description="攻击起始时间，如 '2024-05-20 10:15:00'")
-    end_time: str = Field(description="攻击结束时间，如 '2024-05-20 10:45:30'")
-    duration: str = Field(description="攻击持续时长，如 '0时30分30秒'")
-    ioc_files: list[str] = Field(
-        description="涉及的文件名IOC列表（含路径），无则空列表。排除明确的系统良性文件。"
-    )
-    ioc_domains: list[str] = Field(
-        description="涉及的域名/IP IOC列表，无则空列表。排除纯内网基础设施IP。"
-    )
-    ioc_processes: list[str] = Field(
-        description="涉及的恶意/被利用进程名IOC列表，含PID等关键上下文，无则空列表。"
-    )
-    tactics: list[str] = Field(
-        description=(
-            "涉及的ATT&CK战术阶段中文名列表，仅限以下12个："
-            "初始访问、执行、持久化、权限提升、防御规避、凭证访问、"
-            "发现、横向移动、收集、数据窃取、命令与控制、影响"
-        )
-    )
-    tactics_count: int = Field(description="涉及的不同战术阶段总数")
 
 
 """
@@ -507,27 +395,18 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
     # --- build query fingerprint history table ---
     if executed_queries:
         rows = [
-            "| # | Agent | Tool | Type/Keyword | Value | EventIDs | Time Range | Logs |",
-            "|---|-------|------|-------------|-------|----------|------------|------|",
+            "| # | Agent | Target | Investigation | Time Range | Logs |",
+            "|---|-------|--------|--------------|------------|------|",
         ]
         for i, q in enumerate(executed_queries, 1):
             agent = q.get("agent", "")
-            tool = q.get("tool", "")
+            target = q.get("target", "-")
+            investigation = q.get("investigation", "-")
             count = q.get("count", 0)
             start = q.get("start", "")
             end = q.get("end", "")
             time_range = f"{start}~{end}" if start or end else "-"
-            if tool == "by_keyword":
-                qtype = "KEYWORD"
-                qval = q.get("kw", "")
-                eids = "-"
-            else:
-                qtype = q.get("qtype", "")
-                qval = q.get("qval", "")
-                eids = ", ".join(q.get("eids", []))
-            rows.append(
-                f"| {i} | {agent} | {tool} | {qtype} | {qval} | {eids} | {time_range} | {count} |"
-            )
+            rows.append(f"| {i} | {agent} | {target} | {investigation} | {time_range} | {count} |")
         query_history = "\n".join(rows)
     else:
         query_history = "_No queries executed yet._"
@@ -551,7 +430,7 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
   - **How to instruct**: Explicitly mention the MITRE ATT&CK ID (e.g., T1059 or T1003.001) in your instruction.
   - **Rule 1 (Explicit SIEM Tags)**: Whenever you encounter a MITRE ATT&CK ID in a raw log's `rule.mitre.id` field, you MUST call this node using that ID, UNLESS it has already been queried.
   - **Rule 2 (Implicit Behaviors - CRITICAL)**: While SIEM labels provide a useful baseline, they can sometimes be incomplete or false positives. You MUST proactively analyze process names, command-line arguments, and systemic behaviors. Use your cybersecurity expertise to independently deduce the true underlying attack techniques and query this node for them, UNLESS they have already been queried.
-  - **Rule 3 (Deduplication & State Awareness - ABSOLUTE MANDATORY)**: Before routing to this node, you MUST check the **MITRE Knowledge Base** section at the bottom of this prompt. If the TID you intend to query is ALREADY listed there, you are STRICTLY FORBIDDEN from calling this node for that exact TID again.
+  - **Rule 3 (Deduplication & State Awareness - ABSOLUTE MANDATORY)**: Before routing to this node, you MUST check the **MITRE Knowledge Base** section in the CURRENT CASE CONTEXT section. If the TID you intend to query is ALREADY listed there, you are STRICTLY FORBIDDEN from calling this node for that exact TID again.
 """
 
     multi_host_instructions = ""
@@ -569,41 +448,53 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
     # """
 
     system_prompt = (
-        """You are an elite Cybersecurity Chief Attribution Planner.
-Your role is to orchestrate a complex attack forensics investigation. You do NOT query databases directly. Instead, you analyze the intelligence gathered so far and delegate specific tasks to specialized subordinate nodes.
+        """\
+You are an elite Cybersecurity Chief Attribution Planner.
+Your role is to orchestrate a complex attack forensics investigation. You do NOT query
+databases directly. Instead, you analyze the intelligence gathered so far and delegate
+specific tasks to specialized subordinate nodes.
 
 ## YOUR ARSENAL (TARGET NODES)
 - 'Log_Retrieval_Node': Routes to a specialized AI agent equipped with Wazuh API tools.
-  - **How to instruct**: Provide clear, natural language instructions detailing *what* you want to find. You MUST explicitly mention *the Agent ID* in your instruction.
-  - *Example*: "Investigate PID 6536 on Agent 005 for File Creation. Apply time range 2026-03-25T10:00:00Z to 2026-03-25T11:00:00Z."
-  - IMPORTANT: The Log_Retrieval_Node will execute exactly what you ask. It will NOT automatically translate IP addresses into Agent IDs for you.
-
+  - **How to instruct**: Provide clear, natural language instructions detailing *what* you
+    want to find. You MUST explicitly mention *the Agent ID* in your instruction.
+  - *Example*: "Investigate PID 6536 on Agent 005 for File Creation. Apply time range
+    2026-03-25T10:00:00Z to 2026-03-25T11:00:00Z."
+  - IMPORTANT: The Log_Retrieval_Node will execute exactly what you ask. It will NOT
+    automatically translate IP addresses into Agent IDs for you.
 - 'Reporter_Node': Routes to the reporting engine to close the case.
-  - When to use (STRICT EXHAUSTION TEST): You are STRICTLY FORBIDDEN from choosing this node until all applicable checks in the Attack Chain Completeness Verification (section 5) have been ATTEMPTED. The key word is ATTEMPTED — if a query returned no data, that dimension is exhausted and you can move on.
-  - **How to instruct**: Provide a brief narrative summary of the attack chain and key findings. This summary will be passed as context to the Reporter, which has its OWN strict report format template.
-  - **ABSOLUTE PROHIBITION**: You MUST NOT prescribe ANY output format, JSON schema, field names (e.g., "scenario_id", "attack_path", "timeline"), section structure, or markup requirements in your instruction. The Reporter automatically applies its own professional forensic report template. Prescribing a conflicting format will corrupt the final report.
-
-{mitre_instructions}
-{multi_host_instructions}
+  - When to use (STRICT EXHAUSTION TEST): You are STRICTLY FORBIDDEN from choosing this
+    node until all applicable checks in the Attack Chain Completeness Verification
+    (section 4) have been ATTEMPTED. The key word is ATTEMPTED — if a query returned no
+    data, that dimension is exhausted and you can move on.
+  - **How to instruct**: Provide a brief narrative summary of the attack chain and key
+    findings. This summary will be passed as context to the Reporter, which has its OWN
+    strict report format template.
+  - **ABSOLUTE PROHIBITION**: You MUST NOT prescribe ANY output format, JSON schema,
+    field names (e.g., "scenario_id", "attack_path", "timeline"), section structure, or
+    markup requirements in your instruction. The Reporter automatically applies its own
+    professional forensic report template. Prescribing a conflicting format will corrupt
+    the final report.
+{mitre_instructions}\
+{multi_host_instructions}\
 
 """
-        + attribution_investigation_prompt
-        + """
-
-### QUERY FINGERPRINT HISTORY (READ-ONLY — DO NOT REPEAT)
-
-Every query already executed against Wazuh Indexer is recorded below. Cross-check your intended query against this table before routing to Log_Retrieval_Node.
-
-{query_history}
-
+        + """\
 ### CURRENT CASE CONTEXT
-
 - **Default Start Time**: {default_start}
 - **Default End Time**: {default_end}
 - **MITRE Knowledge Base**:
-
 {kb_str}
 
+### QUERY FINGERPRINT HISTORY (READ-ONLY — DO NOT REPEAT)
+Every query already executed against Wazuh Indexer is recorded below. Cross-check your
+intended query against this table before routing to Log_Retrieval_Node.
+
+{query_history}
+
+"""
+        + attribution_investigation_prompt
+        + """\
 ### OUTPUT FORMAT
 {format_instructions}
 """
@@ -619,21 +510,57 @@ Every query already executed against Wazuh Indexer is recorded below. Cross-chec
     parser = PydanticOutputParser(pydantic_object=AttributionPlannerActionCommand)
     format_instructions = parser.get_format_instructions()
 
-    try:
-        llm_msg = (prompt | model).invoke(
-            {
-                "messages": messages,
-                "mitre_instructions": mitre_instructions,
-                "multi_host_instructions": multi_host_instructions,
-                "query_history": query_history,
-                "kb_str": kb_str,
-                "default_start": default_start,
-                "default_end": default_end,
-                "format_instructions": format_instructions,
-            }
-        )
+    MAX_RETRIES = 2
+    RETRY_DELAY = 2
 
-        raw_text = getattr(llm_msg, "content", str(llm_msg))
+    llm_msg = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            if attempt == 0:
+                current_model = model
+            else:
+                logger.warning(
+                    "Retry attempt %d/%d: switching to non-streaming mode",
+                    attempt,
+                    MAX_RETRIES,
+                )
+                if hasattr(model, "model_copy"):
+                    current_model = model.model_copy(update={"streaming": False})
+                else:
+                    import copy as _copy
+
+                    current_model = _copy.deepcopy(model)
+                    current_model.streaming = False
+
+            llm_msg = (prompt | current_model).invoke(
+                {
+                    "messages": messages,
+                    "mitre_instructions": mitre_instructions,
+                    "multi_host_instructions": multi_host_instructions,
+                    "query_history": query_history,
+                    "kb_str": kb_str,
+                    "default_start": default_start,
+                    "default_end": default_end,
+                    "format_instructions": format_instructions,
+                }
+            )
+            break
+        except httpx.RemoteProtocolError as e:
+            if attempt < MAX_RETRIES:
+                logger.warning(
+                    "RemoteProtocolError on attempt %d/%d, retrying in %ds: %s",
+                    attempt + 1,
+                    MAX_RETRIES + 1,
+                    RETRY_DELAY,
+                    e,
+                )
+                time.sleep(RETRY_DELAY)
+            else:
+                raise
+
+    raw_text = getattr(llm_msg, "content", str(llm_msg))
+
+    try:
 
         # 如果 raw_text 是 JSON 数组，只取第一个元素
         stripped = raw_text.strip()
@@ -694,7 +621,15 @@ Every query already executed against Wazuh Indexer is recorded below. Cross-chec
 
     except Exception as final_e:
         logger.error("Error in attribution planner node: %s", final_e)
-        return {"next_action_fromAttributionPlannerNode": None}
+        return {
+            "next_action_fromAttributionPlannerNode": None,
+            "messages": [
+                AIMessage(
+                    content="攻击溯源规划器执行失败，与 LLM 服务器的连接出现异常。请稍后重试。\n"
+                    f"错误详情：{final_e}"
+                )
+            ],
+        }
 
 
 def log_retrieval_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
@@ -715,41 +650,48 @@ def log_retrieval_node(state: AttributionState, config: RunnableConfig, model: B
     tools = [get_archives_by_keyword, get_archives_by_eventid]
 
     system_prompt = f"""You are an elite Data Access & API Agent for the Wazuh Indexer.
-Your primary role is to fetch precise security telemetry, logs, and forensic data using the provided tools. You act as the core data engine for other analytical agents and human users.
+Your primary role is to translate the Chief Planner's natural language investigation instructions into precise Wazuh API queries and fetch raw security telemetry.
 
-### TOOL SELECTION LOGIC (STRICT ADHERENCE):
-- **Scenario A: Generic Keyword Searches (STRICTLY NON-PROCESS QUERIES)**
-  If the instruction explicitly asks to search for a general text string, malicious filename, or IP address (e.g., "Search for mimikatz.exe"), you MUST call `get_archives_by_keyword`.
-  *ABSOLUTE BAN (CRITICAL)*: You are STRICTLY FORBIDDEN from executing `get_archives_by_keyword` if the instruction requests tracking a numerical `PID` or specific behavior like "File Drops".
+### BEHAVIOR → EVENT ID MAPPING (CRITICAL)
+The Planner will describe investigation targets in natural language (e.g., "child processes", "file drops", "DNS resolution"). You MUST map these descriptions to the correct `event_ids` using the table below. Choose ALL event_ids groups that match the Planner's described behaviors, but do NOT combine unrelated behaviors into a single call.
 
-- **Scenario B: Specific Behaviors, Process Trees, Registry activity & Lateral Activity**
-  If the instruction asks about process tracking, registry changes, or file actions, you MUST call `get_archives_by_eventid`.
-  - To find the execution details of a process itself (e.g., finding its creation log), use `query_type="PROCESS_ID"` and `event_ids=["1"]`.
-  - To find child processes spawned by a specific parent, use `query_type="PARENT_PROCESS_ID"` and `event_ids=["1"]`.
-  - To find lateral activities: Use relevant `event_ids` (Network Connection=["3","4624"], DLL Loading=["7"], Injection=["8","10"], File Creation=["11"], Registry Modification=["12","13","14"], Service Installation=["7045"], Identity & Privilege Auditing=["4722", "4724", "4732", "4738", "4798"].).
-  - **PATH Retry Rule (FILE & REGISTRY)**: If you execute a `FILE_PATH` or `REGISTRY_PATH` query using a full path and the tool returns a `search_feedback` error, you MUST automatically extract the last part of the path (the filename or the specific Key name) and execute a SECOND tool call using ONLY that fragment as the `query_value`.
+| Planner describes...                                 | event_ids | query_type hint (decide based on target entity) |
+|------------------------------------------------------|-----------|-------------------------------------------------|
+| Process creation — upward / ancestor / who created PID X | ["1"] | PROCESS_ID (PID), FILE_PATH, USER_ACCOUNT |
+| Process creation — downward / descendant / what PID X created | ["1"] | PARENT_PROCESS_ID (PID), FILE_PATH, USER_ACCOUNT |
+| Network connection, DNS resolution, network logon | ["3","22","4624"] | PID, IP_ADDRESS, PORT, FILE_PATH, USER_ACCOUNT |
+| File creation, DLL / module loads | ["7","11"] | PID, FILE_PATH, USER_ACCOUNT |
+| Process injection, process access, process tampering (memory) | ["8","10","25"] | PID, FILE_PATH, USER_ACCOUNT |
+| Registry key / value modification | ["12","13","14"] | PID, REGISTRY_PATH, FILE_PATH, USER_ACCOUNT |
+| Service installation | ["7045"] | SERVICE_NAME, FILE_PATH, USER_ACCOUNT |
+| Explicit credential logon (runas / PSRemote) | ["4648"] | PID, FILE_PATH, USER_ACCOUNT, IP_ADDRESS, LOGON_ID |
+| Special logon / privilege assignment | ["4672"] | LOGON_ID, SECURITY_ID, USER_ACCOUNT |
+| Account management, group membership, user auditing | ["4720","4722","4724","4725","4726","4728","4732","4738","4740","4798","4704","4719"] | USER_ACCOUNT, LOGON_ID, SECURITY_ID |
 
-### STRICT TOOL ISOLATION (NO FALLBACKS):
-- **NO KEYWORD FALLBACK FOR PIDs**: If the specific process tracking tools return 0 results or a `search_feedback` message for a PID, you MUST simply return that result to the Chief Planner. **DO NOT** attempt to "help" by falling back to `get_archives_by_keyword` to search the PID as a keyword.
+### TOOL SELECTION LOGIC
+- **Use `get_archives_by_eventid`** when the instruction mentions a specific PID, file path, IP, user account, registry path, service name, logon ID, SID, domain name, or any behavior from the mapping table above.
+  - The `query_type` parameter is a separate dimension from `event_ids`. Match `query_type` to the entity you are searching FOR (e.g., if searching BY a PID for file creation behavior, use `query_type="PROCESS_ID"` and `event_ids=["7","11"]`).
+  - For upward trace ("who created PID X"): `query_type="PROCESS_ID"`, `event_ids=["1"]`.
+  - For downward trace ("what did PID X create"): `query_type="PARENT_PROCESS_ID"`, `event_ids=["1"]`.
+- **Use `get_archives_by_keyword`** when the instruction asks to search for a raw text string, filename, or IP that does NOT map to any specific structured entity or behavior. Also use it as a fallback (see below).
 
+### AUTO-FALLBACK RULE (CRITICAL)
+If `get_archives_by_eventid` returns 0 results or a `search_feedback` message for a PID-based or file-path-based query, you MUST automatically attempt ONE fallback call using `get_archives_by_keyword` with the same PID or filename as the keyword. This catches cases where the relevant logs use non-standard field names or the target does not appear in the expected structured fields.
+- If the keyword fallback also returns 0 results, report the `search_feedback` and stop.
+- Do NOT perform more than ONE fallback call per Planner instruction.
+- Do NOT fall back to keyword if the original query already returned data — the auto-fallback is only for empty results.
 
-### API TRANSLATION RULES (CRITICAL)
-When translating the Planner's instructions into API calls, you MUST adhere to these field mappings for EventID=1 (Process Creation):
-1. **For 'Process Creation (Upward)'**: The Planner wants to know WHO created the target PID.
-   - You must search for the log where the target PID is the NEW process being born.
-   - Use `query_type="PROCESS_ID"` and pass the target PID. This returns the exact moment the process started, revealing its `parent_process_id` and `parent_image`.
-2. **For 'Process Creation (Downward)'**: The Planner wants to know WHAT the target PID created.
-   - You must search for logs where the target PID acted as the creator.
-   - You MUST use `query_type="PARENT_PROCESS_ID"` and pass the target PID. This will return all child processes spawned by it.
+### PATH RETRY RULE (FILE & REGISTRY)
+If you execute a `FILE_PATH` or `REGISTRY_PATH` query using a full path and the tool returns a `search_feedback` error, you MUST automatically extract the last part of the path (the filename or the specific Key name) and execute a SECOND tool call using ONLY that fragment as the `query_value`.
 
 ### DATA HANDLING & ROLE BOUNDARIES (CRITICAL):
 You are exclusively a raw data retrieval pipeline. You MUST adhere strictly to these constraints:
 1. **ZERO HALLUCINATION**: You MUST NOT generate, simulate, or mock any JSON data.
 2. **ZERO MODIFICATION**: When the tool returns the JSON logs, you MUST NOT summarize, filter, analyze, or explain them.
-3. **NO RETRIES ON EMPTY DATA (ABSOLUTE RULE)**: You are a single-shot execution agent (except for the FILE_PATH retry rule above).
-   - If `get_archives_by_eventid` returns a JSON indicating no logs were found (e.g., `{{"search_feedback": ...}}`), your job is DONE.
+3. **NO EXPANSIVE RETRIES**: Beyond the AUTO-FALLBACK and PATH RETRY rules above, you are a single-shot execution agent.
    - DO NOT remove or expand the time boundaries to search historical data.
-   - IMMEDIATELY stop thinking and output the exact `search_feedback` message.
+   - DO NOT retry with different `query_type` values unless covered by the AUTO-FALLBACK rule.
+   - If all attempts (eventid + keyword fallback) return no data, stop and report the `search_feedback`.
 4. **RESPONSE FORMAT**:
    - **If data is found**: Respond with a brief confirmation (e.g., "Data successfully retrieved and passed to the next node.") and immediately stop. Leave all analysis to the Information Synthesizer node.
    - **If no data is found**: Output the `search_feedback` message and stop. Leave the tactical pivot decisions to the Chief Planner.
@@ -757,7 +699,7 @@ You are exclusively a raw data retrieval pipeline. You MUST adhere strictly to t
 ### Query DEFAULT VALUES (CRITICAL):
 If the Planner's instruction does NOT explicitly include an Agent ID and/or a time range, you MUST use the following default values when calling tools:
 (CRITICAL OVERRIDE: The default times provided below are strictly in Beijing Time / UTC+8)
-- Default Agent ID: {default_agent}
+- Default Agent ID(s) (pass as list, e.g. ["{default_agent}"]): {default_agent}
 - Default Start Time: {default_start}
 - Default End Time: {default_end}
 """
@@ -823,18 +765,27 @@ If the Planner's instruction does NOT explicitly include an Agent ID and/or a ti
                     tool_name = tc_info["name"]
                     args = tc_info["args"]
 
+                    agent_arg = args.get("agent_id", "")
+                    if isinstance(agent_arg, list):
+                        agent_display = ",".join(agent_arg)
+                    else:
+                        agent_display = str(agent_arg) if agent_arg else ""
+
                     fp: dict[str, Any] = {
-                        "agent": args.get("agent_id", ""),
+                        "agent": agent_display,
                         "tool": "by_keyword" if "keyword" in tool_name else "by_eventid",
                         "count": log_count,
+                        "target": fp_target(tool_name, args),
                     }
 
                     if "keyword" in tool_name:
                         fp["kw"] = (args.get("keyword") or "")[:120]
+                        fp["investigation"] = "Keyword search"
                     else:
                         fp["qtype"] = args.get("query_type", "")
                         fp["qval"] = (args.get("query_value") or "")[:120]
                         fp["eids"] = args.get("event_ids", [])
+                        fp["investigation"] = eids_to_investigation(fp["eids"])
 
                     fp["start"] = (args.get("start_time") or "")[:25]
                     fp["end"] = (args.get("end_time") or "")[:25]
@@ -973,9 +924,11 @@ In addition to the narrative findings, you MUST populate `graph_entities` and `g
 **Relation types (STRICT — choose exactly one):**
 - `create` — spawned child process OR created/wrote a file (creating new entities)
 - `modify` — modified a file OR modified a registry key (tampering with existing state)
-- `execute` — executed file as process OR loaded a DLL OR injected into another process (in-memory payload operations)
+- `execute` — loaded a DLL OR injected into another process (in-memory payload operations, process→process only)
+- `instantiate` — static file was instantiated by the system loader into a running process (file→process only)
 - `communicate` — connected to network address OR DNS resolved to IP (network channel establishment)
 - `authenticate` — process ran under a user account (credential use / privilege verification)
+- `access` — process read/loaded/accessed a file as input data (e.g., encode/decode source, config file, data dump)
 
 **Entity type constraints per relation (CRITICAL — DO NOT violate):**
 Use the source entity's `type` and the target entity's `type` to choose the correct relation.
@@ -986,10 +939,11 @@ Use the source entity's `type` and the target entity's `type` to choose the corr
 | process | modify | file | modified a file |
 | process | modify | registry | modified a registry key |
 | process | execute | process | injected into / loaded DLL into another process |
-| file | execute | process | file was executed, spawning a process |
+| file | instantiate | process | file was instantiated by the system loader into a running process |
 | process | communicate | ip | connected to remote address |
 | ip | communicate | ip | DNS resolved to IP |
 | process | authenticate | user_account | ran under a user account |
+| process | access | file | read/loaded/accessed a file as input data |
 
 If the (source_type, target_type) pair does NOT match any row in the above table, DO NOT create a relation between those two entities. For example, process → file with `communicate` is INVALID — use `create` or `modify` instead.
 
@@ -1094,10 +1048,14 @@ You MUST structure the `detailed_findings` field using the following generalized
             "current_raw_logs": None,
             "next_action_fromDecisionNode": None,
             "next_action_fromAttributionPlannerNode": None,
-            "attack_graph_data": {
-                "entities": [e.model_dump() for e in graph_entities],
-                "relations": [r.model_dump() for r in graph_relations],
-            } if graph_entities or graph_relations else None,
+            "attack_graph_data": (
+                {
+                    "entities": [e.model_dump() for e in graph_entities],
+                    "relations": [r.model_dump() for r in graph_relations],
+                }
+                if graph_entities or graph_relations
+                else None
+            ),
             "messages": [AIMessage(content=summary)],
         }
 
@@ -1216,7 +1174,7 @@ def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseCh
     else:
         investigation_notes = "No detailed investigation notes found in the history."
 
-    skill_data = load_skill(SKILL_FILE_PATH)
+    skill_data = load_skill(SKILL_FILE_PATH_CN)
     format_rules = (
         skill_data.get("content")
         or "Please generate a structured and professional forensic report."
@@ -1241,8 +1199,45 @@ Your task is to take the raw investigation findings provided by the Forensic Det
 **CRITICAL RULE 1 (Language)**: You MUST generate the entire final report in Simplified Chinese (简体中文). Please translate the narrative and analysis into natural, professional Chinese cybersecurity terminology. However, you MUST keep exact entities (such as PIDs, IP addresses, exact filenames, ProcessGuids, and specific command-line arguments) in their original format.
 **CRITICAL RULE 2 (Factuality)**: You MUST NOT hallucinate, invent, or add any new facts or PIDs. Use ONLY the information provided in the Investigation Notes.
 **CRITICAL RULE 3 (Temporal Accuracy)**: You MUST NOT alter, format, or hallucinate any dates or timestamps. Copy the EXACT timestamps provided in the raw findings.
+**CRITICAL RULE 3.5 (Process Tree Format)**: The process tree MUST be plain-text ASCII using `└──`/`├──`/`│`. **NO Mermaid, no code fences, no structured formats.** This overrides any default tendency to output Mermaid for tree structures.
 **CRITICAL RULE 4 (Zero-Loss Formatting - CRITICAL)**: You MUST preserve ALL granular technical evidence provided by the Detective. You are STRICTLY FORBIDDEN from summarizing or abstracting low-level details. You MUST seamlessly integrate exact technical parameters (e.g., hex codes, ports, registry paths), complete file paths/names, unredacted command-line arguments, and exact entity IDs (PIDs, IPs, Guids) into your professional narrative. Do NOT use vague generalizations like "accessed a process", "dropped malicious files", or "executed a script".
 **CRITICAL RULE 5 (KNOWLEDGE OVERRIDE & AUDIT - ABSOLUTE PRIORITY)**: The Forensic Detective's Investigation Notes represent preliminary analysis. They may occasionally misinterpret native OS behaviors, engine initializations, or benign system noise as malicious tactics. You act as the final QA Auditor. You MUST cross-reference all reported behaviors against the provided `MITRE TACTICS CONTEXT`. If the Detective's qualitative classification conflicts with the specific exclusions, false-positive warnings, or strict definitions outlined in the MITRE KB, the MITRE KB takes absolute precedence. You MUST autonomously correct any misclassifications and apply the MITRE KB's definitive judgment in your final report.
+**CRITICAL RULE 6 (ATTACK LOGIC MATCHING & ORPHAN FILTERING — ABSOLUTE PRIORITY)**:
+The report MUST only contain content causally linked to the trigger source defined in
+`INITIAL TRIGGER`. Before including ANY process, event, or artifact in ANY section of
+the report (PROCESS EXECUTION TREE, ATTACK TIMELINE & EXECUTION FLOW, ATTACK ARTIFACTS,
+or SUMMARY), you MUST apply the following causal connection test. If an artifact is
+excluded by this rule, it MUST NOT appear anywhere in the report.
+
+  1. **Identify the trigger source** from `INITIAL TRIGGER`: extract the specific
+     alerting process (name + PID if available), the compromised agent, and the
+     malicious behavior described. This is the root of the attack chain you are
+     investigating.
+
+  2. **For each candidate process/event**: verify it has a causal link to the trigger
+     source. A causal link is established by ANY of the following:
+     a) **Process lineage**: the candidate is an ancestor or descendant of the trigger
+        process via ParentProcessId chain.
+     b) **IPC interaction**: the candidate has documented process injection, process
+        access, or process tampering FROM or TO a trigger-chain process.
+     c) **Resource interaction**: the candidate operates on the SAME file path, SAME
+        registry key, or SAME network endpoint as a trigger-chain process.
+
+  3. **Orphan filtering — EXCLUDE (HARD)**. A process that fails ALL three causal tests
+     above is an orphan and MUST be excluded, along with all of its descendants.
+     Typical orphan patterns:
+     - explorer.exe 直接派生的孤立 PowerShell/Cmd 进程，与触发链无任何交互
+     - WmiPrvSE.exe / svchost.exe / taskhostw.exe 派生的独立进程，与触发链无交互
+     - 与触发链仅有时间重叠但无进程血缘、IPC、资源交互的独立执行流
+
+  4. **INCLUDE**:
+     - All processes/artifacts directly in the causal lineage of the trigger chain.
+     - In incomplete log scenarios, a process that shares the same user context + close
+       time window + consistent command pattern with confirmed trigger-chain processes
+       may be treated as "probably linked" and included with an explanatory note — do
+       NOT drop evidence due to log gaps.
+     - A causally-linked process with no children and no side effects is still valid
+       evidence — isolation does not make it an orphan.
 
 ### RESPONSE FORMAT (攻击溯源调查报告)
 {format_rules}
@@ -1365,14 +1360,25 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
 **Instructions:**
 1. **Extract Core Elements (Zero-Loss Formatting):** Parse the input text and extract the exact Timestamp, MITRE ATT&CK T-code (e.g., T1059.003), executing process, and the specific malicious action. Preserve all technical indicators (PIDs, paths, arguments) perfectly.
 2. **MITRE Tag Format:** ALWAYS use the format `[T-code / English Technique]`. Example: `[T1059.003 / Windows Command Shell]`. The MITRE tag MUST be placed on its own line BELOW the timestamp line, NOT on the same line as the timestamp.
-3. **SVG Structure & Canvas:** Create a standalone `<svg>` tag with `xmlns="http://www.w3.org/2000/svg"`, setting `viewBox="0 0 1000 dynamically_calculated_height"`. The height MUST be calculated as `(事件数 * 240) + 100` so that the canvas is tall enough to display all events without truncation even when the event count is large.
-4. **Vertical Timeline Layout:** Draw a vertical connecting line down the left side (at `x="50"`). For each event, increment the `y` coordinate by 240.
-5. **Text Wrapping (CRITICAL):** Because standard SVG `<text>` does not support auto-wrapping, you MUST use `<foreignObject>` to render the text boxes. Inside `<foreignObject>`, use HTML `<div xmlns="http://www.w3.org/1999/xhtml">` with inline CSS for styling and `word-wrap: break-word`.
+3. **SVG Structure & Canvas (CRITICAL — DYNAMIC HEIGHT):**
+   - Create a `<svg>` tag with `xmlns="http://www.w3.org/2000/svg"` and `viewBox="0 0 1000 DYNAMIC_TOTAL_HEIGHT"`.
+   - **HEIGHT CALCULATION (STEP BY STEP):**
+     a) For EACH event, estimate its content depth first:
+        - Count how many distinct text blocks it has (timestamp line, MITRE tag line, description paragraph, command-line code block, etc.).
+        - For each additional code block or wrapped long line beyond the basic 3 (timestamp + MITRE + description), add 35px of extra height.
+        - Each event height = **90 + (extra_blocks * 35) + 20 padding**. Minimum 130px per event.
+     b) Y position: **DO NOT use a fixed increment.** Start at `y = 50` for the first event. For event N, `y = previous_event_y + previous_event_height + 30 (gap)`.
+     c) After placing all events, compute `total_height = last_event_y + last_event_height + 80 (bottom margin)`.
+     d) Set `viewBox="0 0 1000 {{total_height}}"`.
+     e) Extend the timeline line (`y2`) to `last_event_center_y + (last_event_height / 2) + 20`.
+4. **Vertical Timeline Layout:** Draw a vertical connecting line at `x="50"`. Place a circle at each event's center Y. Position `foreignObject` at `x="80"`.
+5. **Text Wrapping:** Use `<foreignObject>` with `<div xmlns="http://www.w3.org/1999/xhtml">`. Do NOT set a fixed `height` on the foreignObject — let it expand naturally, or set `height` equal to your estimated event height. Do NOT use `overflow: hidden` or `overflow-y: auto` on the div.
 6. **Visual Styling:**
     - Standard events: light blue/gray borders and backgrounds.
     - Malicious events: light red backgrounds and red borders.
     Apply the malicious style to nodes representing explicit malicious actions, payload downloads, or credential dumping.
 7. **Output Format:** Output strictly the raw `<svg>...</svg>` XML code block.
+8. **FINAL CHECK (CRITICAL):** After generating the SVG, verify: the bottom of the LAST event's foreignObject + 80px margin MUST be ≤ viewBox height. If it exceeds, increase the viewBox height accordingly before outputting.
 
 **Example Input (ATTACK TIMELINE & EXECUTION FLOW):**
 - **[2026-04-27 14:52:23.194]** - **[Execution / T1059.003]**: powershell.exe (PID: 5324) 创建 cmd.exe (PID: 5508)，触发告警。命令行: cmd.exe /c C:\\AtomicRedTeam\\atomics\\..\\ExternalPayloads\\nanodump.x64.exe --silent-process-exit "%temp%\\SilentProcessExit"
@@ -1380,7 +1386,7 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
 
 **Example Output:**
 ```xml
-<svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" viewBox="0 0 1000 580" width="100%" height="100%">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 580" width="100%" height="100%">
     <style>
         .timeline-line {{ stroke: #cbd5e1; stroke-width: 4px; }}
         .node-dot {{ fill: #3b82f6; stroke: #fff; stroke-width: 2px; }}
@@ -1391,10 +1397,10 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
     <text x="50" y="30" class="title">ATTACK TIMELINE &amp; EXECUTION FLOW</text>
     <line x1="50" y1="50" x2="50" y2="560" class="timeline-line" />
 
-    <!-- Event 1 (Default) -->
-    <circle cx="50" cy="90" r="8" class="node-dot" />
+    <!-- Event 1 — 4 text blocks (timestamp + MITRE + desc + cmdline) → 90+35+20=145, use 180 -->
+    <circle cx="50" cy="140" r="8" class="node-dot" />
     <foreignObject x="80" y="50" width="850" height="180">
-        <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow-y: auto;">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box;">
             <div style="margin-bottom: 6px;">
                 <span style="font-family: monospace; color: #64748b; font-size: 13px;">[2026-04-27 14:52:23.194]</span>
             </div>
@@ -1402,14 +1408,15 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
                 <strong style="color: #0f172a; font-size: 14px;">[T1059.003 / Windows Command Shell]</strong>
             </div>
             <div style="font-size: 14px; color: #334155; margin-bottom: 6px; line-height: 1.4;">powershell.exe (PID: 5324) 创建 cmd.exe (PID: 5508)，触发告警。</div>
-            <div style="font-family: monospace; font-size: 12px; color: #64748b; word-wrap: break-word; background: #e2e8f0; padding: 4px 8px; border-radius: 4px;">命令行: cmd.exe /c C:\\AtomicRedTeam\atomics\\..\\ExternalPayloads\nanodump.x64.exe --silent-process-exit "%temp%\\SilentProcessExit"</div>
+            <div style="font-family: monospace; font-size: 12px; color: #64748b; word-wrap: break-word; background: #e2e8f0; padding: 4px 8px; border-radius: 4px;">命令行: cmd.exe /c C:\\AtomicRedTeam\\atomics\\..\\ExternalPayloads\\nanodump.x64.exe --silent-process-exit "%temp%\\SilentProcessExit"</div>
         </div>
     </foreignObject>
 
-    <!-- Event 2 (Malicious) -->
-    <circle cx="50" cy="330" r="8" class="node-dot-malicious" />
-    <foreignObject x="80" y="290" width="850" height="180">
-        <div xmlns="[http://www.w3.org/1999/xhtml](http://www.w3.org/1999/xhtml)" style="border: 2px solid #ef4444; background: #fee2e2; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box; height: 100%; overflow-y: auto;">
+    <!-- Event 2 — 3 text blocks (timestamp + MITRE + desc) → 90+0+20=110, use 130 -->
+    <!-- Y = 50 + 180 + 30 = 260 -->
+    <circle cx="50" cy="325" r="8" class="node-dot-malicious" />
+    <foreignObject x="80" y="260" width="850" height="130">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="border: 2px solid #ef4444; background: #fee2e2; border-radius: 6px; padding: 12px; font-family: sans-serif; box-sizing: border-box;">
             <div style="margin-bottom: 6px;">
                 <span style="font-family: monospace; color: #64748b; font-size: 13px;">[2026-04-27 14:52:23.195]</span>
             </div>
@@ -1452,14 +1459,15 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
                 r"^```(?:xml|svg|html)?\n|\n```$", "", raw_content.strip(), flags=re.MULTILINE
             )
 
+        # --- post-process: fix viewBox height to prevent truncation ---
+        svg_code = _fix_svg_viewbox_height(svg_code)
+
         logger.info("SVG chart generated successfully.")
 
         return {
             "svg_chart": svg_code,
             "messages": [
-                AIMessage(
-                    content=f"攻击链路可视化视图(SVG)已生成：\n\n```xml\n{svg_code}\n```"
-                )
+                AIMessage(content=f"攻击链路可视化视图(SVG)已生成：\n\n```xml\n{svg_code}\n```")
             ],
         }
 
@@ -1469,28 +1477,60 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
 
 
 def simple_log_query_node(state: AttributionState, config: RunnableConfig, model: BaseChatModel):
-    """Node 9: Simple log query node — directly queries Wazuh indexer and returns raw results
-    without going through the full attribution pipeline.
+    """Node 9: 简单日志查询节点 — 直接查询 Wazuh Indexer 中的日志并返回原始结果。
 
-    Designed for user requests like:
+    适用于用户请求如：
     - "查询agent001最近1天与文件abc.txt相关的日志"
     - "搜索agent005包含mimikatz关键词的日志"
     - "查看agent003最近24小时的进程创建日志"
+
+    日志数据直接从 ToolMessage 提取，不经过 LLM 输出，避免模型输出截断。
+    截断在日志条目边界进行，确保返回的每条日志都是完整的。
     """
     logger.info("Executing Simple Log Query Node")
+
+    # 简单日志查询默认最大条数
+    MAX_RAW_LOGS = 10
 
     messages = state.get("messages", [])
     user_input = messages[-1].content if messages else ""
 
+    # 获取 Agent 身份映射，用于将用户的主机名/IP 指代自动转换为 agent_id
+    agent_identities = get_agents_identity()
+    agent_identity_json = (
+        json.dumps(agent_identities, ensure_ascii=False, indent=2) if agent_identities else "[]"
+    )
+
     tools = [get_archives_by_keyword, get_archives_by_eventid]
 
-    system_prompt = """你是 Wazuh 日志查询助手。将用户的自然语言查询翻译为合适的工具调用并返回原始结果。
+    system_prompt = f"""你是 Wazuh 日志查询助手。将用户的自然语言查询翻译为合适的工具调用。
 
 工具的详细参数说明请参考各工具自身的文档，以下是工具文档未涵盖的补充规则。
 
+### Agent 身份映射表（CRITICAL）
+当用户使用主机名、IP 地址、连接状态或操作系统指代 Agent 时，你必须使用下表将用户描述转换为对应的 agent_id：
+```json
+{agent_identity_json}
+```
+
+字段说明：
+- id: Agent 编号（工具调用的 agent_id 参数使用此值）
+- name: 主机名
+- ip: IP 地址
+- status: 连接状态 — "active"=在线，"disconnected"=离线
+- os_platform: 操作系统平台（"ubuntu"、"windows" 等）
+
+转换规则：
+- 用户提到主机名（如 "win10"）→ 在表中查找 name 字段，使用该行的 id 作为 agent_id；支持模糊匹配（如 "win10" 可匹配 "win10" 或 "win10_node2"），选最匹配的行
+- 用户提到 IP 地址（如 "192.168.109.1"）→ 在表中查找 ip 字段，使用该行的 id 作为 agent_id
+- 用户提到状态（如 "在线的"、"离线的"、"active"、"disconnected"）→ 筛选 status 匹配的行，取这些行的 id 列表
+- 用户进行组合条件查询时（如 "在线的 win"、"Ubuntu 离线机器"）→ 对不同条件各自查询匹配的结果取交集，交集为空则告知用户无匹配的 Agent
+- 用户已明确给出 agent_id（如 "agent005"、"agent_005" 或 "005"）→ 直接使用该 id（去掉前缀 "agent" 或 "agent_"），无需查表
+- 如果查到的 Agent status 为 "disconnected"，在回复中告知用户该 Agent 当前离线，查到的是历史日志
+
 时间表达式转换（CRITICAL）：
 - 工具同时支持相对时间和绝对时间两种格式，优先使用相对时间
-- "最近1天"/"最近24小时" → start_time="now-1d", end_time="now"
+- "今天"/"最近1天"/"最近24小时" → start_time="now-1d", end_time="now"
 - "最近3天" → start_time="now-3d", end_time="now"
 - "最近1周"/"最近7天" → start_time="now-7d", end_time="now"
 - 默认时区与年份（用户未明确说明时自动应用）：
@@ -1501,7 +1541,7 @@ def simple_log_query_node(state: AttributionState, config: RunnableConfig, model
 - 用户明确给出时区或年份时，以用户为准
 
 工具选择策略：
-- 用户提到具体文件名、路径、进程名、PID、IP、端口、服务名、用户名、注册表路径等结构化字段 → 用 get_archives_by_eventid，query_type 按如下映射：
+- 用户提到具体文件名、路径、进程名、PID、IP、端口、服务名、用户名、注册表路径、域名等结构化字段 → 用 get_archives_by_eventid，query_type 按如下映射：
   · 文件路径/文件名 → FILE_PATH
   · 进程 PID（查该进程自身）→ PROCESS_ID；查某进程的子进程 → PARENT_PROCESS_ID
   · IP 地址 → IP_ADDRESS
@@ -1511,15 +1551,18 @@ def simple_log_query_node(state: AttributionState, config: RunnableConfig, model
   · 注册表路径 → REGISTRY_PATH
   · 登录会话 ID → LOGON_ID
   · 安全标识符 SID → SECURITY_ID
+  · 域名/DNS 查询 → DNS_QUERY
 - 用户只描述了行为类型但未给出具体值 → 用 get_archives_by_eventid，仅传 event_ids，不传 query_type/query_value
-  例："查文件创建的日志" → event_ids=["11"], 不传 query_type
-  例："查最近1天agent001的网络连接日志" → event_ids=["3","4624"], 不传 query_type
+  例："查文件创建的日志" → event_ids=["7","11"], 不传 query_type
+  例："查最近1天agent001的网络连接日志" → event_ids=["3","22","4624"], 不传 query_type
+  例："查DNS查询日志" → event_ids=["22"], 不传 query_type
 - 用户仅描述通用关键词（无明确结构化字段也无行为类型）→ 用 get_archives_by_keyword
 
-响应格式（CRITICAL — 严禁修改日志内容）：
-- 查询到日志时：先用一行中文标注查询条件与返回条数，然后**完整、逐字地输出工具返回的原始 JSON**。禁止对 JSON 做任何修改、截断、格式化、提取字段或总结。漏掉任何一条日志、任何一个字段都视为违规
-- 无结果时：如实告知，建议扩大时间范围或调整关键词
-- 禁止使用 Markdown 表格或其他结构化方式重新排版日志内容"""
+日志完整性（CRITICAL）：
+- 调用 get_archives_by_keyword 和 get_archives_by_eventid 时，**必须传 simplify=False**，以获取完整的原始日志字段，不得精简
+
+响应格式：
+- 只需用一行中文简要确认已执行的操作（如"已查询 agent001 最近 1 天的文件创建日志"），无需输出日志内容本身（日志内容将由系统自动拼接）"""
 
     agent = create_agent(model, tools, system_prompt=system_prompt)
 
@@ -1532,16 +1575,52 @@ def simple_log_query_node(state: AttributionState, config: RunnableConfig, model
             "next_action_fromDecisionNode": None,
         }
 
-    reply = ""
+    # 直接从 ToolMessage 提取日志数据，绕过 LLM 输出 token 限制
+    raw_logs: list[dict] = []
+    search_feedback: list[str] = []
+
+    for msg in result.get("messages", []):
+        if isinstance(msg, ToolMessage):
+            try:
+                parsed = json.loads(msg.content)
+                if isinstance(parsed, list):
+                    raw_logs.extend(parsed)
+                elif isinstance(parsed, dict) and "search_feedback" not in parsed:
+                    raw_logs.append(parsed)
+                elif isinstance(parsed, dict) and "search_feedback" in parsed:
+                    search_feedback.append(parsed["search_feedback"])
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse ToolMessage content as JSON")
+
+    # 提取 Agent 的确认语句
+    agent_summary = ""
     for msg in reversed(result.get("messages", [])):
-        if getattr(msg, "type", "") == "ai":
+        if isinstance(msg, AIMessage):
             content = getattr(msg, "content", "")
             if isinstance(content, str) and content.strip():
-                reply = content.strip()
+                agent_summary = content.strip()
                 break
 
+    # 组装最终响应
+    if raw_logs:
+        total = len(raw_logs)
+        shown = raw_logs[:MAX_RAW_LOGS]
+        lines = [f"查询完成，共返回 {total} 条日志。"]
+        if total > MAX_RAW_LOGS:
+            lines.append(
+                f"（由于日志较长，仅展示最近 {MAX_RAW_LOGS} 条完整日志，省略 {total - MAX_RAW_LOGS} 条）"
+            )
+        lines.append("")
+        lines.append(json.dumps(shown, ensure_ascii=False, indent=2))
+        reply = "\n".join(lines)
+    elif search_feedback:
+        feedback_text = "; ".join(search_feedback)
+        reply = f"查询未返回匹配日志。\n详细信息：{feedback_text}\n建议扩大时间范围或调整查询条件。"
+    else:
+        reply = agent_summary or "日志查询未返回结果。"
+
     return {
-        "messages": [AIMessage(content=reply or "日志查询未返回结果。")],
+        "messages": [AIMessage(content=reply)],
         "next_action_fromDecisionNode": None,
     }
 
@@ -1622,171 +1701,8 @@ def attack_abstract_node(state: AttributionState, config: RunnableConfig, model)
         return {"attack_abstract": None}
 
 
-# def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
-#     """Node 11: Attack Graph Node — 生成攻击实体关系网状Mermaid图。"""
-#     logger.info("Executing Attack Graph Node: Generating entity relationship graph (Mermaid)...")
-# 
-#     final_report = state.get("final_report")
-#     if not final_report:
-#         logger.warning("No final report found. Skipping attack graph generation.")
-#         return {
-#             "attack_graph": None,
-#             "messages": [AIMessage(content="[Attack Graph] 缺少最终报告，无法生成攻击实体关系图。")],
-#         }
-# 
-#     graph_system_prompt = """You are a Cybersecurity Graph Visualization Agent. Your sole objective is to convert the entire upstream forensic report into a **Mermaid graph** (flowchart LR) showing attack entity relationships.
-# 
-# Output **Mermaid flowchart LR** syntax. Use the `graph LR` directive so nodes flow left-to-right chronologically.
-# 
-# ---
-# 
-# ### MERMAID FORMAT
-# 
-# Output a `graph LR` flowchart. Use Mermaid's native syntax.
-# 
-# **Node format:** `A["name PID:xxx<br/>Txxxx Technique Name"]` — entity name + key info before `<br/>`, MITRE ID + English technique name after.
-# **Edge format:** `A -->|中文标签| B` — labels MUST be in Chinese: 创建进程, 写入文件, 连接, 修改注册表, 注入, 加载DLL, 执行
-# 
-# Parse the report and classify every entity into one of these Mermaid node styles:
-# 
-# - **PROCESS (malicious)**: use `:::red` class
-# - **FILE**: use `:::orange` class
-# - **NETWORK**: use `:::blue` class
-# - **REGISTRY**: use `:::green` class
-# - **NOISE** (any entity judged benign/system noise): use `:::noise` class, gray styling
-# 
-# Define classes once at the bottom:
-# ```
-# classDef red fill:#fee2e2,stroke:#ef4444,color:#991b1b,stroke-width:2px
-# classDef orange fill:#fff7ed,stroke:#f97316,color:#9a3412,stroke-width:2px,stroke-dasharray:5
-# classDef blue fill:#eff6ff,stroke:#3b82f6,color:#1e40af,stroke-width:2px,stroke-dasharray:5
-# classDef green fill:#f0fdf4,stroke:#22c55e,color:#166534,stroke-width:2px,stroke-dasharray:5
-# classDef noise fill:#f1f5f9,stroke:#94a3b8,color:#64748b,stroke-width:1px
-# ```
-# 
-# **Noise rule:** Any entity the report identifies as benign background noise MUST use `:::noise` class.
-# **File display rule:** Use only the filename (e.g., `svchost.exe`), not the full path.
-# 
-# ### MITRE TECHNIQUE DISPLAY (CRITICAL — NOT standalone nodes)
-# 
-# **MITRE display:** Embed MITRE ID + English technique name inside the node label text (e.g., `<br/>T1059.003 Windows Command Shell`), NOT as separate nodes. You MUST include both the T-code and the English name.
-# 
-# ### EDGE LABELS
-# 
-# Use Chinese labels on edges:
-# 
-# - Process spawns child → `A -->|创建进程| B`
-# - Process creates/writes file → `A -->|写入文件| B`
-# - Process connects to network → `A -->|连接| B`
-# - Process modifies registry → `A -->|修改注册表| B`
-# - Process injects into another → `A -->|注入| B`
-# - Process loads DLL → `A -->|加载DLL| B`
-# - File executed as process → `A -->|执行| B`
-# 
-# ---
-# 
-# ### LAYOUT
-# 
-# Mermaid's `graph LR` engine handles all positioning automatically. No manual coordinates needed. Nodes will flow left-to-right chronologically by the order you declare edges.
-# 
-# ---
-# 
-# ### CRITICAL RULES
-# 
-# 1. Read the WHOLE report, extract all entities and relationships.
-# 2. NO hallucination — everything must be traceable to the report.
-# 3. Every node (except entry point) must have at least one incoming edge.
-# 4. MITRE IDs + English names go INSIDE node labels (after `<br/>`), never as standalone nodes.
-# 5. Use `graph LR` for left-to-right chronological flow.
-# 6. Edge labels MUST be in Chinese.
-# 7. **URL escaping (CRITICAL):** In node labels, replace `:` in `http://` with `&#58;` to prevent Markdown auto-linking. Write `http&#58;//evil.com/path` instead of `http://evil.com/path`. The browser renders `&#58;` as `:` so it displays correctly but won't trigger link detection.
-# 8. Output ONLY the Mermaid code block inside triple backticks. No other text.
-# 
-# ---
-# 
-# ### Example Output
-# 
-# ```mermaid
-# graph LR
-#     A["winword.exe PID:4216<br/>T1566.001 Spearphishing Attachment"]:::red
-#     B["powershell.exe PID:8852<br/>T1059.001 PowerShell"]:::red
-#     C["svchost.exe PID:9936<br/>T1547.001 Registry Run Keys / T1071.001 Application Layer Protocol"]:::red
-#     D["svchost.exe"]:::orange
-#     E["HKLM\\...\\Run\\Updater"]:::green
-#     F["evil.c2.net:443"]:::blue
-#     G["explorer.exe"]:::noise
-# 
-#     A -->|创建进程| B
-#     B -->|写入文件| D
-#     B -->|创建进程| C
-#     C -->|修改注册表| E
-#     C -->|连接| F
-#     G -->|创建进程| B
-# 
-#     classDef red fill:#fee2e2,stroke:#ef4444,color:#991b1b,stroke-width:2px
-#     classDef orange fill:#fff7ed,stroke:#f97316,color:#9a3412,stroke-width:2px,stroke-dasharray:5
-#     classDef blue fill:#eff6ff,stroke:#3b82f6,color:#1e40af,stroke-width:2px,stroke-dasharray:5
-#     classDef green fill:#f0fdf4,stroke:#22c55e,color:#166534,stroke-width:2px,stroke-dasharray:5
-#     classDef noise fill:#f1f5f9,stroke:#94a3b8,color:#64748b,stroke-width:1px
-# ```
-# """
-# 
-#     human_prompt = (
-#         "Here is the complete forensic report. Parse EVERY section to extract all entities "
-#         "(processes, files, network indicators, registry keys) and their relationships, "
-#         "then output a Mermaid graph (graph LR):\n\n"
-#         "{final_report}"
-#     )
-# 
-#     prompt_template = ChatPromptTemplate.from_messages(
-#         [("system", graph_system_prompt), ("human", human_prompt)]
-#     )
-# 
-#     try:
-#         graph_chain = prompt_template | model
-#         result = graph_chain.invoke({"final_report": final_report})
-# 
-#         raw_content = result.content
-#         if isinstance(raw_content, list):
-#             text_parts = []
-#             for block in raw_content:
-#                 if isinstance(block, dict) and "text" in block:
-#                     text_parts.append(block["text"])
-#                 elif isinstance(block, str):
-#                     text_parts.append(block)
-#             raw_content = "".join(text_parts)
-#         elif not isinstance(raw_content, str):
-#             raw_content = str(raw_content)
-# 
-#         mermaid_match = re.search(r"```(?:mermaid)?\s*\n(.*?)```", raw_content, re.DOTALL | re.IGNORECASE)
-#         if mermaid_match:
-#             mermaid_code = mermaid_match.group(1).strip()
-#         else:
-#             mermaid_code = re.sub(
-#                 r"^```(?:mermaid)?\n|\n```$", "", raw_content.strip(), flags=re.MULTILINE
-#             )
-# 
-#         logger.info("Attack graph Mermaid generated successfully.")
-# 
-#         return {
-#             "attack_graph": mermaid_code,
-#             "messages": [
-#                 AIMessage(
-#                     content=f"攻击实体关系网状图(Mermaid)已生成：\n\n```mermaid\n{mermaid_code}\n```"
-#                 )
-#             ],
-#         }
-# 
-#     except Exception as e:
-#         logger.error("Error generating attack graph Mermaid: %s", e)
-#         return {
-#             "attack_graph": None,
-#             "messages": [AIMessage(content=f"攻击实体关系图(Mermaid)生成失败，发生异常: {e}")],
-#         }
-# 
-
 def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
-    """Node 11: Graph Filter Node """
+    """Node 11: Graph Filter Node"""
     logger.info("Executing Graph Filter Node: Reconstructing attack_graph_data from report...")
 
     graph_data = state.get("attack_graph_data")
@@ -1800,16 +1716,33 @@ def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
         return {"attack_graph_data": None}
 
     final_report = state.get("final_report", "")
+    investigation_clue = state.get("investigation_clue", "")
 
     entity_list_str = json.dumps(
-        [{"id": e["id"], "type": e["type"], "name": e["name"], "properties": e.get("properties", {})}
-         for e in entities],
-        ensure_ascii=False, indent=2,
+        [
+            {
+                "id": e["id"],
+                "type": e["type"],
+                "name": e["name"],
+                "properties": e.get("properties", {}),
+            }
+            for e in entities
+        ],
+        ensure_ascii=False,
+        indent=2,
     )
     relation_list_str = json.dumps(
-        [{"source": r["source"], "target": r["target"], "relation": r["relation"], "timestamp": r.get("timestamp")}
-         for r in relations],
-        ensure_ascii=False, indent=2,
+        [
+            {
+                "source": r["source"],
+                "target": r["target"],
+                "relation": r["relation"],
+                "timestamp": r.get("timestamp"),
+            }
+            for r in relations
+        ],
+        ensure_ascii=False,
+        indent=2,
     )
 
     system_prompt = """You are a cybersecurity entity graph reconstructor. Your primary input is the final attack attribution REPORT. The provided entity/relation list from raw logs is supplementary reference.
@@ -1826,29 +1759,32 @@ def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
 {{
     "source": "<entity id>",
     "target": "<entity id>",
-    "relation": "create | modify | execute | communicate | authenticate"
+    "relation": "create | modify | execute | instantiate | communicate | authenticate | access"
 }}
 
 **Relation types (with entity type constraints):**
 - create: process→process (spawn) OR process→file (create/write)
 - modify: process→file OR process→registry
-- execute: process→process (inject/DLL) OR file→process (file executed)
+- execute: process→process (inject/DLL) — in-memory operations only, NEVER file→process
+- instantiate: file→process (file instantiated into a running process by the system loader)
 - communicate: process→ip (connection) OR ip→ip (DNS) — NEVER process→file
 - authenticate: process→user_account
+- access: process→file (read/load/access as data) — use when the process reads a file as INPUT DATA (e.g., encode/decode source, config file, data dump), NOT for executing or creating the file. Do NOT use for process→process or process→ip.
 
 **Your task (in order):**
 
 1. **Report-first filtering**: The REPORT is the ground truth. Only keep entities and relations that are explicitly or implicitly described in the report. Drop anything not traceable to the report.
    - System noise (svchost.exe routine, RuntimeBroker.exe normal windows, explorer.exe benign) → REMOVE.
    - Internal-only infrastructure with no attack relevance → REMOVE.
+   - **Orphan check**: The `INVESTIGATION CLUE` below defines the attack's trigger source. Any entity that has NO relation path to a trigger-chain process and is not mentioned in the report → REMOVE. The report has already been filtered by causal relevance; use it as the authority.
    - When in doubt, KEEP.
 
 2. **Deduplication**: Merge duplicate entities that represent the same real-world object. For example, if file_2 and file_3 both point to the same file path, merge them into one entity and update all relations to use the surviving ID. Remove duplicate relations (same source, target, relation).
 
-3. **Trim auxiliary nodes**: For nodes like user_account that are not directly participating in process/file/network chains:
-   - In a single-host scenario: keep at most 1 authenticate relation per user account. Remove excessive authenticate relations that add clutter.
-   - If a user_account node ends up with zero relations after trimming, remove it entirely.
-   - The graph should focus on the core chain: process → process, process → file, process → network, process → registry.
+3. **Trim auxiliary nodes**: For user_account entities and authenticate relations, apply this strict gate:
+   - **GATE CHECK**: Only keep user_account / authenticate if the report explicitly describes an authentication-centric attack action — credential dumping (e.g., mimikatz, LSASS access), privilege escalation via explicit logon (e.g., runas, PSRemote, token manipulation), account creation/modification, or brute-force logon attempts.
+   - **PASSIVE INHERITANCE = REMOVE**: When a process simply runs under the logged-in user's context (double-click a script, type a command in CMD), the authentication happened at Windows login and is NOT an attack action. In this case, remove ALL user_account entities and ALL authenticate relations entirely. The attack graph should focus on the process→process, process→file, and process→network chains.
+   - If a user_account node ends up with zero relations after this check, remove it entirely.
 
 4. **Report-driven supplementation (CRITICAL — focus on FILES and IPs)**: The REPORT is the ground truth. After filtering, re-scan the report and:
    - **Files**: For ANY file path or filename mentioned in the report that is NOT already in the entity list → CREATE a new file entity with a unique `file_<N>` id (use the next available N). For `name`, use just the filename. In `properties`, fill `path` with the full path from the report. If the path is incomplete or missing, set `path` to an empty string `""`.
@@ -1856,7 +1792,8 @@ def graph_filter_node(state: AttributionState, config: RunnableConfig, model):
    - **Relations for new entities**: For each newly created file or ip entity, infer its relationship to existing process entities from the report context:
      * If report says a process created/wrote/downloaded the file → add `create` relation (source=process, target=file).
      * If report says a process connected to the IP/domain → add `communicate` relation (source=process, target=ip).
-     * If report says a process loaded/executed the file → add `execute` relation (source=file, target=process).
+     * If report says a file was instantiated/executed as a process → add `instantiate` relation (source=file, target=process).
+     * If report says a process read/accessed/loaded the file as input data (e.g., encode/decode source, config read, data parsing) → add `access` relation (source=process, target=file).
      * If the relation direction or source/target is unclear, make your best guess based on typical attack patterns and set `timestamp` to `null`.
    - **Missing parameters**: If the report does not provide certain properties (e.g., no PID, no full path, no port), simply leave those fields empty or omit them. Do NOT hallucinate values.
    - **Noise check for new entities**: Apply the same noise filter — do NOT add well-known benign system files (svchost.exe, explorer.exe, etc.) as new entities unless they are explicitly flagged as abused/malicious in the report.
@@ -1875,6 +1812,7 @@ Example output:
 """
 
     human_prompt = (
+        "### INVESTIGATION CLUE (TRIGGER SOURCE)\n{investigation_clue}\n\n"
         "### CURRENT ENTITIES\n```json\n{entity_list}\n```\n\n"
         "### CURRENT RELATIONS\n```json\n{relation_list}\n```\n\n"
         "### ATTACK ATTRIBUTION REPORT (GROUND TRUTH)\n{report}\n\n"
@@ -1889,11 +1827,14 @@ Example output:
 
     try:
         chain = prompt_template | model
-        result = chain.invoke({
-            "entity_list": entity_list_str,
-            "relation_list": relation_list_str,
-            "report": final_report[:10000],
-        })
+        result = chain.invoke(
+            {
+                "investigation_clue": investigation_clue,
+                "entity_list": entity_list_str,
+                "relation_list": relation_list_str,
+                "report": final_report[:10000],
+            }
+        )
 
         raw = result.content
         if isinstance(raw, list):
@@ -1908,32 +1849,47 @@ Example output:
             filtered_entities = entities
             filtered_relations = relations
 
-        logger.info("Graph filter: %d entities, %d relations → %d entities, %d relations.",
-                    len(entities), len(relations), len(filtered_entities), len(filtered_relations))
+        logger.info(
+            "Graph filter: %d entities, %d relations → %d entities, %d relations.",
+            len(entities),
+            len(relations),
+            len(filtered_entities),
+            len(filtered_relations),
+        )
 
         return {
-            "attack_graph_data": {
-                "_replace": True,
-                "entities": filtered_entities,
-                "relations": filtered_relations,
-            } if filtered_entities else None,
+            "attack_graph_data": (
+                {
+                    "_replace": True,
+                    "entities": filtered_entities,
+                    "relations": filtered_relations,
+                }
+                if filtered_entities
+                else None
+            ),
         }
 
     except Exception as e:
         logger.error("Graph filter failed, keeping original data: %s", e)
-        return {"attack_graph_data": {"_replace": True, "entities": entities, "relations": relations}}
+        return {
+            "attack_graph_data": {"_replace": True, "entities": entities, "relations": relations}
+        }
 
 
 def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     """Node 12: Attack Graph Node — 基于 attack_graph_data 生成攻击实体关系网状图 SVG"""
-    logger.info("Executing Attack Graph Node (Node 12): Generating entity relationship graph SVG from structured data...")
+    logger.info(
+        "Executing Attack Graph Node (Node 12): Generating entity relationship graph SVG from structured data..."
+    )
 
     graph_data = state.get("attack_graph_data")
     if not graph_data:
         logger.warning("No attack_graph_data found. Skipping attack graph generation.")
         return {
             "attack_graph": None,
-            "messages": [AIMessage(content="[Attack Graph] 缺少攻击图谱数据，无法生成实体关系图。")],
+            "messages": [
+                AIMessage(content="[Attack Graph] 缺少攻击图谱数据，无法生成实体关系图。")
+            ],
         }
 
     entities: list[dict] = graph_data.get("entities", [])
@@ -1943,6 +1899,24 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         return {
             "attack_graph": None,
             "messages": [AIMessage(content="[Attack Graph] 图谱数据为空。")],
+        }
+
+    # --- remove orphan entities (no relation edges) ---
+    connected_ids: set[str] = set()
+    for rel in relations:
+        connected_ids.add(rel.get("source", ""))
+        connected_ids.add(rel.get("target", ""))
+    entities = [e for e in entities if e.get("id", "") in connected_ids]
+    relations = [
+        r
+        for r in relations
+        if r.get("source", "") in connected_ids and r.get("target", "") in connected_ids
+    ]
+
+    if not entities:
+        return {
+            "attack_graph": None,
+            "messages": [AIMessage(content="[Attack Graph] 所有实体均为孤立节点，无法生成攻击实体关系网状图。")],
         }
 
     # --- build lookup & adjacency ---
@@ -1983,11 +1957,32 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
                 queue.append(neighbor)
 
     # handle disconnected / cycle nodes
-    next_layer = max(layers.values()) + 1 if layers else 0
-    for eid in entity_map:
-        if eid not in layers:
-            layers[eid] = next_layer
-            next_layer += 1
+    # Use layered BFS on the residual graph so that nodes in the same
+    # dependency cycle stay in the same (or adjacent) layers instead of
+    # each being assigned its own layer.
+    remaining: set[str] = {eid for eid in entity_map if eid not in layers}
+    if remaining:
+        base_layer = max(layers.values()) + 1 if layers else 0
+        residual_indeg: dict[str, int] = {eid: 0 for eid in remaining}
+        for src, targets in adj.items():
+            if src in remaining:
+                for tgt in targets:
+                    if tgt in remaining:
+                        residual_indeg[tgt] = residual_indeg.get(tgt, 0) + 1
+        current_layer = base_layer
+        while remaining:
+            batch = {eid for eid in remaining if residual_indeg.get(eid, 0) == 0}
+            if not batch:
+                # true cycle — break by putting all remaining in the current layer
+                batch = set(remaining)
+            for eid in batch:
+                layers[eid] = current_layer
+                if eid in adj:
+                    for tgt in adj[eid]:
+                        if tgt in residual_indeg:
+                            residual_indeg[tgt] = max(0, residual_indeg[tgt] - 1)
+            remaining -= batch
+            current_layer += 1
 
     # --- group by layer ---
     layer_groups: dict[int, list[str]] = {}
@@ -2003,34 +1998,78 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     TITLE_H = 36
     LEGEND_H = 90
 
+    # legend layout constants (used for minimum-width guarantees)
+    BEHAVIOR_LEGEND_ITEMS = 7
+    ENTITY_LEGEND_ITEMS = 6
+    LEGEND_ITEM_WIDTH = 90
+    LEGEND_BOX_PAD = 16
+    BEHAVIOR_LEGEND_START = 50
+    BEHAVIOR_LEGEND_WIDTH = BEHAVIOR_LEGEND_ITEMS * LEGEND_ITEM_WIDTH + LEGEND_BOX_PAD  # 646
+    ENTITY_LEGEND_WIDTH = ENTITY_LEGEND_ITEMS * LEGEND_ITEM_WIDTH + LEGEND_BOX_PAD  # 556
+    ENTITY_LEGEND_LEFT_PAD = 8
+    ENTITY_LEGEND_RIGHT_MARGIN = 32
+    ENTITY_LEGEND_SLOT = (
+        ENTITY_LEGEND_LEFT_PAD + ENTITY_LEGEND_WIDTH + ENTITY_LEGEND_RIGHT_MARGIN
+    )  # 596
+    LEGEND_GAP = 40
+
     max_in_layer = max((len(v) for v in layer_groups.values()), default=1)
     body_height = max_in_layer * (NODE_HEIGHT + NODE_GAP_Y) + MARGIN * 2 + TITLE_H
-    canvas_width = (max(layer_groups.keys()) + 1) * LAYER_GAP_X + MARGIN * 2 if layer_groups else 800
+
+    # canvas width: must satisfy two constraints
+    #   (a) all nodes fit horizontally
+    #   (b) two legends sit side-by-side without overlapping
+    graph_width = max(layer_groups.keys()) * LAYER_GAP_X + NODE_WIDTH if layer_groups else 0
+    min_for_nodes = MARGIN * 2 + graph_width
+    min_for_legends = (
+        BEHAVIOR_LEGEND_START + BEHAVIOR_LEGEND_WIDTH + LEGEND_GAP + ENTITY_LEGEND_SLOT + MARGIN
+    )
+    canvas_width = max(min_for_nodes, min_for_legends)
     canvas_height = max(400, body_height + LEGEND_H)
+
+    # horizontal centering offset so the node graph sits in the middle of the canvas
+    center_offset_x = max(0, (canvas_width - graph_width) // 2)
 
     legend_base_y = canvas_height - 70
 
     # --- color scheme ---
     type_colors: dict[str, dict[str, str]] = {
-        "process":      {"bg": "#fee2e2", "border": "#ef4444", "text": "#991b1b", "arrow": "arrow-red"},
-        "file":         {"bg": "#fff7ed", "border": "#f97316", "text": "#9a3412", "arrow": "arrow-orange"},
-        "ip":           {"bg": "#eff6ff", "border": "#3b82f6", "text": "#1e40af", "arrow": "arrow-blue"},
-        "registry":     {"bg": "#f0fdf4", "border": "#22c55e", "text": "#166534", "arrow": "arrow-green"},
-        "user_account": {"bg": "#faf5ff", "border": "#a855f7", "text": "#6b21a8", "arrow": "arrow-purple"},
-        "other":        {"bg": "#f1f5f9", "border": "#94a3b8", "text": "#475569", "arrow": "arrow-gray"},
+        "process": {"bg": "#fee2e2", "border": "#ef4444", "text": "#991b1b", "arrow": "arrow-red"},
+        "file": {"bg": "#fff7ed", "border": "#f97316", "text": "#9a3412", "arrow": "arrow-orange"},
+        "ip": {"bg": "#eff6ff", "border": "#3b82f6", "text": "#1e40af", "arrow": "arrow-blue"},
+        "registry": {
+            "bg": "#f0fdf4",
+            "border": "#22c55e",
+            "text": "#166534",
+            "arrow": "arrow-green",
+        },
+        "user_account": {
+            "bg": "#faf5ff",
+            "border": "#a855f7",
+            "text": "#6b21a8",
+            "arrow": "arrow-purple",
+        },
+        "other": {"bg": "#f1f5f9", "border": "#94a3b8", "text": "#475569", "arrow": "arrow-gray"},
     }
 
     rel_labels: dict[str, str] = {
-        "create": "创建", "modify": "修改", "execute": "执行",
-        "communicate": "通信", "authenticate": "认证",
+        "create": "创建",
+        "modify": "修改",
+        "execute": "执行",
+        "instantiate": "实例化",
+        "communicate": "通信",
+        "authenticate": "认证",
+        "access": "访问",
     }
     # edge style per relation: (stroke-width, stroke-dasharray, color, arrow-marker-id)
     rel_styles: dict[str, tuple[str, str, str, str]] = {
-        "create":       ("3", "none", "#22c55e", "arrow-create"),        # thick solid green
-        "modify":       ("2", "6,4",  "#f59e0b", "arrow-modify"),        # dashed amber
-        "execute":      ("2", "2,3",  "#ef4444", "arrow-execute"),       # dotted red
-        "communicate":  ("2", "none", "#3b82f6", "arrow-communicate"),   # normal solid blue
-        "authenticate": ("1.5", "4,3","#a855f7", "arrow-authenticate"),  # thin dashed purple
+        "create": ("3", "none", "#22c55e", "arrow-create"),  # thick solid green
+        "modify": ("2", "6,4", "#f59e0b", "arrow-modify"),  # dashed amber
+        "execute": ("2", "2,3", "#ef4444", "arrow-execute"),  # dotted red
+        "instantiate": ("3", "none", "#f97316", "arrow-instantiate"),  # thick solid orange
+        "communicate": ("2", "none", "#3b82f6", "arrow-communicate"),  # normal solid blue
+        "authenticate": ("1.5", "4,3", "#a855f7", "arrow-authenticate"),  # thin dashed purple
+        "access": ("2", "2,6", "#14b8a6", "arrow-access"),  # medium dot-dash teal
     }
 
     # --- position nodes ---
@@ -2042,31 +2081,50 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         safe_bottom = legend_base_y - 20
         safe_height = safe_bottom - safe_top
         start_y = safe_top + max(0, (safe_height - total_h) // 2)
-        x = MARGIN + layer_num * LAYER_GAP_X
+        x = center_offset_x + layer_num * LAYER_GAP_X
         for i, eid in enumerate(ids):
             node_pos[eid] = (x, start_y + i * (NODE_HEIGHT + NODE_GAP_Y))
 
     # --- build SVG ---
     lines: list[str] = []
 
-    lines.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {canvas_width} {canvas_height}" width="100%" height="100%">')
-    lines.append('<style>')
-    lines.append('.legend-text { font-family: sans-serif; font-size: 10px; fill: #cbd5e1; }')
-    lines.append('</style>')
-    lines.append(f'<rect width="{canvas_width}" height="{canvas_height}" fill="#0f172a"/>')
-    lines.append(f'<text x="{canvas_width // 2}" y="26" text-anchor="middle" font-size="15" font-weight="bold" fill="#e2e8f0" font-family="sans-serif">攻击实体关系图</text>')
+    lines.append(
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {canvas_width} {canvas_height}" width="100%" height="100%">'
+    )
+    lines.append("<style>")
+    lines.append(".legend-text { font-family: sans-serif; font-size: 10px; fill: #334155; }")
+    lines.append("</style>")
+    lines.append(f'<rect width="{canvas_width}" height="{canvas_height}" fill="#f1f5f9"/>')
+    lines.append(
+        f'<text x="{canvas_width // 2}" y="26" text-anchor="middle" font-size="15" font-weight="bold" fill="#0f172a" font-family="sans-serif">攻击实体关系图</text>'
+    )
 
     # arrow markers (entity type arrows + relation type arrows)
-    lines.append('<defs>')
-    ent_arrows = [("arrow-red","#ef4444"),("arrow-orange","#f97316"),("arrow-blue","#3b82f6"),
-                  ("arrow-green","#22c55e"),("arrow-purple","#a855f7"),("arrow-gray","#94a3b8")]
-    rel_arrows = [("arrow-create","#22c55e"),("arrow-modify","#f59e0b"),("arrow-execute","#ef4444"),
-                  ("arrow-communicate","#3b82f6"),("arrow-authenticate","#a855f7")]
+    lines.append("<defs>")
+    ent_arrows = [
+        ("arrow-red", "#ef4444"),
+        ("arrow-orange", "#f97316"),
+        ("arrow-blue", "#3b82f6"),
+        ("arrow-green", "#22c55e"),
+        ("arrow-purple", "#a855f7"),
+        ("arrow-gray", "#94a3b8"),
+    ]
+    rel_arrows = [
+        ("arrow-create", "#22c55e"),
+        ("arrow-modify", "#f59e0b"),
+        ("arrow-execute", "#ef4444"),
+        ("arrow-instantiate", "#f97316"),
+        ("arrow-communicate", "#3b82f6"),
+        ("arrow-authenticate", "#a855f7"),
+        ("arrow-access", "#14b8a6"),
+    ]
     for name, color in ent_arrows + rel_arrows:
-        lines.append(f'<marker id="{name}" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">')
+        lines.append(
+            f'<marker id="{name}" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">'
+        )
         lines.append(f'<path d="M 0 0 L 10 5 L 0 10 z" fill="{color}"/>')
-        lines.append('</marker>')
-    lines.append('</defs>')
+        lines.append("</marker>")
+    lines.append("</defs>")
 
     # edges — collect paths and labels separately
     target_entry_slots: dict[str, int] = {}
@@ -2082,7 +2140,9 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         tx, ty_base = x2, y2 + NODE_HEIGHT // 2
 
         rel_type = rel.get("relation", "")
-        sw, dash, edge_color, arrow_id = rel_styles.get(rel_type, ("2", "none", "#94a3b8", "arrow-gray"))
+        sw, dash, edge_color, arrow_id = rel_styles.get(
+            rel_type, ("2", "none", "#94a3b8", "arrow-gray")
+        )
         dash_attr = f' stroke-dasharray="{dash}"' if dash != "none" else ""
 
         # offset entry point when multiple sources connect to the same target
@@ -2093,11 +2153,15 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         ty = ty_base + offset_sign * offset_idx * 20
         corner_x = tx - 90 - offset_sign * offset_idx * 8
 
-        edge_paths.append(f'<path d="M {sx} {sy} L {corner_x} {sy} L {corner_x} {ty} L {tx} {ty}" fill="none" stroke="{edge_color}" stroke-width="{sw}"{dash_attr} marker-end="url(#{arrow_id})"/>')
+        edge_paths.append(
+            f'<path d="M {sx} {sy} L {corner_x} {sy} L {corner_x} {ty} L {tx} {ty}" fill="none" stroke="{edge_color}" stroke-width="{sw}"{dash_attr} marker-end="url(#{arrow_id})"/>'
+        )
 
         label = rel_labels.get(rel_type, rel_type)
         lx = (corner_x + tx) / 2
-        edge_labels.append(f'<text x="{lx}" y="{ty}" font-family="sans-serif" font-size="10" fill="#cbd5e1" stroke="#0f172a" stroke-width="4" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">{label}</text>')
+        edge_labels.append(
+            f'<text x="{lx}" y="{ty}" font-family="sans-serif" font-size="10" fill="#334155" stroke="#f1f5f9" stroke-width="4" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">{label}</text>'
+        )
 
     lines.extend(edge_paths)
     lines.extend(edge_labels)
@@ -2110,12 +2174,22 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         x, y = node_pos[eid]
         etype = entity.get("type", "other")
         tc = type_colors.get(etype, type_colors["other"])
-        name = (entity.get("name") or eid).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+        name = (
+            (entity.get("name") or eid)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+        )
         dash = "5,4" if etype != "process" else "none"
 
         lines.append(f'<foreignObject x="{x}" y="{y}" width="{NODE_WIDTH}" height="{NODE_HEIGHT}">')
-        lines.append(f'<div xmlns="http://www.w3.org/1999/xhtml" style="border:2px {tc["border"]}; border-style:solid; border-radius:8px; background:{tc["bg"]}; padding:6px 10px; font-family:sans-serif; font-size:11px; box-sizing:border-box; height:100%; display:flex; flex-direction:column; justify-content:center; overflow:hidden; stroke-dasharray:{dash};">')
-        lines.append(f'<div style="font-weight:bold; color:{tc["text"]}; font-size:11px; word-wrap:break-word;">{name}</div>')
+        lines.append(
+            f'<div xmlns="http://www.w3.org/1999/xhtml" style="border:2px {tc["border"]}; border-style:solid; border-radius:8px; background:{tc["bg"]}; padding:6px 10px; font-family:sans-serif; font-size:11px; box-sizing:border-box; height:100%; display:flex; flex-direction:column; justify-content:center; overflow:hidden; stroke-dasharray:{dash};">'
+        )
+        lines.append(
+            f'<div style="font-weight:bold; color:{tc["text"]}; font-size:11px; word-wrap:break-word;">{name}</div>'
+        )
         props = entity.get("properties", {})
         detail = ""
         etype = entity.get("type", "")
@@ -2128,64 +2202,90 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
             if vn:
                 detail = vn
         if detail:
-            detail = detail.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-            lines.append(f'<div style="color:{tc["text"]}; font-size:9px; opacity:0.75; margin-top:2px; word-wrap:break-word; line-height:1.2;">{detail[:40]}</div>')
-        lines.append('</div>')
-        lines.append('</foreignObject>')
+            detail = (
+                detail.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace('"', "&quot;")
+            )
+            lines.append(
+                f'<div style="color:{tc["text"]}; font-size:9px; opacity:0.75; margin-top:2px; word-wrap:break-word; line-height:1.2;">{detail[:40]}</div>'
+            )
+        lines.append("</div>")
+        lines.append("</foreignObject>")
 
     # --- legend ---
     # entity legend (right side)
     ent_items = [
-        ("process",      "进程"),
-        ("file",         "文件"),
-        ("ip",           "网络"),
-        ("registry",     "注册表"),
+        ("process", "进程"),
+        ("file", "文件"),
+        ("ip", "网络"),
+        ("registry", "注册表"),
         ("user_account", "用户账户"),
-        ("other",        "其他"),
+        ("other", "其他"),
     ]
-    ent_start_x = canvas_width - 580
-    ent_box_w = len(ent_items) * 90 + 16
+    ent_start_x = canvas_width - ENTITY_LEGEND_SLOT + ENTITY_LEGEND_RIGHT_MARGIN
+    ent_box_w = ENTITY_LEGEND_WIDTH
     # entity legend: box + title first, then items
-    lines.append(f'<rect x="{ent_start_x - 8}" y="{legend_base_y}" width="{ent_box_w}" height="46" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>')
-    lines.append(f'<text x="{ent_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#f8fafc" font-weight="bold" font-family="sans-serif">实体</text>')
+    lines.append(
+        f'<rect x="{ent_start_x - 8}" y="{legend_base_y}" width="{ent_box_w}" height="46" rx="5" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>'
+    )
+    lines.append(
+        f'<text x="{ent_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#0f172a" font-weight="bold" font-family="sans-serif">实体</text>'
+    )
     for i, (key, label) in enumerate(ent_items):
-        lx = ent_start_x + i * 90
+        lx = ent_start_x + i * LEGEND_ITEM_WIDTH
         tc = type_colors[key]
-        lines.append(f'<rect x="{lx}" y="{legend_base_y + 24}" width="14" height="14" rx="3" fill="{tc["bg"]}" stroke="{tc["border"]}" stroke-width="1.5"/>')
-        lines.append(f'<text x="{lx + 19}" y="{legend_base_y + 35}" font-size="10" fill="#cbd5e1" font-family="sans-serif">{label}</text>')
+        lines.append(
+            f'<rect x="{lx}" y="{legend_base_y + 24}" width="14" height="14" rx="3" fill="{tc["bg"]}" stroke="{tc["border"]}" stroke-width="1.5"/>'
+        )
+        lines.append(
+            f'<text x="{lx + 19}" y="{legend_base_y + 35}" font-size="10" fill="#334155" font-family="sans-serif">{label}</text>'
+        )
 
     # behavior legend (left side)
     act_items = [
-        ("create",       "创建"),
-        ("modify",       "修改"),
-        ("execute",      "执行"),
-        ("communicate",  "通信"),
+        ("create", "创建"),
+        ("modify", "修改"),
+        ("execute", "执行"),
+        ("instantiate", "实例化"),
+        ("communicate", "通信"),
         ("authenticate", "认证"),
+        ("access", "访问"),
     ]
-    act_start_x = 50
-    act_box_w = len(act_items) * 90 + 16
+    act_start_x = BEHAVIOR_LEGEND_START
+    act_box_w = BEHAVIOR_LEGEND_WIDTH
     # behavior legend: box + title first, then items
-    lines.append(f'<rect x="{act_start_x - 8}" y="{legend_base_y}" width="{act_box_w}" height="46" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>')
-    lines.append(f'<text x="{act_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#f8fafc" font-weight="bold" font-family="sans-serif">行为</text>')
+    lines.append(
+        f'<rect x="{act_start_x - 8}" y="{legend_base_y}" width="{act_box_w}" height="46" rx="5" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>'
+    )
+    lines.append(
+        f'<text x="{act_start_x - 2}" y="{legend_base_y + 14}" font-size="9" fill="#0f172a" font-weight="bold" font-family="sans-serif">行为</text>'
+    )
     for i, (rel_type, label) in enumerate(act_items):
-        lx = act_start_x + i * 90
+        lx = act_start_x + i * LEGEND_ITEM_WIDTH
         sw, dash, color, _ = rel_styles[rel_type]
         dash_attr = f' stroke-dasharray="{dash}"' if dash != "none" else ""
-        lines.append(f'<line x1="{lx}" y1="{legend_base_y + 31}" x2="{lx + 40}" y2="{legend_base_y + 31}" stroke="{color}" stroke-width="{sw}"{dash_attr}/>')
-        lines.append(f'<text x="{lx + 48}" y="{legend_base_y + 35}" font-size="10" fill="#cbd5e1" font-family="sans-serif">{label}</text>')
+        lines.append(
+            f'<line x1="{lx}" y1="{legend_base_y + 31}" x2="{lx + 40}" y2="{legend_base_y + 31}" stroke="{color}" stroke-width="{sw}"{dash_attr}/>'
+        )
+        lines.append(
+            f'<text x="{lx + 48}" y="{legend_base_y + 35}" font-size="10" fill="#334155" font-family="sans-serif">{label}</text>'
+        )
 
-    lines.append('</svg>')
+    lines.append("</svg>")
 
     svg_code = "\n".join(lines)
 
-    logger.info("Attack graph SVG generated successfully from structured data (%d entities, %d relations).",
-                len(entities), len(relations))
+    logger.info(
+        "Attack graph SVG generated successfully from structured data (%d entities, %d relations).",
+        len(entities),
+        len(relations),
+    )
 
     return {
         "attack_graph": svg_code,
         "messages": [
-            AIMessage(
-                content=f"攻击实体关系网状图(SVG)已生成：\n\n```xml\n{svg_code}\n```"
-            )
+            AIMessage(content=f"攻击实体关系网状图(SVG)已生成：\n\n```xml\n{svg_code}\n```")
         ],
     }

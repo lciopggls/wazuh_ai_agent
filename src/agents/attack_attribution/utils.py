@@ -111,6 +111,49 @@ def extract_agent_ip_mapping() -> dict[str, str]:
     return ip_mapping
 
 
+def get_agents_identity() -> list[dict]:
+    """
+    获取 Wazuh Agent 身份信息列表，用于将用户的主机名/IP 指代自动转换为 agent_id。
+
+    Returns:
+        list of dicts, 每个元素包含:
+        - id: Agent 编号 (str)
+        - name: 主机名 (str)
+        - ip: IP 地址 (str)
+        - status: 连接状态 (str)
+        - os_platform: 操作系统平台标识 (str)
+    """
+    identities: list[dict] = []
+
+    try:
+        api_response = list_agents()
+        agents = api_response.get("data", {}).get("affected_items", [])
+
+        for agent in agents:
+            agent_id = agent.get("id")
+            name = agent.get("name")
+            ip = agent.get("ip")
+            status = agent.get("status")
+            os_obj = agent.get("os", {})
+            os_platform = os_obj.get("platform", "")
+
+            if agent_id and agent_id != "000":
+                identities.append(
+                    {
+                        "id": agent_id,
+                        "name": name or "",
+                        "ip": ip or "",
+                        "status": status or "",
+                        "os_platform": os_platform or "",
+                    }
+                )
+
+    except Exception as e:
+        logger.info(f"Exception occurred while building agents identity list: {e}")
+
+    return identities
+
+
 BEIJING_TZ = timezone(timedelta(hours=8))
 
 
@@ -193,6 +236,141 @@ def _iter_json_candidates(text: str):
             if depth == 0 and start >= 0:
                 yield text[start : i + 1]
                 start = -1
+
+
+# --- query fingerprint helpers (shared by multiple nodes) ---
+
+# Single-ID entries provide granular labels when the Agent queries a subset.
+# Merged-group entries compact the label when ALL members are present.
+_EIDS_BEHAVIOR_MAP: list[tuple[tuple[str, ...], str]] = [
+    # --- merged groups (largest first, matched when all members present) ---
+    (
+        (
+            "4720",
+            "4722",
+            "4724",
+            "4725",
+            "4726",
+            "4728",
+            "4732",
+            "4738",
+            "4740",
+            "4798",
+            "4704",
+            "4719",
+        ),
+        "Account auditing",
+    ),
+    (("3", "22", "4624"), "Network & DNS"),
+    (("7", "11"), "File & module"),
+    (("8", "10", "25"), "Process memory"),
+    (("12", "13", "14"), "Registry"),
+    (("4648", "4672"), "Credential & privilege"),
+    # --- single IDs (fallback when merged group doesn't fully match) ---
+    (("1",), "Process creation"),
+    (("3",), "Network connection"),
+    (("22",), "DNS query"),
+    (("4624",), "Network logon"),
+    (("7",), "DLL / module load"),
+    (("11",), "File creation"),
+    (("8",), "Process injection"),
+    (("10",), "Process access"),
+    (("25",), "Process tampering"),
+    (("12",), "Registry key delete"),
+    (("13",), "Registry value set"),
+    (("14",), "Registry key rename"),
+    (("7045",), "Service installation"),
+    (("4648",), "Credential logon"),
+    (("4672",), "Privilege assignment"),
+]
+
+_QTYPE_LABEL: dict[str, str] = {
+    "PROCESS_ID": "PID",
+    "PARENT_PROCESS_ID": "Parent PID",
+    "FILE_PATH": "File",
+    "IP_ADDRESS": "IP",
+    "PORT": "Port",
+    "SERVICE_NAME": "Service",
+    "USER_ACCOUNT": "User",
+    "REGISTRY_PATH": "Registry",
+    "LOGON_ID": "Logon ID",
+    "SECURITY_ID": "SID",
+    "DNS_QUERY": "Domain",
+}
+
+
+def eids_to_investigation(eids: list[str]) -> str:
+    if not eids:
+        return "-"
+    eids_set = {str(e) for e in eids}
+    labels: list[str] = []
+    covered: set[str] = set()
+    for eid_tuple, label in sorted(_EIDS_BEHAVIOR_MAP, key=lambda x: (-len(x[0]), x[0])):
+        group = set(eid_tuple)
+        if group <= (eids_set - covered):
+            labels.append(label)
+            covered |= group
+    leftovers = eids_set - covered
+    if leftovers:
+        labels.append(", ".join(sorted(leftovers)))
+    return ", ".join(labels)
+
+
+def _fix_svg_viewbox_height(svg_code: str) -> str:
+    """Post-process SVG to ensure viewBox height accommodates all elements."""
+    vb_match = re.search(r'viewBox="([^"]*)"', svg_code)
+    if not vb_match:
+        return svg_code
+    vb_parts = vb_match.group(1).split()
+    if len(vb_parts) < 4:
+        return svg_code
+    vb_x, vb_y, vb_w, vb_h = vb_parts
+
+    try:
+        current_height = float(vb_h)
+    except ValueError:
+        return svg_code
+
+    max_bottom = 0
+    for fo in re.finditer(
+        r'<foreignObject[^>]*\s+y="([^"]*)"[^>]*\s+height="([^"]*)"',
+        svg_code,
+        re.IGNORECASE,
+    ):
+        try:
+            y, h = float(fo.group(1)), float(fo.group(2))
+            max_bottom = max(max_bottom, y + h)
+        except ValueError:
+            pass
+    for line in re.finditer(r'<line[^>]*\s+y2="([^"]*)"', svg_code, re.IGNORECASE):
+        try:
+            max_bottom = max(max_bottom, float(line.group(1)))
+        except ValueError:
+            pass
+
+    required = max_bottom + 80
+    if required <= current_height:
+        return svg_code
+
+    fixed_vb = f'viewBox="{vb_x} {vb_y} {vb_w} {int(required)}"'
+    svg_code = svg_code[: vb_match.start()] + fixed_vb + svg_code[vb_match.end() :]
+
+    logger.info(
+        "Fixed SVG viewBox height from %s to %d (max_bottom=%.0f)",
+        vb_h,
+        int(required),
+        max_bottom,
+    )
+    return svg_code
+
+
+def fp_target(tool_name: str, args: dict) -> str:
+    if "keyword" in tool_name:
+        return (args.get("keyword") or "-")[:60]
+    qtype = args.get("query_type", "")
+    qval = str(args.get("query_value", ""))
+    label = _QTYPE_LABEL.get(qtype, qtype or "-")
+    return f"{label} {qval}" if qval else label
 
 
 if __name__ == "__main__":
