@@ -125,9 +125,9 @@ defineProps<{
 <style scoped lang="scss">
 // ── Root ──
 .ts-root {
-  background: var(--background, #0a0e17);
+  background: #ffffff;
   border-radius: 8px;
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border: 1px solid #e5e7eb;
   position: relative;
   overflow: hidden;
   height: 100%;
@@ -135,18 +135,18 @@ defineProps<{
 
 // ── Toolbar ──
 .ts-toolbar {
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
-  background: color-mix(in oklab, var(--background, #0a0e17) 98%, #31ABE3);
+  border-bottom: 1px solid #e5e7eb;
+  background: #f8fafc;
 }
 
 .toolbar-badge {
   font-size: 12px;
   font-weight: 600;
-  color: #00fdfa;
-  background: rgba(0, 253, 250, 0.06);
+  color: #1d4ed8;
+  background: rgba(29, 78, 216, 0.06);
   padding: 3px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(0, 253, 250, 0.1);
+  border: 1px solid rgba(29, 78, 216, 0.1);
 }
 
 .toolbar-hint {
@@ -167,14 +167,14 @@ defineProps<{
 
 // ── Summary Cards ──
 .summary-card {
-  background: var(--card, #111827);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
   overflow: hidden;
   transition: all 0.2s ease;
 
   &:hover {
-    border-color: color-mix(in oklab, var(--border, rgba(49, 171, 227, 0.12)) 60%, #31ABE3);
+    border-color: color-mix(in oklab, #e5e7eb 60%, #31ABE3);
   }
 }
 
@@ -185,9 +185,9 @@ defineProps<{
   padding: 9px 14px;
   font-size: 12px;
   font-weight: 600;
-  color: #00fdfa;
-  background: color-mix(in oklab, var(--card, #111827) 96%, #31ABE3);
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  color: #1d4ed8;
+  background: #f8fafc;
+  border-bottom: 1px solid #e5e7eb;
 
   .card-icon { font-size: 14px; line-height: 1; }
 
@@ -197,7 +197,7 @@ defineProps<{
     font-weight: 600;
     font-family: ui-monospace, monospace;
     color: var(--muted-foreground, #7c8a9e);
-    background: var(--muted, #1a2332);
+    background: #f3f4f6;
     padding: 1px 8px;
     border-radius: 999px;
     letter-spacing: 0.5px;
@@ -226,9 +226,9 @@ defineProps<{
   padding: 5px 12px;
   font-family: ui-monospace, monospace;
   font-size: 11.5px;
-  color: var(--foreground, #d3d6dd);
-  background: rgba(49, 171, 227, 0.04);
-  border: 1px dashed var(--border, rgba(49, 171, 227, 0.12));
+  color: #374151;
+  background: #f8fafc;
+  border: 1px dashed #e5e7eb;
   border-radius: 6px;
   transition: all 0.2s ease;
 
@@ -246,8 +246,8 @@ defineProps<{
   flex-direction: column;
   gap: 3px;
   padding: 8px 10px;
-  background: rgba(49, 171, 227, 0.02);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
   border-radius: 6px;
 
   .time-stat-label {
@@ -258,7 +258,7 @@ defineProps<{
 
   .time-stat-value {
     font-size: 12px;
-    color: var(--foreground, #d3d6dd);
+    color: #374151;
     font-family: ui-monospace, monospace;
   }
 
@@ -281,13 +281,13 @@ defineProps<{
     gap: 6px;
     font-size: 11px;
     font-weight: 600;
-    color: var(--foreground, #d3d6dd);
+    color: #374151;
 
     .ioc-count {
       font-family: ui-monospace, monospace;
       font-size: 10px;
       color: var(--muted-foreground, #7c8a9e);
-      background: var(--muted, #1a2332);
+      background: #f3f4f6;
       padding: 0 6px;
       border-radius: 999px;
       line-height: 1.5;
@@ -309,9 +309,9 @@ defineProps<{
   transition: all 0.15s ease;
 
   &--file {
-    color: var(--foreground, #d3d6dd);
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+    color: #374151;
+    background: rgba(0, 0, 0, 0.02);
+    border: 1px solid #e5e7eb;
     &:hover { border-color: rgba(49, 171, 227, 0.3); }
   }
 
@@ -342,7 +342,7 @@ defineProps<{
   width: 34px;
   height: 34px;
   border: 3px solid color-mix(in oklab, #31ABE3 10%, transparent);
-  border-top-color: #00fdfa;
+  border-top-color: #1d4ed8;
   border-radius: 50%;
   animation: radarSpin 1s linear infinite;
 }

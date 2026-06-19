@@ -180,9 +180,9 @@ onMounted(() => {
 <style scoped lang="scss">
 // ── Root ──
 .aq-root {
-  background: var(--background, #0a0e17);
+  background: var(--background, #ffffff);
   border-radius: 8px;
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border: 1px solid #e5e7eb;
   position: relative;
   overflow: hidden;
   height: 100%;
@@ -190,18 +190,18 @@ onMounted(() => {
 
 // ── Toolbar ──
 .aq-toolbar {
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
-  background: color-mix(in oklab, var(--background, #0a0e17) 98%, #31ABE3);
+  border-bottom: 1px solid #e5e7eb;
+  background: #f8fafc;
 }
 
 .toolbar-badge {
   font-size: 12px;
   font-weight: 600;
-  color: #00fdfa;
-  background: rgba(0, 253, 250, 0.06);
+  color: #1d4ed8;
+  background: rgba(29, 78, 216, 0.06);
   padding: 3px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(0, 253, 250, 0.1);
+  border: 1px solid rgba(29, 78, 216, 0.1);
 }
 
 .toolbar-hint {
@@ -270,7 +270,7 @@ onMounted(() => {
   width: 28px;
   height: 28px;
   border: 3px solid color-mix(in oklab, #31ABE3 10%, transparent);
-  border-top-color: #00fdfa;
+  border-top-color: #1d4ed8;
   border-radius: 50%;
   animation: aqSpin 1s linear infinite;
 }
@@ -319,9 +319,9 @@ onMounted(() => {
 
 // ── Table ──
 .aq-table-header {
-  background: color-mix(in oklab, var(--background, #0a0e17) 96%, #31ABE3);
+  background: #f8fafc;
   color: var(--muted-foreground, #7c8a9e);
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border-bottom: 1px solid #e5e7eb;
 }
 
 .aq-table-body {
@@ -329,7 +329,7 @@ onMounted(() => {
 }
 
 .aq-row {
-  border-bottom: 1px solid color-mix(in oklab, var(--border, rgba(49, 171, 227, 0.12)) 50%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, #e5e7eb 50%, transparent);
   cursor: default;
   transition: all 0.15s ease;
 
@@ -376,10 +376,10 @@ onMounted(() => {
   width: 420px;
   max-height: 300px;
   overflow: auto;
-  background: var(--code, #0d1117);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.2));
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
   padding: 10px 12px;
 
   &::-webkit-scrollbar { width: 3px; }
@@ -391,7 +391,7 @@ onMounted(() => {
 
 .json-pre {
   margin: 0;
-  color: #a5d6ff;
+  color: #374151;
   font-family: 'Courier New', ui-monospace, monospace;
   font-size: 11.5px;
   line-height: 1.5;

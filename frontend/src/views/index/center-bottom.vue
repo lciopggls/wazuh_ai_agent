@@ -145,38 +145,20 @@ onBeforeUnmount(() => {
             <span class="progress-percent" :style="{ color: riskLevelText.color }">
               {{ highRiskPercent }}%
             </span>
-            <span class="risk-badge" :style="{ background: riskLevelText.color + '22', color: riskLevelText.color, borderColor: riskLevelText.color + '44' }">
-              {{ riskLevelText.label }}
-            </span>
           </div>
         </div>
 
         <div class="progress-track">
           <div
             class="progress-fill"
-            :style="{ width: highRiskPercent + '%', background: riskLevelText.color, boxShadow: `0 0 12px ${riskLevelText.color}66` }"
+            :style="{ width: highRiskPercent + '%', background: '#f5023d', boxShadow: '0 0 12px #f5023d66' }"
           ></div>
-          <div class="progress-glow" :style="{ background: riskLevelText.color }"></div>
-        </div>
-
-        <div class="progress-legend">
-          <span class="legend-item">
-            <span class="legend-dot" style="background: #31ABE3;"></span>
-            低危 (Level &lt; {{ HIGH_RISK_THRESHOLD }})
-          </span>
-          <span class="legend-item">
-            <span class="legend-dot" :style="{ background: riskLevelText.color }"></span>
-            高危 (Level ≥ {{ HIGH_RISK_THRESHOLD }})
-          </span>
+          <div class="progress-glow" :style="{ background: '#f5023d' }"></div>
         </div>
       </div>
 
       <!-- 底部操作栏 -->
       <div class="action-bar">
-        <div class="update-bar">
-          <span class="update-dot" :class="{ 'update-dot--error': error }"></span>
-          <span class="update-text">{{ error ? '数据异常' : '实时更新中' }}</span>
-        </div>
         <button class="nav-btn" @click="navigateToRules">
           <span class="nav-btn-icon">📜</span>
           <span>查询所有规则</span>
@@ -251,8 +233,8 @@ onBeforeUnmount(() => {
 
 .stat-card {
   flex: 1;
-  background: var(--card, #111827);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  background: var(--card, #ffffff);
+  border: 1px solid var(--border, #e5e7eb);
   border-radius: 8px;
   padding: 14px 16px;
   display: flex;
@@ -261,7 +243,7 @@ onBeforeUnmount(() => {
   transition: border-color 0.2s;
 
   &:hover {
-    border-color: rgba(49, 171, 227, 0.3);
+    border-color: #d1d5db;
   }
 }
 
@@ -287,8 +269,8 @@ onBeforeUnmount(() => {
   letter-spacing: 1px;
 
   &--total {
-    color: #00fdfa;
-    text-shadow: 0 0 20px rgba(0, 253, 250, 0.2);
+    color: #1d4ed8;
+    text-shadow: 0 0 20px rgba(29, 78, 216, 0.12);
   }
 
   &--highrisk {
@@ -308,8 +290,8 @@ onBeforeUnmount(() => {
 // ── Progress Section ──
 .progress-section {
   flex: 1;
-  background: var(--card, #111827);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
   padding: 16px 18px;
   display: flex;
@@ -319,7 +301,7 @@ onBeforeUnmount(() => {
   transition: border-color 0.2s;
 
   &:hover {
-    border-color: rgba(49, 171, 227, 0.3);
+    border-color: #d1d5db;
   }
 }
 
@@ -332,7 +314,7 @@ onBeforeUnmount(() => {
 .progress-title {
   font-size: 13px;
   font-weight: 600;
-  color: var(--foreground, #d3d6dd);
+  color: #1f2937;
   letter-spacing: 0.5px;
 }
 
@@ -363,10 +345,10 @@ onBeforeUnmount(() => {
   position: relative;
   width: 100%;
   height: 18px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(0, 0, 0, 0.04);
   border-radius: 999px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.04);
   flex-shrink: 0;
 }
 
@@ -417,7 +399,7 @@ onBeforeUnmount(() => {
 .action-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   flex-shrink: 0;
   padding-top: 2px;
 }
@@ -427,10 +409,10 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   padding: 6px 14px;
-  background: rgba(49, 171, 227, 0.08);
-  border: 1px solid rgba(49, 171, 227, 0.2);
+  background: rgba(29, 78, 216, 0.08);
+  border: 1px solid rgba(29, 78, 216, 0.2);
   border-radius: 6px;
-  color: #31ABE3;
+  color: #1d4ed8;
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
@@ -449,10 +431,10 @@ onBeforeUnmount(() => {
   }
 
   &:hover {
-    background: rgba(49, 171, 227, 0.16);
-    border-color: rgba(49, 171, 227, 0.4);
-    box-shadow: 0 0 14px rgba(49, 171, 227, 0.08);
-    color: #00fdfa;
+    background: rgba(29, 78, 216, 0.16);
+    border-color: rgba(29, 78, 216, 0.4);
+    box-shadow: 0 0 14px rgba(29, 78, 216, 0.08);
+    color: #1d4ed8;
 
     .nav-btn-arrow {
       transform: translateX(3px);
@@ -460,45 +442,13 @@ onBeforeUnmount(() => {
   }
 
   &:active {
-    background: rgba(49, 171, 227, 0.22);
+    background: rgba(29, 78, 216, 0.22);
     transform: scale(0.98);
   }
-}
-
-// ── Update Bar ──
-.update-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.update-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #07f7a8;
-  animation: pulse-dot 2s ease-in-out infinite;
-
-  &--error {
-    background: #e3b337;
-  }
-}
-
-.update-text {
-  font-size: 10px;
-  color: var(--muted-foreground, #7c8a9e);
-  opacity: 0.4;
-  letter-spacing: 0.3px;
 }
 
 // ── Keyframes ──
 @keyframes spin {
   to { transform: rotate(360deg); }
-}
-
-@keyframes pulse-dot {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
 }
 </style>

@@ -364,8 +364,8 @@ onMounted(() => {
   flex-direction: column;
   height: 100%;
   max-height: 85vh;
-  background: rgba(0, 15, 30, 0.6);
-  border: 1px solid rgba(49, 171, 227, 0.3);
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
   padding: 15px;
   overflow: hidden;
@@ -376,7 +376,7 @@ onMounted(() => {
     justify-content: space-between;
     align-items: center;
     padding-bottom: 12px;
-    border-bottom: 1px solid rgba(49, 171, 227, 0.2);
+    border-bottom: 1px solid #e5e7eb;
     margin-bottom: 15px;
 
     .agent_tabs {

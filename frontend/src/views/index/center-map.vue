@@ -2,7 +2,7 @@
   <div class="topo-container">
     <!-- 顶部状态栏 -->
     <div class="header">
-      <div class="title">Wazuh 威胁拓扑</div>
+      <div class="title">网络拓扑监控</div>
       <div class="status-info">
         <span class="dot active"></span> 运行中 (每30s刷新)
         <button @click="fetchTopoData" class="refresh-btn">立即刷新</button>
@@ -47,14 +47,14 @@ const initGraph = () => {
   graph = new Graph({
     container: containerRef.value,
     autoResize: true,
-    background: { color: '#0b0f1a' }, // 深色背景
+    background: { color: '#DCE5FF' },
     panning: true, // 支持拖拽
     mousewheel: true, // 支持滚轮缩放
     grid: {
       size: 10,
       visible: true,
       type: 'dot',
-      args: { color: '#1a1f2e', thickness: 1 },
+      args: { color: '#e5e7eb', thickness: 1 },
     },
   });
 };
@@ -106,7 +106,7 @@ const renderTopology = (agents: any[]) => {
     label: `MANAGER\n${managerData?.name || 'Wazuh Server'}`,
     attrs: {
       body: { fill: '#1890ff', stroke: '#fff', strokeWidth: 2, rx: 10, ry: 10 },
-      label: { fill: '#fff', fontSize: 12, fontWeight: 'bold' }
+      label: { fill: '#1f2937', fontSize: 12, fontWeight: 'bold' }
     }
   });
 
@@ -146,7 +146,7 @@ const renderTopology = (agents: any[]) => {
           strokeWidth: hasThreat ? 3 : 1,
           rx: 5, ry: 5,
         },
-        label: { fill: '#fff', fontSize: 10 }
+        label: { fill: '#1f2937', fontSize: 10 }
       }
     });
 
@@ -195,10 +195,10 @@ onUnmounted(() => {
   position: relative;
   width: 100%;
   height: 600px;
-  background: #0b0f1a;
-  border: 1px solid #1a1f2e;
+  background: #DCE5FF;
+  border: 1px solid #e5e7eb;
   overflow: hidden;
-  color: white;
+  color: #374151;
   font-family: sans-serif;
 }
 
@@ -211,7 +211,7 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   z-index: 10;
-  background: rgba(11, 15, 26, 0.8);
+  background: rgba(255, 255, 255, 0.95);
 }
 
 .title {
@@ -222,7 +222,7 @@ onUnmounted(() => {
 
 .status-info {
   font-size: 12px;
-  color: #888;
+  color: #6b7280;
 }
 
 .dot {
@@ -261,7 +261,7 @@ onUnmounted(() => {
   left: 20px;
   display: flex;
   gap: 20px;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.03);
   padding: 10px 15px;
   border-radius: 4px;
   font-size: 12px;
@@ -284,7 +284,8 @@ onUnmounted(() => {
 .loading-mask {
   position: absolute;
   inset: 0;
-  background: rgba(0,0,0,0.5);
+  background: rgba(255,255,255,0.7);
+  color: #374151;
   display: flex;
   justify-content: center;
   align-items: center;

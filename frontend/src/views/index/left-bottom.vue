@@ -95,7 +95,7 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  color: #fff;
+  color: #374151;
   font-size: 12px;
 
   .flex { display: flex; align-items: center; }
@@ -107,7 +107,7 @@ onBeforeUnmount(() => {
   .alert_header {
     background: rgba(49, 171, 227, 0.2);
     padding: 10px 0;
-    color: #31ABE3;
+    color: #1f2937;
     font-weight: bold;
     .header_item { text-align: center; }
   }
@@ -140,7 +140,7 @@ onBeforeUnmount(() => {
 
   .alert_item {
     padding: 12px 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
     .item_text {
       text-align: center;
       padding: 0 5px;

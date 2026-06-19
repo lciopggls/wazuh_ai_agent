@@ -34,7 +34,7 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
     <div class="tp-body flex-1 overflow-y-auto px-4 pb-4">
       <div class="resources-area flex flex-col h-full">
         <div class="mb-3">
-          <h4 class="text-sm font-semibold text-[#00fdfa] m-0">🛡️ 安全线程可视化图谱</h4>
+          <h4 class="text-sm font-semibold text-[#1d4ed8] m-0">🛡️ 安全线程可视化图谱</h4>
           <p class="text-xs text-[var(--muted-foreground)] mt-1 mb-0 opacity-60">
             系统在溯源分析过程中生成的结构图，点击按钮查看完整大图
           </p>
@@ -110,7 +110,7 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
       <div v-if="isSvgModalOpen" class="svg-backdrop" @click.self="isSvgModalOpen = false">
         <div class="svg-window">
           <div class="svg-header">
-            <span class="text-sm font-bold text-[#00fdfa]">{{ svgModalTitle }}</span>
+            <span class="text-sm font-bold text-[#1d4ed8]">{{ svgModalTitle }}</span>
             <button class="svg-close" @click="isSvgModalOpen = false">✕</button>
           </div>
           <div class="svg-body" v-html="currentSvgContent"></div>
@@ -123,9 +123,9 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
 <style scoped lang="scss">
 // ── Root ──
 .tp-root {
-  background: var(--background, #0a0e17);
+  background: #ffffff;
   border-radius: 8px;
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border: 1px solid #e5e7eb;
   position: relative;
   overflow: hidden;
   height: 100%;
@@ -133,18 +133,18 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
 
 // ── Toolbar ──
 .tp-toolbar {
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
-  background: color-mix(in oklab, var(--background, #0a0e17) 98%, #31ABE3);
+  border-bottom: 1px solid #e5e7eb;
+  background: #f8fafc;
 }
 
 .toolbar-badge {
   font-size: 12px;
   font-weight: 600;
-  color: #00fdfa;
-  background: rgba(0, 253, 250, 0.06);
+  color: #1d4ed8;
+  background: rgba(29, 78, 216, 0.06);
   padding: 3px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(0, 253, 250, 0.1);
+  border: 1px solid rgba(29, 78, 216, 0.1);
 }
 
 .toolbar-hint {
@@ -170,13 +170,13 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
   transition: all 0.3s ease;
 
   &--active {
-    background: var(--card, #111827);
-    border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
     cursor: pointer;
 
     &:hover {
-      border-color: rgba(0, 253, 250, 0.2);
-      box-shadow: 0 0 20px rgba(0, 253, 250, 0.06);
+      border-color: rgba(29, 78, 216, 0.2);
+      box-shadow: 0 0 20px rgba(29, 78, 216, 0.06);
       transform: translateY(-2px);
     }
   }
@@ -193,8 +193,8 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
-  background: color-mix(in oklab, var(--card, #111827) 96%, #31ABE3);
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  background: #f8fafc;
+  border-bottom: 1px solid #e5e7eb;
 
   .graph-icon {
     font-size: 20px;
@@ -205,7 +205,7 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
   .graph-title {
     font-size: 13px;
     font-weight: 600;
-    color: var(--foreground, #d3d6dd);
+    color: #374151;
   }
 
   .graph-desc {
@@ -225,9 +225,9 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
   flex-shrink: 0;
 
   &.status-ready {
-    background: rgba(0, 253, 250, 0.08);
-    color: #00fdfa;
-    border: 1px solid rgba(0, 253, 250, 0.12);
+    background: rgba(29, 78, 216, 0.06);
+    color: #1d4ed8;
+    border: 1px solid rgba(29, 78, 216, 0.12);
   }
 
   &.status-pending {
@@ -266,7 +266,7 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
   width: 24px;
   height: 24px;
   border: 2px solid color-mix(in oklab, var(--muted-foreground, #7c8a9e) 10%, transparent);
-  border-top-color: #31ABE3;
+  border-top-color: #1d4ed8;
   border-radius: 50%;
   animation: radarSpin 1s linear infinite;
 }
@@ -283,9 +283,9 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
   line-height: 1.5;
 
   &--ok {
-    background: rgba(0, 253, 250, 0.03);
-    border-color: rgba(0, 253, 250, 0.12);
-    color: #00fdfa;
+    background: rgba(29, 78, 216, 0.03);
+    border-color: rgba(29, 78, 216, 0.12);
+    color: #1d4ed8;
   }
 }
 
@@ -293,7 +293,7 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
 .svg-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(3, 12, 28, 0.88);
+  background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(8px);
   display: flex;
   justify-content: center;
@@ -304,13 +304,13 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
 .svg-window {
   width: 88vw;
   height: 88vh;
-  background: #061630;
-  border: 1px solid rgba(0, 192, 255, 0.2);
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 10px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 0 40px rgba(0, 0, 0, 0.6), 0 0 80px rgba(0, 192, 255, 0.04);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
 }
 
 .svg-header {
@@ -318,15 +318,15 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 20px;
-  background: rgba(0, 192, 255, 0.05);
-  border-bottom: 1px solid rgba(0, 192, 255, 0.08);
+  background: #f0f7ff;
+  border-bottom: 1px solid #e5e7eb;
   flex-shrink: 0;
 }
 
 .svg-close {
   background: none;
   border: none;
-  color: rgba(0, 192, 255, 0.5);
+  color: #6b7280;
   font-size: 18px;
   cursor: pointer;
   padding: 4px 8px;
@@ -346,7 +346,7 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
   display: flex;
   justify-content: center;
   align-items: center;
-  background: #020914;
+  background: #f8fafc;
 
   :deep(svg) {
     max-width: 100%;

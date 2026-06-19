@@ -160,7 +160,7 @@ onMounted(() => {
   .rc-header-title {
     font-size: 12px;
     font-weight: 600;
-    color: rgba(255, 255, 255, 0.6);
+    color: rgba(0, 0, 0, 0.7);
     letter-spacing: 0.5px;
   }
   .rc-header-badge {
@@ -191,7 +191,7 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.2);
+  color: rgba(0, 0, 0, 0.3);
 }
 
 .rc-tag-cloud {
@@ -209,7 +209,7 @@ onMounted(() => {
   align-items: center;
   gap: 4px;
   padding: 3px 10px;
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(0, 0, 0, 0.02);
   border: 1px solid;
   border-radius: 999px;
   font-weight: 500;
@@ -219,7 +219,7 @@ onMounted(() => {
   max-width: 100%;
 
   &:hover {
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(0, 0, 0, 0.04);
     box-shadow: 0 0 10px currentColor;
   }
 

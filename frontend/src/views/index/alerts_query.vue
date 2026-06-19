@@ -381,9 +381,9 @@ onBeforeUnmount(() => {
 <style scoped lang="scss">
 // ── Root ──
 .tg-root {
-  background: var(--background, #0a0e17);
+  background: var(--background, #ffffff);
   border-radius: 8px;
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border: 1px solid #e5e7eb;
   position: relative;
   overflow: hidden;
   height: 100%;
@@ -391,8 +391,8 @@ onBeforeUnmount(() => {
 
 // ── Toolbar ──
 .tg-toolbar {
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
-  background: color-mix(in oklab, var(--background, #0a0e17) 98%, #31ABE3);
+  border-bottom: 1px solid #e5e7eb;
+  background: #f8fafc;
 }
 
 .tab-pill {
@@ -459,8 +459,8 @@ onBeforeUnmount(() => {
 
 // ── Level Filter ──
 .level-filter-bar {
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
-  background: color-mix(in oklab, var(--background, #0a0e17) 98%, #31ABE3);
+  border-bottom: 1px solid #e5e7eb;
+  background: #f8fafc;
 }
 
 .level-filter-label {
@@ -495,9 +495,9 @@ onBeforeUnmount(() => {
 
 // ── Alarm List ──
 .al-list-header {
-  background: color-mix(in oklab, var(--background, #0a0e17) 96%, #31ABE3);
+  background: #f8fafc;
   color: var(--muted-foreground, #7c8a9e);
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border-bottom: 1px solid #e5e7eb;
 }
 
 .al-list-body {
@@ -520,7 +520,7 @@ onBeforeUnmount(() => {
 }
 
 .al-row {
-  border-bottom: 1px solid color-mix(in oklab, var(--border, rgba(49, 171, 227, 0.12)) 50%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, #e5e7eb 50%, transparent);
 
   &:hover {
     background: rgba(49, 171, 227, 0.04);
@@ -544,7 +544,7 @@ onBeforeUnmount(() => {
 .modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.8);
+  background: rgba(255, 255, 255, 0.9);
   backdrop-filter: blur(4px);
   display: flex;
   justify-content: center;
@@ -555,20 +555,20 @@ onBeforeUnmount(() => {
 .modal-panel {
   width: 75%;
   max-height: 85vh;
-  background: var(--card, #111827);
-  border: 1px solid rgba(49, 171, 227, 0.25);
+  background: var(--card, #ffffff);
+  border: 1px solid #e5e7eb;
   border-radius: 10px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 0 30px rgba(0, 0, 0, 0.5), 0 0 60px rgba(49, 171, 227, 0.06);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
 
   .modal-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 14px 20px;
-    border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+    border-bottom: 1px solid #e5e7eb;
   }
 
   .modal-body {
@@ -580,7 +580,7 @@ onBeforeUnmount(() => {
 
   .modal-pre {
     margin: 0;
-    color: #a5d6ff;
+    color: #374151;
     font-family: 'Courier New', ui-monospace, monospace;
     font-size: 12.5px;
     white-space: pre-wrap;
@@ -624,8 +624,8 @@ onBeforeUnmount(() => {
 .hq-input-wrap {
   display: flex;
   align-items: center;
-  background: var(--muted, #1a2332);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  background: #f9fafb;
+  border: 1px solid #d1d5db;
   border-radius: 8px;
   padding: 0 12px;
   transition: all 0.2s ease;
@@ -648,7 +648,7 @@ onBeforeUnmount(() => {
   background: transparent;
   border: none;
   padding: 9px 8px;
-  color: var(--foreground, #d3d6dd);
+  color: #1f2937;
   outline: none;
   font-family: ui-monospace, monospace;
   font-size: 12.5px;
@@ -673,13 +673,13 @@ onBeforeUnmount(() => {
   top: calc(100% + 4px);
   left: 0;
   width: 100%;
-  background: var(--popover, #111827);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  background: var(--popover, #ffffff);
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
   z-index: 100;
   max-height: 220px;
   overflow-y: auto;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
 
   &::-webkit-scrollbar { width: 3px; }
   &::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--muted-foreground, #7c8a9e) 15%, transparent); border-radius: 2px; }
@@ -691,10 +691,10 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 9px 14px;
   cursor: pointer;
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.06));
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
   font-size: 12.5px;
   font-family: ui-monospace, monospace;
-  color: var(--foreground, #d3d6dd);
+  color: var(--foreground, #1f2937);
   transition: background 0.15s ease;
 
   &:hover { background: rgba(49, 171, 227, 0.06); }
@@ -746,8 +746,8 @@ onBeforeUnmount(() => {
 }
 
 .hq-card {
-  background: var(--card, #111827);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  background: var(--card, #ffffff);
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
   padding: 12px 14px;
   margin-bottom: 10px;
@@ -756,8 +756,8 @@ onBeforeUnmount(() => {
   border-left: 3px solid #31ABE3;
 
   &:hover {
-    border-color: color-mix(in oklab, var(--border, rgba(49, 171, 227, 0.12)) 60%, #31ABE3);
-    background: color-mix(in oklab, var(--card, #111827) 96%, #31ABE3);
+    border-color: color-mix(in oklab, #e5e7eb 60%, #31ABE3);
+    background: #f8fafc;
     transform: translateX(2px);
   }
 }
@@ -770,7 +770,7 @@ onBeforeUnmount(() => {
 
   .hq-card-time {
     font-family: ui-monospace, monospace;
-    font-size: 11.5px;
+    font-size: 13px;
     color: var(--muted-foreground, #7c8a9e);
   }
 
@@ -783,7 +783,7 @@ onBeforeUnmount(() => {
 
 .hq-card-body {
   font-size: 13px;
-  color: var(--foreground, #d3d6dd);
+  color: var(--foreground, #1f2937);
   line-height: 1.5;
   word-break: break-all;
 }

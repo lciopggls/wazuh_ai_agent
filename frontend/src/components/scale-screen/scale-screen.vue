@@ -93,7 +93,7 @@ const styles: Record<string, CSSProperties> = {
   box: {
     overflow: "hidden",
     backgroundSize: `100% 100%`,
-    background: `#000`,
+    background: `#f5f7fa`,
     width: `100vw`,
     height: `100vh`,
   },

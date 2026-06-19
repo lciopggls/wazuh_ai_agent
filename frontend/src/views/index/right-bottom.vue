@@ -139,10 +139,7 @@ onBeforeUnmount(() => {
     </button>
 
     <!-- 状态栏 -->
-    <!-- <div class="status-bar">
-      <span class="status-dot"></span>
-      <span class="status-text">数据实时更新中</span>
-    </div> -->
+    <!-- 111111 -->
   </div>
 </template>
 
@@ -158,8 +155,8 @@ onBeforeUnmount(() => {
 
 // ── 信息卡片 ──
 .info-card {
-  background: var(--card, #111827);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  background: var(--card, #ffffff);
+  border: 1px solid var(--border, #e5e7eb);
   border-radius: 8px;
   padding: 14px 16px;
   display: flex;
@@ -197,9 +194,9 @@ onBeforeUnmount(() => {
 .thread-id {
   font-family: "Consolas", "Fira Code", monospace;
   font-size: 13px;
-  color: #00fdfa;
+  color: #1d4ed8;
   letter-spacing: 0.5px;
-  text-shadow: 0 0 8px rgba(0, 253, 250, 0.15);
+  text-shadow: none;
   user-select: all;
 
   &--empty {
@@ -215,7 +212,7 @@ onBeforeUnmount(() => {
   height: 32px;
   border: 1px solid rgba(49, 171, 227, 0.2);
   border-radius: 6px;
-  background: rgba(49, 171, 227, 0.08);
+  background: rgba(49, 171, 227, 0.06);
   color: #31abe3;
   font-size: 14px;
   cursor: pointer;
@@ -237,9 +234,9 @@ onBeforeUnmount(() => {
   }
 
   &--done {
-    background: rgba(0, 253, 250, 0.12);
-    border-color: #00fdfa;
-    color: #00fdfa;
+    background: rgba(29, 78, 216, 0.1);
+    border-color: #1d4ed8;
+    color: #1d4ed8;
   }
 }
 

@@ -276,9 +276,9 @@ onMounted(() => {
 <style scoped lang="scss">
 // ── Root ──
 .rq-root {
-  background: var(--background, #0a0e17);
+  background: #ffffff;
   border-radius: 8px;
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border: 1px solid #e5e7eb;
   position: relative;
   overflow: hidden;
   height: 100%;
@@ -286,18 +286,18 @@ onMounted(() => {
 
 // ── Toolbar ──
 .rq-toolbar {
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
-  background: color-mix(in oklab, var(--background, #0a0e17) 98%, #31ABE3);
+  border-bottom: 1px solid #e5e7eb;
+  background: #f8fafc;
 }
 
 .toolbar-badge {
   font-size: 12px;
   font-weight: 600;
-  color: #00fdfa;
-  background: rgba(0, 253, 250, 0.06);
+  color: #1d4ed8;
+  background: rgba(29, 78, 216, 0.06);
   padding: 3px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(0, 253, 250, 0.1);
+  border: 1px solid rgba(29, 78, 216, 0.1);
 }
 
 .toolbar-hint {
@@ -325,8 +325,8 @@ onMounted(() => {
 .search-input-wrap {
   display: flex;
   align-items: center;
-  background: var(--muted, #1a2332);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  background: #f9fafb;
+  border: 1px solid #d1d5db;
   border-radius: 8px;
   padding: 0 12px;
   transition: all 0.2s ease;
@@ -349,7 +349,7 @@ onMounted(() => {
   background: transparent;
   border: none;
   padding: 9px 8px;
-  color: var(--foreground, #d3d6dd);
+  color: #1f2937;
   outline: none;
   font-family: ui-monospace, monospace;
   font-size: 12.5px;
@@ -375,13 +375,13 @@ onMounted(() => {
   top: calc(100% + 4px);
   left: 0;
   width: 100%;
-  background: var(--popover, #111827);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
   z-index: 100;
   max-height: 220px;
   overflow-y: auto;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
 
   &::-webkit-scrollbar { width: 3px; }
   &::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--muted-foreground, #7c8a9e) 15%, transparent); border-radius: 2px; }
@@ -393,7 +393,7 @@ onMounted(() => {
   align-items: center;
   padding: 9px 14px;
   cursor: pointer;
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.06));
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
   font-size: 12.5px;
   transition: background 0.15s ease;
 
@@ -404,16 +404,16 @@ onMounted(() => {
   span { color: var(--muted-foreground, #7c8a9e); font-size: 11px; }
 
   &--action {
-    background: rgba(0, 253, 250, 0.03);
-    color: #00fdfa;
-    border-bottom: 1px solid rgba(0, 253, 250, 0.1);
+    background: rgba(29, 78, 216, 0.03);
+    color: #1d4ed8;
+    border-bottom: 1px solid rgba(29, 78, 216, 0.1);
     font-weight: 500;
   }
 }
 
 .btn-refresh {
   background: rgba(49, 171, 227, 0.1);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border: 1px solid #e5e7eb;
   color: #31ABE3;
   padding: 0 16px;
   font-size: 12px;
@@ -435,8 +435,8 @@ onMounted(() => {
 }
 
 .rule-card {
-  background: var(--card, #111827);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
   padding: 12px 14px;
   margin-bottom: 8px;
@@ -445,8 +445,8 @@ onMounted(() => {
   border-left: 3px solid #31ABE3;
 
   &:hover {
-    border-color: color-mix(in oklab, var(--border, rgba(49, 171, 227, 0.12)) 60%, #31ABE3);
-    background: color-mix(in oklab, var(--card, #111827) 96%, #31ABE3);
+    border-color: color-mix(in oklab, #e5e7eb 60%, #31ABE3);
+    background: #f8fafc;
     transform: translateX(2px);
   }
 }
@@ -461,7 +461,7 @@ onMounted(() => {
     font-family: ui-monospace, monospace;
     font-size: 12.5px;
     font-weight: 700;
-    color: #00fdfa;
+    color: #1d4ed8;
   }
 
   .rule-level {
@@ -473,7 +473,7 @@ onMounted(() => {
 
 .rule-desc {
   font-size: 12.5px;
-  color: var(--foreground, #d3d6dd);
+  color: #374151;
   line-height: 1.45;
   margin: 4px 0;
   word-break: break-all;
@@ -490,28 +490,28 @@ onMounted(() => {
 
 // ── XML Dialog ──
 .xml-viewer {
-  background: var(--code, #0d1117);
+  background: #ffffff;
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border: 1px solid #e5e7eb;
 }
 
 .xml-path {
-  background: color-mix(in oklab, var(--code, #0d1117) 95%, #31ABE3);
-  padding: 7px 14px;
-  font-size: 11.5px;
-  color: var(--muted-foreground, #7c8a9e);
+  background: #ffffff;
+  padding: 9px 16px;
+  font-size: 13px;
+  color: #374151;
   font-family: ui-monospace, monospace;
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border-bottom: 1px solid #e5e7eb;
 }
 
 .xml-content {
   margin: 0;
-  padding: 14px 16px;
-  color: #00fdfa;
+  padding: 16px 20px;
+  color: #1f2937;
   font-family: 'Consolas', 'Monaco', ui-monospace, monospace;
-  font-size: 12.5px;
-  line-height: 1.55;
+  font-size: 14px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 55vh;
@@ -522,9 +522,9 @@ onMounted(() => {
 }
 
 .btn-close-dialog {
-  background: var(--muted, #1a2332);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
-  color: var(--foreground, #d3d6dd);
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  color: #374151;
   padding: 7px 20px;
   border-radius: 6px;
   cursor: pointer;
@@ -539,23 +539,23 @@ onMounted(() => {
 
 // ── Element Dialog Overrides ──
 :deep(.xml-dialog) {
-  --el-dialog-bg-color: var(--card, #111827) !important;
+  --el-dialog-bg-color: #ffffff !important;
 
   .el-dialog {
-    background: var(--card, #111827) !important;
-    border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb;
     border-radius: 10px;
-    box-shadow: 0 0 30px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
   }
 
   .el-dialog__title {
-    color: #00fdfa;
+    color: #1d4ed8;
     font-weight: 700;
     font-size: 14.5px;
   }
 
   .el-dialog__header {
-    border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+    border-bottom: 1px solid #e5e7eb;
     margin-right: 0;
     padding: 14px 20px;
   }
@@ -563,7 +563,7 @@ onMounted(() => {
   .el-dialog__body { padding: 16px 20px; }
 
   .el-dialog__footer {
-    border-top: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+    border-top: 1px solid #e5e7eb;
     padding: 12px 20px;
   }
 

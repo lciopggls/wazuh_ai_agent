@@ -68,24 +68,24 @@ const setOption = (xData: any[], yLow: any[], yMid: any[], yHigh: any[]) => {
       type: "category",
       data: xData,
       boundaryGap: false,
-      splitLine: { show: true, lineStyle: { color: "rgba(31,99,163,.2)" } },
-      axisLine: { lineStyle: { color: "rgba(31,99,163,.1)" } },
-      axisLabel: { color: "#7EB7FD", fontWeight: "500" },
+      splitLine: { show: true, lineStyle: { color: "rgba(0,0,0,0.08)" } },
+      axisLine: { lineStyle: { color: "rgba(0,0,0,0.06)" } },
+      axisLabel: { color: "#374151", fontWeight: "500" },
     },
     yAxis: {
       type: "value",
-      splitLine: { show: true, lineStyle: { color: "rgba(31,99,163,.2)" } },
-      axisLine: { lineStyle: { color: "rgba(31,99,163,.1)" } },
-      axisLabel: { color: "#7EB7FD", fontWeight: "500" },
+      splitLine: { show: true, lineStyle: { color: "rgba(0,0,0,0.08)" } },
+      axisLine: { lineStyle: { color: "rgba(0,0,0,0.06)" } },
+      axisLabel: { color: "#374151", fontWeight: "500" },
     },
     tooltip: {
       trigger: "axis",
-      backgroundColor: "rgba(0,0,0,.6)",
-      borderColor: "rgba(147, 235, 248, .8)",
+      backgroundColor: "rgba(255,255,255,.95)",
+      borderColor: "rgba(49, 171, 227, 0.3)",
       textStyle: { color: "#FFF" },
     },
     grid: {
-      show: true, left: "10px", right: "30px", bottom: "10px", top: "32px", containLabel: true, borderColor: "#1F63A3",
+      show: true, left: "10px", right: "30px", bottom: "10px", top: "32px", containLabel: true, borderColor: "#e5e7eb",
     },
     series: [
       {

@@ -18,6 +18,12 @@ import archives_query from './archives_query.vue';
 import rule_query from './rule_query.vue';
 import tactical_summary from './tactical_summary.vue';
 import topology_view from './topology_view.vue';
+import VulnerabilityQuery from './VulnerabilityQuery.vue';
+import vulnerability_overview from './vulnerability_overview.vue';
+import asset_list from './asset_list.vue';
+import process_monitor from './process_monitor.vue';
+import threat_hunt from './threat_hunt.vue';
+import SecurityInsights from './security_insights.vue';
 
 // 控制页面切换
 const currentPage = ref(1);
@@ -27,15 +33,46 @@ const globalSessions = ref<Record<string, any[]>>({});
 const currentAgentId = ref("router_agent");
 const isComponentsReady = ref(false);
 
-// 侧边栏菜单配置
+// 侧边栏菜单配置（按安全运维工作流分组）
 const currentMenu = ref('ai-chat');
-const sidebarMenu = [
-  { key: 'ai-chat',    icon: '💬', label: 'AI 对话窗口' },
-  { key: 'alerts',     icon: '🚨', label: '告警查询' },
-  { key: 'archives',   icon: '📋', label: '历史日志查询' },
-  { key: 'rules',      icon: '📜', label: '规则查询' },
-  { key: 'tactical',   icon: '📊', label: '战术卡片' },
-  { key: 'topology',   icon: '🕸️', label: '攻击拓扑图' },
+const sidebarGroups = [
+  {
+    title: 'AI 智能助手',
+    items: [
+      { key: 'ai-chat',    icon: '💬', label: 'AI 对话窗口' },
+    ]
+  },
+  {
+    title: '告警与威胁',
+    items: [
+      { key: 'alerts',     icon: '🚨', label: '告警查询' },
+      { key: 'rules',      icon: '📜', label: '规则查询' },
+      { key: 'threat-hunt', icon: '🛡️', label: '主动威胁排查' },
+    ]
+  },
+  {
+    title: '资产与监控',
+    items: [
+      { key: 'assets',     icon: '🖥️', label: '受控资产列表' },
+      { key: 'process',    icon: '⚙️', label: '进程监控' },
+    ]
+  },
+  {
+    title: '数据与漏洞',
+    items: [
+      { key: 'archives',      icon: '📋', label: '历史日志查询' },
+      { key: 'vulnerability', icon: '🔍', label: '漏洞查询' },
+      { key: 'vulnerability-overview', icon: '🎯', label: '漏洞信息总览' },
+      { key: 'security-insights', icon: '🔭', label: '安全洞察总览' },
+    ]
+  },
+  {
+    title: '可视化分析',
+    items: [
+      { key: 'tactical',  icon: '📊', label: '战术卡片' },
+      { key: 'topology',  icon: '🕸️', label: '攻击拓扑图' },
+    ]
+  },
 ];
 
 // 1. 初始化加载
@@ -154,24 +191,24 @@ const latestAttackSvgs = computed(() => {
 <template>
   <div class="main-container">
     <div class="page-controls">
-      <button @click="currentPage = 1" :class="{ active: currentPage === 1 }">第一页</button>
-      <button @click="currentPage = 2" :class="{ active: currentPage === 2 }">第二页</button>
+      <button @click="currentPage = 1" :class="{ active: currentPage === 1 }">数智运营大屏</button>
+      <button @click="currentPage = 2" :class="{ active: currentPage === 2 }">数智运维工作台</button>
     </div>
 
     <div v-if="currentPage === 1 && isComponentsReady" class="index-box">
       <div class="contetn_left">
-        <ItemWrap class="contetn_left-top contetn_lr-item" title="设备总览"><LeftTop /></ItemWrap>
-        <ItemWrap class="contetn_left-center contetn_lr-item" title="警告总览"><LeftCenter /></ItemWrap>
-        <ItemWrap class="contetn_left-bottom contetn_lr-item" title="设备提醒" style="padding: 0 10px 16px 10px"><LeftBottom /></ItemWrap>
+        <ItemWrap class="contetn_left-top contetn_lr-item" title="资产监控概览"><LeftTop /></ItemWrap>
+        <ItemWrap class="contetn_left-center contetn_lr-item" title="告警等级分布"><LeftCenter /></ItemWrap>
+        <ItemWrap class="contetn_left-bottom contetn_lr-item" title="实时告警事件" style="padding: 0 10px 16px 10px"><LeftBottom /></ItemWrap>
       </div>
       <div class="contetn_center">
-        <CenterMap class="contetn_center_top" title="设备分布图" />
-        <ItemWrap class="contetn_center-bottom" title="规则概览"><CenterBottom /></ItemWrap>
+        <CenterMap class="contetn_center_top" title="网络拓扑监控" />
+        <ItemWrap class="contetn_center-bottom" title="规则风险分析"><CenterBottom /></ItemWrap>
       </div>
       <div class="contetn_right">
-        <ItemWrap class="contetn_left-bottom contetn_lr-item" title="报警次数"><RightTop /></ItemWrap>
-        <ItemWrap class="contetn_left-bottom contetn_lr-item" title="报警查询" style="padding: 0 10px 16px 10px"><RightCenter /></ItemWrap>
-        <ItemWrap class="contetn_left-bottom contetn_lr-item" title="AI 助理监控"><RightBottom :sessions="globalSessions" :agent-id="currentAgentId" /></ItemWrap>
+        <ItemWrap class="contetn_left-bottom contetn_lr-item" title="告警趋势分析"><RightTop /></ItemWrap>
+        <ItemWrap class="contetn_left-bottom contetn_lr-item" title="高频告警排行" style="padding: 0 10px 16px 10px"><RightCenter /></ItemWrap>
+        <ItemWrap class="contetn_left-bottom contetn_lr-item" title="AI 会话监控"><RightBottom :sessions="globalSessions" :agent-id="currentAgentId" /></ItemWrap>
       </div>
     </div>
 
@@ -183,15 +220,18 @@ const latestAttackSvgs = computed(() => {
           <span class="sidebar-title-text">功能导航</span>
         </div>
         <div class="sidebar-nav">
-          <div
-            v-for="item in sidebarMenu"
-            :key="item.key"
-            :class="['nav-item', currentMenu === item.key ? 'nav-item--active' : '']"
-            @click="currentMenu = item.key"
-          >
-            <span class="nav-icon">{{ item.icon }}</span>
-            <span class="nav-label">{{ item.label }}</span>
-          </div>
+          <template v-for="group in sidebarGroups" :key="group.title">
+            <div class="nav-group-title">{{ group.title }}</div>
+            <div
+              v-for="item in group.items"
+              :key="item.key"
+              :class="['nav-item', currentMenu === item.key ? 'nav-item--active' : '']"
+              @click="currentMenu = item.key"
+            >
+              <span class="nav-icon">{{ item.icon }}</span>
+              <span class="nav-label">{{ item.label }}</span>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -211,6 +251,24 @@ const latestAttackSvgs = computed(() => {
         </template>
         <template v-else-if="currentMenu === 'tactical'">
           <tactical_summary :attack-abstract="latestAttackAbstract" />
+        </template>
+        <template v-else-if="currentMenu === 'vulnerability'">
+          <VulnerabilityQuery />
+        </template>
+        <template v-else-if="currentMenu === 'vulnerability-overview'">
+          <vulnerability_overview />
+        </template>
+        <template v-else-if="currentMenu === 'security-insights'">
+          <SecurityInsights />
+        </template>
+        <template v-else-if="currentMenu === 'assets'">
+          <asset_list />
+        </template>
+        <template v-else-if="currentMenu === 'process'">
+          <process_monitor />
+        </template>
+        <template v-else-if="currentMenu === 'threat-hunt'">
+          <threat_hunt />
         </template>
         <template v-else-if="currentMenu === 'topology'">
           <topology_view :svgs="latestAttackSvgs" />
@@ -268,8 +326,8 @@ const latestAttackSvgs = computed(() => {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: rgba(10, 14, 23, 0.8);
-  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  background: #ffffff;
+  border: 1px solid var(--border, #e5e7eb);
   border-radius: 10px;
   overflow: hidden;
   height: 100%;
@@ -280,8 +338,8 @@ const latestAttackSvgs = computed(() => {
   align-items: center;
   gap: 8px;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--border, rgba(49, 171, 227, 0.12));
-  background: color-mix(in oklab, #0a0e17 97%, #31ABE3);
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  background: #f8fafc;
   flex-shrink: 0;
 
   .sidebar-title-icon {
@@ -291,7 +349,7 @@ const latestAttackSvgs = computed(() => {
   .sidebar-title-text {
     font-size: 13px;
     font-weight: 700;
-    color: #00fdfa;
+    color: #1d4ed8;
     letter-spacing: 1px;
   }
 }
@@ -302,12 +360,26 @@ const latestAttackSvgs = computed(() => {
   padding: 8px 10px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 
   &::-webkit-scrollbar { width: 3px; }
   &::-webkit-scrollbar-thumb {
     background: color-mix(in oklab, var(--muted-foreground, #7c8a9e) 15%, transparent);
     border-radius: 2px;
+  }
+}
+
+.nav-group-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #9ca3af;
+  letter-spacing: 0.5px;
+  padding: 10px 14px 4px;
+  text-transform: uppercase;
+  user-select: none;
+
+  &:first-of-type {
+    padding-top: 4px;
   }
 }
 
@@ -339,7 +411,7 @@ const latestAttackSvgs = computed(() => {
   &:hover {
     background: rgba(49, 171, 227, 0.06);
     border-color: rgba(49, 171, 227, 0.1);
-    .nav-label { color: var(--foreground, #d3d6dd); }
+    .nav-label { color: var(--foreground, #1f2937); }
   }
 
   &--active {
@@ -348,7 +420,7 @@ const latestAttackSvgs = computed(() => {
     box-shadow: inset 3px 0 0 #31ABE3;
 
     .nav-label {
-      color: #31ABE3;
+      color: #1d4ed8;
       font-weight: 600;
     }
 
@@ -358,7 +430,7 @@ const latestAttackSvgs = computed(() => {
 
     &:hover {
       background: rgba(49, 171, 227, 0.12);
-      .nav-label { color: #00fdfa; }
+      .nav-label { color: #1d4ed8; }
     }
   }
 }
@@ -386,11 +458,11 @@ const latestAttackSvgs = computed(() => {
   button {
     margin: 0 10px;
     padding: 5px 15px;
-    background: #0b2c5a;
-    border: 1px solid #00c0ff;
-    color: #fff;
+    background: #e0f2fe;
+    border: 1px solid #93c5fd;
+    color: #1e40af;
     cursor: pointer;
-    &.active { background: #00c0ff; }
+    &.active { background: #3b82f6; }
   }
 }
 </style>

@@ -78,14 +78,14 @@ const setOption = () => {
       textStyle: {
         rich: {
           value: {
-            color: "#ffffff",
+            color: "#1f2937",
             fontSize: 24,
             fontWeight: "bold",
             lineHeight: 20,
             padding: [4, 0, 4, 0]
           },
           name: {
-            color: "#ffffff",
+            color: "#1f2937",
             lineHeight: 20,
           },
         },
@@ -93,8 +93,8 @@ const setOption = () => {
     },
     tooltip: {
       trigger: "item",
-      backgroundColor: "rgba(0,0,0,.6)",
-      borderColor: "rgba(147, 235, 248, .8)",
+      backgroundColor: "rgba(255,255,255,.95)",
+      borderColor: "rgba(49, 171, 227, 0.3)",
       textStyle: { color: "#FFF" },
     },
     series: [
@@ -104,14 +104,14 @@ const setOption = () => {
         radius: ["40%", "70%"],
         itemStyle: {
           borderRadius: 6,
-          borderColor: "rgba(255,255,255,0)",
+          borderColor: "rgba(0,0,0,0)",
           borderWidth: 2,
         },
         label: {
           show: true,
           formatter: "   {b|{b}}   \n   {c|{c}次}   {per|{d}%}   ",
           rich: {
-            b: { color: "#fff", fontSize: 12, lineHeight: 26 },
+            b: { color: "#1f2937", fontSize: 12, lineHeight: 26 },
             c: { color: "#31ABE3", fontSize: 14 },
             per: { color: "#31ABE3", fontSize: 14 },
           },

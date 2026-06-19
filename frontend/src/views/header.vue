@@ -3,12 +3,12 @@ import { reactive } from "vue";
 import dayjs from 'dayjs';
 import type {DateDataType} from "./index.d"
 import {useSettingStore} from "@/stores/index"
-
+let timing: ReturnType<typeof setInterval> | null = null;
 const dateData = reactive<DateDataType>({
   dateDay: "",
   dateYear: "",
   dateWeek: "",
-  timing:null
+  timing : setInterval(() => {}, 1000),
 });
 
 const { setSettingShow} =useSettingStore()
@@ -29,7 +29,7 @@ timeFn()
     <div class="guang"></div>
     <div class="d-flex jc-center">
       <div class="title">
-        <span class="title-text">wazuh+智能安全平台</span>
+        <span class="title-text">电网网络安全数智分析平台</span>
       </div>
     </div>
     <div class="timers">
@@ -45,7 +45,7 @@ timeFn()
 <style scoped lang="scss">
 .title_wrap {
   height: 60px;
-  background-image: url("../assets/img/top.png");
+  background: linear-gradient(135deg, #e8f0fe 0%, #f0f4ff 100%);
   background-size: cover;
   background-position: center center;
   position: relative;
@@ -83,6 +83,7 @@ timeFn()
     right: 0;
     top: 30px;
     font-size: 18px;
+    color: #374151;
     display: flex;
     align-items: center;
 

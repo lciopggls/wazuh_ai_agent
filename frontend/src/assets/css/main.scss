@@ -1,21 +1,22 @@
 html,body{
     height: 100%;
     width: 100%;
+    background: #f5f7fa;
 }
 #app{
     .content_wrap{
-        color: #d3d6dd;
+        color: #1f2937;
     }
 }
 
 html .el-message {
-    --yh-bg-color-container:#242424;
+    --yh-bg-color-container:#ffffff;
     --yh-shadow-3: 0 16px 24px rgba(0, 0, 0, .14), 0 6px 30px rgba(0, 0, 0, 12%), 0 8px 10px rgba(0, 0, 0, 20%);
-    --yh-shadow-inset-top: inset 0 .5px 0 #5e5e5e;
-    --yh-shadow-inset-right: inset .5px 0 0 #5e5e5e;
-    --yh-shadow-inset-bottom: inset 0 -.5px 0 #5e5e5e;
-    --yh-shadow-inset-left: inset -.5px 0 0 #5e5e5e;
-    --yh-text-color-primary:rgba(255, 255, 255, .9);
+    --yh-shadow-inset-top: inset 0 .5px 0 #e5e5e5;
+    --yh-shadow-inset-right: inset .5px 0 0 #e5e5e5;
+    --yh-shadow-inset-bottom: inset 0 -.5px 0 #e5e5e5;
+    --yh-shadow-inset-left: inset -.5px 0 0 #e5e5e5;
+    --yh-text-color-primary:rgba(0, 0, 0, .9);
     --yh-brand-color: #0052d9;
     --yh-success-color: #059465;
     --yh-error-color: #c64751;
@@ -66,7 +67,7 @@ html .el-message {
     &:hover {
       &::-webkit-scrollbar-thumb {
         //滚动条的设置
-        background-color: rgba(14, 59, 150, 0.5);
+        background-color: rgba(100, 150, 200, 0.3);
         background-clip: padding-box;
         border-radius: 4px;
       }
@@ -86,7 +87,7 @@ html .el-message {
   
   
     &::-webkit-scrollbar-thumb:hover {
-      background-color: rgba(14, 59, 150, .8);
+      background-color: rgba(100, 150, 200, 0.5);
     }
   }
 
