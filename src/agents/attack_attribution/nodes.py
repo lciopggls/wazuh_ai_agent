@@ -1394,7 +1394,7 @@ def visualization_node(state: AttributionState, config: RunnableConfig, model):
         .title {{ font-family: sans-serif; font-size: 18px; font-weight: bold; fill: #1e293b; }}
     </style>
 
-    <text x="50" y="30" class="title">ATTACK TIMELINE &amp; EXECUTION FLOW</text>
+    <text x="50" y="30" class="title">攻击时间线与执行流程</text>
     <line x1="50" y1="50" x2="50" y2="560" class="timeline-line" />
 
     <!-- Event 1 — 4 text blocks (timestamp + MITRE + desc + cmdline) → 90+35+20=145, use 180 -->

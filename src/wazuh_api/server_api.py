@@ -1,4 +1,5 @@
 import logging
+from typing import Literal
 
 import requests
 
@@ -458,8 +459,49 @@ def run_logtest(log_event: str, token: str = None, location: str = None, log_for
     return response.json()
 
 
+def block_ip_on_agent(
+    agent_id: str,
+    target_ip: str,
+    command_name: Literal["netsh600", "netsh3600", "netsh86400", "netsh0"] = "netsh600",
+):
+    """Block an IP address on a specified agent.
+
+    Args:
+        agent_id: Wazuh agent ID.
+        target_ip: IP address to block.
+        command_name: netsh command variant determining block duration.
+            netsh600  - 10 minutes
+            netsh3600 - 1 hour
+            netsh86400 - 1 day
+            netsh0    - permanent
+    """
+    logger.info(
+        "Blocking IP %s on agent %s with command %s", target_ip, agent_id, command_name
+    )
+    requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
+    response = requests.put(
+        f"{protocol}://{host}:{port}/active-response?agents_list={agent_id}",
+        headers=requests_headers,
+        json={
+            "command": command_name,
+            "alert": {"data": {"srcip": target_ip}},
+        },
+        verify=False,
+    )
+    if response.status_code == 200:
+        logger.info(
+            "Block IP %s on agent %s successfully", target_ip, agent_id
+        )
+    else:
+        logger.error(
+            "Failed to block IP %s on agent %s: %s", target_ip, agent_id, response.text
+        )
+    return response.json()
+
+
 if __name__ == "__main__":
-    print(get_wazuh_server_api_info())
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    # print(get_wazuh_server_api_info())
     # print(get_agents_status_summary())
     # print(get_agents_os_summary())
     # print(list_agents(True))
@@ -469,5 +511,12 @@ if __name__ == "__main__":
     # print(get_config_agentless())
     # print(get_manager_logs(limit=20, tag="wazuh-analysisd"))
     # print(get_manager_logs_summary())
-    print(get_rule_info(201))
+    # print(get_rule_info(201))
     # print(validate_configuration())
+
+    # 在 agent 006 上封禁 192.168.109.137，10分钟
+    print(block_ip_on_agent(agent_id="006", target_ip="192.168.109.137", command_name="netsh600"))
+
+
+
+
