@@ -1973,8 +1973,11 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         while remaining:
             batch = {eid for eid in remaining if residual_indeg.get(eid, 0) == 0}
             if not batch:
-                # true cycle — break by putting all remaining in the current layer
-                batch = set(remaining)
+                # true cycle — pick only the node(s) with minimum indeg to
+                # break the cycle one step at a time, preventing all remaining
+                # nodes from collapsing into a single layer
+                min_indeg = min(residual_indeg.values())
+                batch = {eid for eid in remaining if residual_indeg[eid] == min_indeg}
             for eid in batch:
                 layers[eid] = current_layer
                 if eid in adj:
@@ -2214,8 +2217,9 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
             existing_prio = REL_PRIORITY.get(existing[0], 0) if existing else 0
             if REL_PRIORITY.get(rel_type, 0) > existing_prio:
                 same_layer_pairs[pair] = (rel_type, ts)
-        else:
+        elif x1 < x2:
             cross_layer_relations.append(rel)
+        # x1 > x2: reverse edge (right→left) — silently dropped
 
     edge_paths: list[str] = []
     edge_labels: list[str] = []
@@ -2252,8 +2256,6 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         src, tgt = rel.get("source", ""), rel.get("target", "")
         x1, y1 = node_pos[src]
         x2, y2 = node_pos[tgt]
-        sx, sy = x1 + NODE_WIDTH, y1 + NODE_HEIGHT // 2
-        tx, ty_base = x2, y2 + NODE_HEIGHT // 2
 
         rel_type = rel.get("relation", "")
         sw, dash, edge_color, arrow_id = rel_styles.get(
@@ -2261,18 +2263,21 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         )
         dash_attr = f' stroke-dasharray="{dash}"' if dash != "none" else ""
 
+        # source is always left of target (reverse edges filtered above)
+        sx, sy = x1 + NODE_WIDTH, y1 + NODE_HEIGHT // 2
+        tx, ty_base = x2, y2 + NODE_HEIGHT // 2
         slot = target_entry_slots.get(tgt, 0)
         target_entry_slots[tgt] = slot + 1
         offset_sign = 1 if slot % 2 == 0 else -1
         offset_idx = (slot + 1) // 2
         ty = ty_base + offset_sign * offset_idx * 20
         corner_x = tx - 90 - offset_sign * offset_idx * 8
-
         edge_paths.append(
             f'<path d="M {sx} {sy} L {corner_x} {sy} L {corner_x} {ty} L {tx} {ty}" fill="none" stroke="{edge_color}" stroke-width="{sw}"{dash_attr} marker-end="url(#{arrow_id})"/>'
         )
         label = rel_labels.get(rel_type, rel_type)
         lx = (corner_x + tx) / 2
+
         edge_labels.append(
             f'<text x="{lx}" y="{ty}" font-family="sans-serif" font-size="10" fill="#334155" stroke="#f1f5f9" stroke-width="4" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">{label}</text>'
         )
