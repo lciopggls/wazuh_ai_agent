@@ -8,6 +8,8 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.config import get_config
 
 from agents.attack_attribution.attack_attributor import get_attack_attribution_agent
+from agents.attack_attribution.utils import extract_agent_ip_mapping
+from agents.response_agent import get_response_agent
 from agents.rule_agent.rule_agent import get_rule_agent
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ def _get_thread_session(
             "specialist_state_cache": {
                 "rule_agent": None,
                 "attack_attribution": None,
+                "response_agent": None,
             },
         }
     return session_cache_by_thread[thread_id]
@@ -82,6 +85,17 @@ def _is_high_risk_rule_task(task: str) -> bool:
         "overwrite",
         "启用规则",
         "停用规则",
+    ]
+    lowered_task = task.lower()
+    return any(keyword in task or keyword in lowered_task for keyword in high_risk_keywords)
+
+
+def _is_high_risk_response_task(task: str) -> bool:
+    high_risk_keywords = [
+        "封禁",
+        "block",
+        "阻断",
+        "ban",
     ]
     lowered_task = task.lower()
     return any(keyword in task or keyword in lowered_task for keyword in high_risk_keywords)
@@ -173,8 +187,10 @@ def _invoke_specialist(
     reply = _extract_latest_ai_content(result.get("messages"))
     if specialist_name == "rule_agent":
         state_summary = _summarize_rule_state(result)
-    else:
+    elif specialist_name == "attack_attribution":
         state_summary = _summarize_attack_state(result)
+    else:
+        state_summary = "{}"
 
     artifacts = None
     if specialist_name == "attack_attribution" and result.get("is_full_attribution_complete"):
@@ -206,10 +222,16 @@ def get_router_agent(
     router_model: BaseChatModel,
     rule_model: BaseChatModel | None = None,
     attack_model: BaseChatModel | None = None,
+    response_model: BaseChatModel | None = None,
     checkpointer=None,
 ):
     rule_agent = get_rule_agent(rule_model or router_model)
     attack_agent = get_attack_attribution_agent(attack_model or router_model)
+    response_agent = get_response_agent(response_model or router_model)
+    agent_ip_mapping = extract_agent_ip_mapping()
+    agent_ip_mapping_json = (
+        json.dumps(agent_ip_mapping, ensure_ascii=False, indent=2) if agent_ip_mapping else "{}"
+    )
     session_cache_by_thread: dict[str, dict[str, Any]] = {}
 
     @tool
@@ -302,6 +324,48 @@ def get_router_agent(
             reset_context=reset_context,
         )
 
+    @tool
+    def delegate_response_agent(
+        task: str,
+        reset_context: bool = False,
+    ) -> str:
+        """将封禁 IP 等事件响应任务委派给 `response_agent`。
+        适用于在指定 Agent 上封禁指定 IP 地址。
+        路由智能体会在调用前向用户确认被封禁的 IP、目标 Agent 和封禁时长。
+        当这是一个新的独立响应任务时，将 `reset_context` 设为 true。
+        """
+
+        logger.info(
+            "Delegating task to response_agent. reset_context=%s task=%s",
+            reset_context,
+            task,
+        )
+        if _is_high_risk_response_task(task) and not _has_explicit_user_authorization(task):
+            return json.dumps(
+                {
+                    "specialist": "response_agent",
+                    "thread_id": _get_thread_id(),
+                    "task": task,
+                    "approval_required": True,
+                    "reply": (
+                        "当前子任务涉及高风险操作（封禁 IP），可能影响目标主机的网络连通性。"
+                        "在执行前必须先取得用户明确授权。"
+                    ),
+                    "required_user_action": (
+                        "请先向用户明确说明将要封禁的 IP、目标 Agent 和封禁时长，并询问是否继续。"
+                        '只有在用户明确同意后，后续工具调用才能执行，且任务文本中必须包含"已获用户明确授权"。'
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        return _invoke_specialist(
+            specialist_name="response_agent",
+            session_cache_by_thread=session_cache_by_thread,
+            specialist_app=response_agent,
+            task=task,
+            reset_context=reset_context,
+        )
+
     system_prompt = """
 你是 Wazuh 多智能体总控代理，采用 ReAct 风格工作：
 1. 先理解用户目标。
@@ -311,12 +375,23 @@ def get_router_agent(
 5. 最后用中文向用户做整合回复。
 
 ══════════════════════════════════════════════════════
+Agent → IP 映射表
+══════════════════════════════════════════════════════
+```json
+{agent_ip_mapping_json}
+```
+
+- key 为 agent_id，value 为该 Agent 的 IP 地址
+- 用户使用 IP 指代 Agent 时，查表解析为 agent_id，优先使用查到的 agent_id 而非 IP 本身
+
+══════════════════════════════════════════════════════
 一、可用工具
 ══════════════════════════════════════════════════════
 - `write_task_plan`：为当前线程会话记录任务计划摘要与步骤。多步骤请求必须先调用它。
 - `delegate_rule_agent`：处理 Wazuh 规则创建、修改、解释、查询、列出、验证、删除；也处理规则文件、规则组、requirement 相关规则查询。
 - `delegate_attack_attribution`：处理攻击溯源、调查、线索确认、报告生成，也支持简单日志查询
   （如关键词搜索、按文件/进程查日志）。系统内部会自动判断任务类型并选择合适的处理路径。
+- `delegate_response_agent`：处理事件响应动作，如封禁 IP 地址。
 
 ══════════════════════════════════════════════════════
 二、通用规则
@@ -341,6 +416,13 @@ def get_router_agent(
 【任务分类】
   - 只读任务（低风险，无需授权）：规则查询、列出规则、列出规则文件、查看某个规则文件、列出规则组、查询 requirement 相关规则。此类任务通常是新的独立任务，除非用户明确说"继续刚才的查询"，否则 `reset_context=true`。
   - 高风险任务（必须授权）：规则验证、应用、上传、覆盖、删除、清理、重启 Wazuh manager、启用/停用规则。
+
+【任务透传（CRITICAL — 严禁拆分用户输入）】
+  当用户提供原始 JSON 日志并要求基于日志生成规则时，你的 `task` 必须传入用户的**完整原始输入**，一字不改、不增不减。
+  对 JSON + 指令组合（如 {json日志} 基于该日志生成规则），**整段原样传入**。
+  严禁只传 JSON 而丢弃指令，或只传指令而丢弃 JSON。
+  不要对 JSON 做任何预处理——不要提取字段、不要重新排版、不要按字段分类整理、不要添加你的理解或注释。
+  让 specialist 自己决定怎么做。
 
 【高风险操作授权】
   对上述高风险动作，你必须先向用户说明风险并询问是否继续，获得明确同意后才能执行。
@@ -398,11 +480,37 @@ def get_router_agent(
      严禁提取字段做成表格、按 agent/rule/level 分类汇总、转换为 Markdown、
      或输出"共查询到 N 条日志，涉及多个 agent..."等摘要。
      JSON 中有多少条、多少字段，就完整输出多少。
+
+══════════════════════════════════════════════════════
+五、委托事件响应 (delegate_response_agent)
+══════════════════════════════════════════════════════
+【适用场景】
+  - 在指定 Agent 上封禁指定 IP 地址。
+
+【封禁前你必须向用户确认】
+  - 执行封禁前，必须先向用户明确说明将要封禁的 IP、目标 Agent 和封禁时长。
+  - 获得用户明确同意后才能调用本工具。
+  - 用户同意后，task 中需包含"已获用户明确授权"标记。
+
+【参数说明】
+  - task: 用户的响应请求原话，加上授权标记后传入。
+  - reset_context: 新独立响应任务时设为 true；继续同一任务时设为 false。
+
+【结果汇报】
+  - 收到 response_agent 返回的结果后，用中文向用户汇报执行结果。
+
+【示例：封禁 IP】
+  - 用户说"帮我在 agent 006 上封禁 192.168.109.114"
+  你应先说明将要封禁的 IP、目标 Agent 和封禁时长（默认 10 分钟），询问用户是否继续。
+  - 用户确认后，调用 `delegate_response_agent(task="已获用户明确授权：在 agent 006 上封禁 192.168.109.114，封禁10分钟", reset_context=true)`，
+  然后向用户汇报结果。
 """
+
+    system_prompt = system_prompt.replace("{agent_ip_mapping_json}", agent_ip_mapping_json)
 
     return create_agent(
         model=router_model,
-        tools=[write_task_plan, delegate_rule_agent, delegate_attack_attribution],
+        tools=[write_task_plan, delegate_rule_agent, delegate_attack_attribution, delegate_response_agent],
         system_prompt=system_prompt,
         checkpointer=checkpointer,
     )

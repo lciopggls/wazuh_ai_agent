@@ -1617,7 +1617,16 @@ Before choosing a new rule id, query candidate IDs and only use one that does no
 If you choose to use any rule reference such as <if_sid> or <if_matched_sid>, query that rule id first and only use confirmed existing IDs.
 If requirements mention a known product, event type, group, or MITRE technique, query existing rules for useful context before generating.
 Output must be XML only.
-Return exactly one valid Wazuh rule XML block rooted at <group>.
+The output structure MUST be an outer <group name="..."> container wrapping <rule>.
+The <group> tag inside <rule> is for alert labels only and is optional.
+Do NOT omit the outer <group name="...">.
+Example:
+<group name="sysmon,windows,">
+  <rule id="100100" level="10">
+    <field name="example" type="pcre2">value</field>
+    <description>Example rule</description>
+  </rule>
+</group>
 Do not wrap the XML in JSON.
 Do not add explanations, comments, or markdown fences."""
         generation_agent = create_agent(
@@ -1822,11 +1831,18 @@ def rule_verification_node(state: RuleGeneratorState, config: RunnableConfig, mo
                 "validation_error": f"Rule {rule_id} was not found in the loaded manager ruleset after restart{extra_text}."
             }
 
+<<<<<<< HEAD
         # if state.get("rule_requirements", {}).get("user_provided_full_log"):
         return {
                 "logtest_passed": True,
                 "verification_feedback": f"Verification passed: rule uploaded and loaded. New rule ID: {rule_id}.",
             }
+=======
+        return {
+            "logtest_passed": True,
+            "verification_feedback": f"Verification passed: rule uploaded and loaded. New rule ID: {rule_id}.",
+        }
+>>>>>>> origin/master
 
         raw_logs = state.get("raw_logs", [])
         if not raw_logs:

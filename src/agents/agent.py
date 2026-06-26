@@ -4,6 +4,7 @@ from langchain_openai import ChatOpenAI
 from agents.attack_attribution.attack_attributor import get_attack_attribution_agent
 from agents.demo_agent import get_demo_agent
 from agents.indexer_agent import get_indexer_agent
+from agents.response_agent import get_response_agent
 from agents.router_agent import get_router_agent
 from agents.rule_agent.rule_agent import get_rule_agent
 from core.config import settings
@@ -43,4 +44,5 @@ demo_agent = get_demo_agent(model)
 indexer_agent = get_indexer_agent(model)
 rule_agent = get_rule_agent(model)
 attack_attributor = get_attack_attribution_agent(model_attribution)
-router_agent = get_router_agent(model, rule_model=model, attack_model=model_attribution)
+router_agent = get_router_agent(model, rule_model=model, attack_model=model_attribution, response_model=model)
+response_agent = get_response_agent(model)

@@ -5,7 +5,8 @@
     "indexer_agent": "./src/agents/agent.py:indexer_agent",
     "router_agent": "./src/agents/agent.py:router_agent",
     "rule_agent": "./src/agents/agent.py:rule_agent",
-    "attack_attributor": "./src/agents/agent.py:attack_attributor"
+    "attack_attributor": "./src/agents/agent.py:attack_attributor",
+    "response_agent": "./src/agents/agent.py:response_agent"
   },
   "env": ".env"
 }
