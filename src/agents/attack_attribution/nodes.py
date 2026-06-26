@@ -1989,11 +1989,53 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     for eid, layer in layers.items():
         layer_groups.setdefault(layer, []).append(eid)
 
+    # --- clustering: reorder each layer so interconnected entities are adjacent ---
+    # Build same-layer adjacency subgraph
+    same_layer_adj: dict[str, set[str]] = {eid: set() for eid in entity_map}
+    for rel in relations:
+        src, tgt = rel.get("source", ""), rel.get("target", "")
+        if src in entity_map and tgt in entity_map:
+            if layers.get(src) == layers.get(tgt):
+                same_layer_adj[src].add(tgt)
+                same_layer_adj[tgt].add(src)
+
+    for layer_num in sorted(layer_groups.keys()):
+        ids = layer_groups[layer_num]
+        if len(ids) <= 1:
+            continue
+        visited: set[str] = set()
+        ordered: list[str] = []
+        # Start BFS from nodes with the most same-layer connections
+        seeds = sorted(ids, key=lambda e: -len(same_layer_adj.get(e, set())))
+        for seed in seeds:
+            if seed in visited:
+                continue
+            queue: deque[str] = deque([seed])
+            while queue:
+                cur = queue.popleft()
+                if cur in visited:
+                    continue
+                visited.add(cur)
+                ordered.append(cur)
+                neighbors = sorted(
+                    same_layer_adj.get(cur, set()),
+                    key=lambda n: -len(same_layer_adj.get(n, set())),
+                )
+                for neighbor in neighbors:
+                    if neighbor not in visited:
+                        queue.append(neighbor)
+        # Append any remaining unvisited nodes (isolated within this layer)
+        for eid in ids:
+            if eid not in visited:
+                ordered.append(eid)
+        layer_groups[layer_num] = ordered
+
     # --- layout constants ---
     NODE_WIDTH = 230
     NODE_HEIGHT = 62
     LAYER_GAP_X = 400
-    NODE_GAP_Y = 16
+    GAP_CLOSE = 24   # standard gap between unrelated nodes in the same column
+    GAP_LINKED = 70  # larger gap when an edge exists between the two nodes
     MARGIN = 40
     TITLE_H = 36
     LEGEND_H = 90
@@ -2013,12 +2055,33 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     )  # 596
     LEGEND_GAP = 40
 
-    max_in_layer = max((len(v) for v in layer_groups.values()), default=1)
-    body_height = max_in_layer * (NODE_HEIGHT + NODE_GAP_Y) + MARGIN * 2 + TITLE_H
+    # quick lookup: do two entities in the same layer have at least one edge between them?
+    def _same_layer_connected(a: str, b: str) -> bool:
+        sa = same_layer_adj.get(a, set())
+        sb = same_layer_adj.get(b, set())
+        return b in sa or a in sb
 
-    # canvas width: must satisfy two constraints
-    #   (a) all nodes fit horizontally
-    #   (b) two legends sit side-by-side without overlapping
+    # --- two-pass positioning (dynamic gap) ---
+    # Pass 1: compute raw total heights per layer
+    layer_total_heights: dict[int, int] = {}
+    layer_y_offsets: dict[int, list[tuple[str, int]]] = {}
+    for layer_num in sorted(layer_groups.keys()):
+        ids = layer_groups[layer_num]
+        y_cursor = 0
+        prev_eid: str | None = None
+        offsets: list[tuple[str, int]] = []
+        for eid in ids:
+            if prev_eid is not None:
+                y_cursor += GAP_LINKED if _same_layer_connected(prev_eid, eid) else GAP_CLOSE
+            offsets.append((eid, y_cursor))
+            y_cursor += NODE_HEIGHT
+            prev_eid = eid
+        layer_total_heights[layer_num] = y_cursor
+        layer_y_offsets[layer_num] = offsets
+
+    # canvas dimensions
+    max_layer_height = max(layer_total_heights.values()) if layer_total_heights else 1
+    body_height = max_layer_height + MARGIN * 2 + TITLE_H
     graph_width = max(layer_groups.keys()) * LAYER_GAP_X + NODE_WIDTH if layer_groups else 0
     min_for_nodes = MARGIN * 2 + graph_width
     min_for_legends = (
@@ -2026,11 +2089,20 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     )
     canvas_width = max(min_for_nodes, min_for_legends)
     canvas_height = max(400, body_height + LEGEND_H)
-
-    # horizontal centering offset so the node graph sits in the middle of the canvas
     center_offset_x = max(0, (canvas_width - graph_width) // 2)
-
     legend_base_y = canvas_height - 70
+
+    # Pass 2: center and assign final positions
+    node_pos: dict[str, tuple[int, int]] = {}
+    for layer_num in sorted(layer_groups.keys()):
+        total_h = layer_total_heights[layer_num]
+        safe_top = MARGIN + TITLE_H
+        safe_bottom = legend_base_y - 20
+        safe_height = safe_bottom - safe_top
+        start_y = safe_top + max(0, (safe_height - total_h) // 2)
+        x = center_offset_x + layer_num * LAYER_GAP_X
+        for eid, y_off in layer_y_offsets[layer_num]:
+            node_pos[eid] = (x, start_y + y_off)
 
     # --- color scheme ---
     type_colors: dict[str, dict[str, str]] = {
@@ -2072,18 +2144,7 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         "access": ("2", "2,6", "#14b8a6", "arrow-access"),  # medium dot-dash teal
     }
 
-    # --- position nodes ---
-    node_pos: dict[str, tuple[int, int]] = {}
-    for layer_num in sorted(layer_groups.keys()):
-        ids = layer_groups[layer_num]
-        total_h = len(ids) * (NODE_HEIGHT + NODE_GAP_Y) - NODE_GAP_Y
-        safe_top = MARGIN + TITLE_H
-        safe_bottom = legend_base_y - 20
-        safe_height = safe_bottom - safe_top
-        start_y = safe_top + max(0, (safe_height - total_h) // 2)
-        x = center_offset_x + layer_num * LAYER_GAP_X
-        for i, eid in enumerate(ids):
-            node_pos[eid] = (x, start_y + i * (NODE_HEIGHT + NODE_GAP_Y))
+
 
     # --- build SVG ---
     lines: list[str] = []
@@ -2126,14 +2187,69 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         lines.append("</marker>")
     lines.append("</defs>")
 
-    # edges — collect paths and labels separately
-    target_entry_slots: dict[str, int] = {}
-    edge_paths: list[str] = []
-    edge_labels: list[str] = []
+    # edges — separate same-layer from cross-layer
+    REL_PRIORITY = {
+        "instantiate": 7,  # 实例化 (生命周期 - 最高)
+        "create": 6,       # 创建 (生命周期)
+        "execute": 5,      # 执行 (控制流)
+        "modify": 4,       # 修改 (状态改变)
+        "authenticate": 3, # 认证
+        "communicate": 2,  # 通信
+        "access": 1,       # 访问 (被动读取 - 最低)
+    }
+
+    same_layer_pairs: dict[tuple[str, str], tuple[str, str | None]] = {}
+    cross_layer_relations: list[dict] = []
     for rel in relations:
         src, tgt = rel.get("source", ""), rel.get("target", "")
         if src not in node_pos or tgt not in node_pos:
             continue
+        x1, _ = node_pos[src]
+        x2, _ = node_pos[tgt]
+        if x1 == x2:
+            pair = tuple(sorted([src, tgt]))  # undirected — dedup both directions
+            rel_type = rel.get("relation", "")
+            ts = rel.get("timestamp")
+            existing = same_layer_pairs.get(pair)
+            existing_prio = REL_PRIORITY.get(existing[0], 0) if existing else 0
+            if REL_PRIORITY.get(rel_type, 0) > existing_prio:
+                same_layer_pairs[pair] = (rel_type, ts)
+        else:
+            cross_layer_relations.append(rel)
+
+    edge_paths: list[str] = []
+    edge_labels: list[str] = []
+
+    # --- same-layer edges: vertical lines ---
+    for (src, tgt), (rel_type, _ts) in same_layer_pairs.items():
+        x1, y1 = node_pos[src]
+        x2, y2 = node_pos[tgt]
+        if y1 > y2:
+            src, tgt = tgt, src
+            y1, y2 = y2, y1
+        cx = x1 + NODE_WIDTH // 2
+        top_y = y1 + NODE_HEIGHT  # bottom edge of upper node
+        bot_y = y2  # top edge of lower node
+
+        sw, dash, edge_color, arrow_id = rel_styles.get(
+            rel_type, ("2", "none", "#94a3b8", "arrow-gray")
+        )
+        dash_attr = f' stroke-dasharray="{dash}"' if dash != "none" else ""
+
+        edge_paths.append(
+            f'<line x1="{cx}" y1="{top_y}" x2="{cx}" y2="{bot_y}" stroke="{edge_color}" stroke-width="{sw}"{dash_attr} marker-end="url(#{arrow_id})"/>'
+        )
+
+        label = rel_labels.get(rel_type, rel_type)
+        mid_y = (top_y + bot_y) / 2
+        edge_labels.append(
+            f'<text x="{cx + 12}" y="{mid_y}" font-family="sans-serif" font-size="10" fill="#334155" stroke="#f1f5f9" stroke-width="4" paint-order="stroke fill" text-anchor="start" dominant-baseline="central">{label}</text>'
+        )
+
+    # --- cross-layer edges: L-shaped routing ---
+    target_entry_slots: dict[str, int] = {}
+    for rel in cross_layer_relations:
+        src, tgt = rel.get("source", ""), rel.get("target", "")
         x1, y1 = node_pos[src]
         x2, y2 = node_pos[tgt]
         sx, sy = x1 + NODE_WIDTH, y1 + NODE_HEIGHT // 2
@@ -2145,7 +2261,6 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         )
         dash_attr = f' stroke-dasharray="{dash}"' if dash != "none" else ""
 
-        # offset entry point when multiple sources connect to the same target
         slot = target_entry_slots.get(tgt, 0)
         target_entry_slots[tgt] = slot + 1
         offset_sign = 1 if slot % 2 == 0 else -1
@@ -2156,7 +2271,6 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         edge_paths.append(
             f'<path d="M {sx} {sy} L {corner_x} {sy} L {corner_x} {ty} L {tx} {ty}" fill="none" stroke="{edge_color}" stroke-width="{sw}"{dash_attr} marker-end="url(#{arrow_id})"/>'
         )
-
         label = rel_labels.get(rel_type, rel_type)
         lx = (corner_x + tx) / 2
         edge_labels.append(

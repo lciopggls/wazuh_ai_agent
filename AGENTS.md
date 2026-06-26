@@ -10,9 +10,10 @@
 ## 项目概览
 
 - `src/agents/` 存放主要智能体实现。
-- `src/agents/router_agent.py` 是总控路由智能体，负责理解用户意图，并将规则相关任务或攻击溯源任务委派给对应 specialist。
+- `src/agents/router_agent.py` 是总控路由智能体，负责理解用户意图，并将规则相关、攻击溯源或事件响应任务委派给对应 specialist。
 - `src/agents/rule_agent/` 是 Wazuh 规则智能体，负责规则查询、规则生成、规则验证、规则清理等工作流。
 - `src/agents/attack_attribution/` 是攻击溯源智能体，负责基于告警、归档日志和 MITRE 知识进行调查分析。
+- `src/agents/response_agent.py` 是事件响应智能体，负责执行封禁 IP 等自动化响应动作。
 - `src/wazuh_api/` 封装 Wazuh Server API 和 Indexer API 调用，是智能体与 Wazuh 环境交互的主要边界。
 - `tests/` 存放 pytest 测试，覆盖 API 封装、路由智能体、规则智能体、攻击溯源智能体等关键行为。
 
