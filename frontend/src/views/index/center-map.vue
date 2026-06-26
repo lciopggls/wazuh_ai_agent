@@ -14,10 +14,10 @@
 
     <!-- 底部图例 -->
     <div class="legend">
-      <div class="item"><span class="box manager"></span> 管理中心 (Manager)</div>
-      <div class="item"><span class="box active"></span> 正常 (Active)</div>
-      <div class="item"><span class="box threat"></span> 存在威胁 (Threat)</div>
-      <div class="item"><span class="box offline"></span> 离线 (Disconnected)</div>
+      <div class="item"><span class="box manager"></span> 管理中心</div>
+      <div class="item"><span class="box active"></span> 正常主机</div>
+      <div class="item"><span class="box threat"></span> 存在威胁的主机</div>
+      <div class="item"><span class="box offline"></span> 离线主机</div>
     </div>
 
     <!-- 加载遮罩 -->
@@ -34,6 +34,33 @@ import axios from 'axios';
 const TOPOLOGY_API_URL = import.meta.env.VITE_TOPOLOGY_API_URL?.trim() || 'http://127.0.0.1:8000/api/topo';
 const TOPOLOGY_MOCK_URL = '/topology/agents_topo_data.json';
 const REFRESH_INTERVAL = 30000; // 30秒自动刷新一次
+
+// --- 文本与尺寸工具 ---
+/** 10px 字体下每字符估算宽度 */
+const CHAR_WIDTH = 6.2;
+const NODE_PADDING = 20;
+const MIN_NODE_WIDTH = 80;
+const MAX_NODE_WIDTH = 240;
+
+/** 根据文本行估算所需节点宽度，结果限制在 [minW, maxW] 之间 */
+const calcNodeWidth = (lines: string[], minW = MIN_NODE_WIDTH, maxW = MAX_NODE_WIDTH): number => {
+  const maxChars = Math.max(...lines.map(l => l.length));
+  return Math.max(minW, Math.min(maxW, Math.round(maxChars * CHAR_WIDTH + NODE_PADDING)));
+};
+
+/** 节点宽度已达上限时，用省略号截断超长文本 */
+const truncateText = (lines: string[], maxW = MAX_NODE_WIDTH): string => {
+  const maxChars = Math.floor((maxW - NODE_PADDING) / CHAR_WIDTH);
+  return lines.map(line =>
+    line.length > maxChars ? line.slice(0, Math.max(maxChars - 1, 1)) + '…' : line
+  ).join('\n');
+};
+
+/** 根据节点背景色选择可读的文字颜色 */
+const labelColorFor = (hasThreat: boolean, status: string): string => {
+  if (hasThreat || status !== 'active') return '#ffffff'; // 红/灰背景 → 白色文字
+  return '#1f2937'; // 绿色背景 → 深色文字
+};
 
 const containerRef = ref<HTMLElement | null>(null);
 const loading = ref(false);
@@ -97,24 +124,33 @@ const renderTopology = (agents: any[]) => {
   const managerData = agents.find(a => a.ip === '127.0.0.1' || a.name.toLowerCase().includes('manager'));
   const managerId = 'manager-node';
 
+  const managerLabelLines = ['MANAGER', `${managerData?.name || 'Wazuh Server'}`];
+  const managerNodeWidth = calcNodeWidth(managerLabelLines);
+  const managerLabel = managerNodeWidth >= MAX_NODE_WIDTH ? truncateText(managerLabelLines) : managerLabelLines.join('\n');
+
   graph.addNode({
     id: managerId,
-    x: centerX - 75,
+    x: centerX - managerNodeWidth / 2,
     y: startY,
-    width: 150,
+    width: managerNodeWidth,
     height: 60,
-    label: `MANAGER\n${managerData?.name || 'Wazuh Server'}`,
+    label: managerLabel,
     attrs: {
       body: { fill: '#1890ff', stroke: '#fff', strokeWidth: 2, rx: 10, ry: 10 },
-      label: { fill: '#1f2937', fontSize: 12, fontWeight: 'bold' }
+      label: { fill: '#ffffff', fontSize: 12, fontWeight: 'bold' }
     }
   });
 
   // --- B. 绘制其他 Agents ---
   const otherAgents = agents.filter(a => a.ip !== '127.0.0.1' && !a.name.toLowerCase().includes('manager'));
-  
+
+  // 预计算所有节点的宽度，确保水平间距足够
+  const agentWidths = otherAgents.map(a => calcNodeWidth([a.name, a.ip]));
+  const maxAgentWidth = Math.max(...agentWidths);
+  const dynamicGapX = Math.max(gapX, maxAgentWidth + 30); // 节点边缘间至少保持 30px 间距
+
   // 计算总宽度以居中对齐
-  const totalWidth = (otherAgents.length - 1) * gapX;
+  const totalWidth = (otherAgents.length - 1) * dynamicGapX;
   const startX = centerX - totalWidth / 2;
 
   otherAgents.forEach((agent, index) => {
@@ -130,23 +166,25 @@ const renderTopology = (agents: any[]) => {
     }
 
     const nodeId = `agent-${agent.id}`;
+    const nodeWidth = agentWidths[index];
+    const displayLabel = nodeWidth >= MAX_NODE_WIDTH ? truncateText([agent.name, agent.ip]) : `${agent.name}\n${agent.ip}`;
 
     // 添加节点
     graph!.addNode({
       id: nodeId,
-      x: startX + (index * gapX) - 65,
+      x: startX + (index * dynamicGapX) - nodeWidth / 2,
       y: agentY,
-      width: 130,
+      width: nodeWidth,
       height: 45,
-      label: `${agent.name}\n${agent.ip}`,
+      label: displayLabel,
       attrs: {
         body: {
           fill: nodeColor,
-          stroke: hasThreat ? '#fffb8f' : '#fff', 
+          stroke: hasThreat ? '#fffb8f' : '#fff',
           strokeWidth: hasThreat ? 3 : 1,
           rx: 5, ry: 5,
         },
-        label: { fill: '#1f2937', fontSize: 10 }
+        label: { fill: labelColorFor(hasThreat, status), fontSize: 10 }
       }
     });
 

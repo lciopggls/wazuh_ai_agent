@@ -58,7 +58,7 @@ const sidebarGroups = [
     ]
   },
   {
-    title: '数据与漏洞',
+    title: '日志与漏洞',
     items: [
       { key: 'archives',      icon: '📋', label: '历史日志查询' },
       { key: 'vulnerability', icon: '🔍', label: '漏洞查询' },

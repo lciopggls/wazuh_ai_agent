@@ -112,12 +112,18 @@ const showDetail = (item: any) => {
 // 模块 B：历史告警日志查询（从第一页 right-center.vue 移植）
 // ─────────────────────────────────────────────
 const searchText = ref("");
+const searchMode = ref<'exact' | 'fuzzy'>('exact');
 const allFields = ref<string[]>([]);
 const showPanel = ref(false);
 const historyLogs = ref<any[]>([]);
 const historyLoading = ref(false);
 const historyDetailVisible = ref(false);
 const currentHistoryLog = ref<any>(null);
+
+// ── 分页状态 ──
+const currentPage = ref(1);
+const pageSize = 50;
+const total = ref(0);
 
 // 1. 获取字段字典 (Mapping)
 const fetchAvailableFields = async () => {
@@ -155,29 +161,94 @@ const selectField = (fieldName: string) => {
   showPanel.value = false;
 };
 
-// 3. 执行查询
-const searchHistoryAlerts = async () => {
-  if (!searchText.value.includes(':')) {
-    ElMessage.info("请完成查询表达式 (例如 agent.id: 001)");
+// 3. 执行查询（根据模式走不同查询逻辑）
+const executeSearch = async () => {
+  const q = searchText.value.trim();
+  if (!q) {
+    ElMessage.info("请输入搜索条件");
+    historyLoading.value = false;
     return;
   }
+
   historyLoading.value = true;
-  const [field, value] = searchText.value.split(':').map(s => s.trim());
+  let query;
+
+  if (searchMode.value === 'exact') {
+    // 精确匹配：解析 field: value，使用 match_phrase
+    if (!q.includes(':')) {
+      ElMessage.info("精确匹配模式请输入 字段名: 值 格式（如 agent.id: 001）");
+      historyLoading.value = false;
+      return;
+    }
+    const colonIdx = q.indexOf(':');
+    const field = q.slice(0, colonIdx).trim();
+    const value = q.slice(colonIdx + 1).trim();
+    if (!field || !value) {
+      ElMessage.info("字段名和值不能为空");
+      historyLoading.value = false;
+      return;
+    }
+    query = { match_phrase: { [field]: value } };
+  } else {
+    // 模糊匹配：*keyword* 全局搜索
+    query = {
+      query_string: {
+        query: `*${q}*`,
+        analyze_wildcard: true
+      }
+    };
+  }
+
   try {
     const res = await axios.post('/wazuh-indexer/wazuh-alerts-*/_search', {
-      size: 300,
+      size: pageSize,
+      from: (currentPage.value - 1) * pageSize,
       sort: [{ "timestamp": "desc" }],
-      query: { match_phrase: { [field]: value } }
+      query
     }, {
       headers: { 'Authorization': `Basic ${INDEXER_AUTH}`, 'Content-Type': 'application/json' }
     });
+
     historyLogs.value = res.data.hits.hits;
+    total.value = res.data.hits.total?.value ?? res.data.hits.hits.length;
   } catch (err) {
     ElMessage.error("查询失败");
   } finally {
     historyLoading.value = false;
   }
 };
+
+const searchHistoryAlerts = async () => {
+  currentPage.value = 1;
+  await executeSearch();
+};
+
+const changePage = (page: number) => {
+  if (page < 1 || page > totalPages.value) return;
+  currentPage.value = page;
+  executeSearch();
+};
+
+// ── 分页计算属性 ──
+const totalPages = computed(() => Math.ceil(total.value / pageSize) || 1);
+
+const visiblePages = computed(() => {
+  const total = totalPages.value;
+  const cur = currentPage.value;
+  const pages: (number | string)[] = [];
+  if (total <= 7) {
+    for (let i = 1; i <= total; i++) pages.push(i);
+    return pages;
+  }
+  pages.push(1);
+  if (cur > 3) pages.push('…');
+  const start = Math.max(2, cur - 1);
+  const end = Math.min(total - 1, cur + 1);
+  for (let i = start; i <= end; i++) pages.push(i);
+  if (cur < total - 2) pages.push('…');
+  pages.push(total);
+  return pages;
+});
 
 // 4. 打开详情弹窗
 const openHistoryDetail = (logSource: any) => {
@@ -311,33 +382,48 @@ onBeforeUnmount(() => {
 
     <!-- ── History Query (模块 B) ── -->
     <template v-if="state.currentTab === 'history'">
-      <div class="hq-search-area flex gap-2.5 mb-3 px-4 pt-3 flex-shrink-0 relative">
-        <div class="hq-search-wrap flex-1 relative">
+      <div class="hq-search-area flex items-center gap-2 mb-3 px-4 pt-3 flex-shrink-0">
+        <!-- 统一输入框 -->
+        <div class="hq-search-wrap flex-1 relative" style="min-width:200px">
           <div :class="['hq-input-wrap', showPanel ? 'hq-input-wrap--focus' : '']">
-            <span class="hq-search-prefix">🔍</span>
+            <span class="hq-search-prefix">{{ searchMode === 'exact' ? '🔍' : '🔎' }}</span>
             <input
               v-model="searchText"
-              placeholder="输入字段关键词 (如 agent.id: 001)"
-              @focus="showPanel = true"
+              :placeholder="searchMode === 'exact' ? '字段查询 (如 agent.id: 001)' : '模糊搜索 (任意关键字)'"
+              @focus="searchMode === 'exact' && (showPanel = true)"
               @keyup.enter="searchHistoryAlerts"
               class="hq-search-input"
             />
             <button v-if="searchText" class="hq-search-clear" @click="searchText = ''">×</button>
           </div>
-          <div v-if="showPanel && filteredFields.length > 0" class="hq-dropdown">
+          <!-- 精确模式显示字段自动补全 -->
+          <div v-if="searchMode === 'exact' && showPanel && filteredFields.length > 0" class="hq-dropdown">
             <div v-for="field in filteredFields" :key="field" class="hq-dropdown-item" @mousedown.prevent="selectField(field)">
               <span class="hq-field-icon">f</span> {{ field }}
             </div>
           </div>
         </div>
-        <button class="hq-btn-query" @click="searchHistoryAlerts" :disabled="historyLoading">
+
+        <!-- 模式切换 -->
+        <div class="hq-mode-switch">
+          <button
+            :class="['hq-mode-btn', searchMode === 'exact' ? 'hq-mode-btn--active' : '']"
+            @click="searchMode = 'exact'"
+          >精确</button>
+          <button
+            :class="['hq-mode-btn', searchMode === 'fuzzy' ? 'hq-mode-btn--active' : '']"
+            @click="searchMode = 'fuzzy'; showPanel = false"
+          >模糊</button>
+        </div>
+
+        <button class="hq-btn-query flex-shrink-0" @click="searchHistoryAlerts" :disabled="historyLoading">
           {{ historyLoading ? '查询中...' : '查询' }}
         </button>
       </div>
 
       <div class="hq-list flex-1 overflow-y-auto px-4 pb-4">
         <div v-if="historyLogs.length === 0 && !historyLoading" class="hq-empty">
-          等待查询指令，输入字段名并使用冒号指定搜索值
+          等待查询指令，输入字段条件或模糊关键字进行搜索
         </div>
 
         <div
@@ -354,6 +440,31 @@ onBeforeUnmount(() => {
           </div>
           <div class="hq-card-body">{{ item._source.rule?.description || item._source.message || '--' }}</div>
           <div class="hq-card-footer">点击查看完整详情</div>
+        </div>
+      </div>
+
+      <!-- ── History Pagination ── -->
+      <div v-if="historyLogs.length > 0" class="pagination-bar">
+        <span class="pagination-info">共 {{ total }} 条</span>
+        <div class="pagination-controls">
+          <button
+            class="pg-btn"
+            :disabled="currentPage <= 1"
+            @click="changePage(currentPage - 1)"
+          >‹ 上一页</button>
+          <template v-for="p in visiblePages" :key="p">
+            <span v-if="p === '…'" class="pg-ellipsis">…</span>
+            <button
+              v-else
+              :class="['pg-btn', 'pg-num', currentPage === p ? 'pg-num--active' : '']"
+              @click="changePage(p as number)"
+            >{{ p }}</button>
+          </template>
+          <button
+            class="pg-btn"
+            :disabled="currentPage >= totalPages"
+            @click="changePage(currentPage + 1)"
+          >下一页 ›</button>
         </div>
       </div>
     </template>
@@ -617,6 +728,38 @@ onBeforeUnmount(() => {
   z-index: 10;
 }
 
+// ── 模式切换 ──
+.hq-mode-switch {
+  display: flex;
+  background: #f3f4f6;
+  border-radius: 8px;
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+.hq-mode-btn {
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: transparent;
+  color: var(--muted-foreground, #7c8a9e);
+  white-space: nowrap;
+
+  &:hover {
+    color: var(--foreground, #1f2937);
+  }
+
+  &--active {
+    background: #ffffff;
+    color: #31ABE3;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  }
+}
+
 .hq-search-wrap {
   position: relative;
 }
@@ -794,5 +937,80 @@ onBeforeUnmount(() => {
   margin-top: 8px;
   text-align: right;
   opacity: 0.7;
+}
+
+// ── History Pagination（对齐 VulnerabilityQuery 风格） ──
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid #e5e7eb;
+  background: #f8fafc;
+  flex-shrink: 0;
+}
+
+.pagination-info {
+  font-size: 12px;
+  color: var(--muted-foreground, #7c8a9e);
+  white-space: nowrap;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground, #7c8a9e);
+  background: transparent;
+  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  user-select: none;
+}
+.pg-btn:hover:not(:disabled) {
+  color: #31ABE3;
+  border-color: rgba(49, 171, 227, 0.3);
+  background: rgba(49, 171, 227, 0.06);
+}
+.pg-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.pg-num {
+  min-width: 28px;
+  padding: 0 6px;
+  font-family: ui-monospace, monospace;
+}
+.pg-num--active {
+  color: #31ABE3;
+  background: rgba(49, 171, 227, 0.1);
+  border-color: rgba(49, 171, 227, 0.25);
+  font-weight: 600;
+  cursor: default;
+}
+
+.pg-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  font-size: 13px;
+  color: #7c8a9e;
+  letter-spacing: 2px;
+  user-select: none;
 }
 </style>

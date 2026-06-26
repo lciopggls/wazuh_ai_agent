@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import axios from 'axios';
 
 // ── 1. 基础配置（根据你的实际环境调整路径或变量） ──
@@ -13,26 +13,48 @@ const archivesList = ref<any[]>([]);
 const isLoading = ref(false);
 const errorMsg = ref('');
 const selectedTimeRange = ref('1h');
+const fuzzyKeyword = ref('');
+
+// ── JSON 详情弹窗状态 ──
+const detailVisible = ref(false);
+const selectedLog = ref<any>(null);
+
+// ── 分页状态 ──
+const currentPage = ref(1);
+const pageSize = 50;
+const total = ref(0);
 
 // ── 3. 核心查询函数 ──
-const fetchArchives = async () => {
+const timeMap: Record<string, string> = { '1h': 'now-1h', '1d': 'now-1d', '7d': 'now-7d' };
+
+const executeArchivesSearch = async () => {
   isLoading.value = true;
   errorMsg.value = '';
 
-  const timeMap: Record<string, string> = { '1h': 'now-1h', '1d': 'now-1d', '7d': 'now-7d' };
+  const must: any[] = [
+    { range: { "timestamp": { "gte": timeMap[selectedTimeRange.value] } } }
+  ];
+
+  // 模糊查询（参照 alerts_query 实现）
+  const kw = fuzzyKeyword.value.trim();
+  if (kw) {
+    must.push({
+      query_string: {
+        query: `*${kw}*`,
+        analyze_wildcard: true
+      }
+    });
+  }
 
   try {
     const response = await axios.post(
       INDEXER_URL,
       {
-        size: 200,
+        size: pageSize,
+        from: (currentPage.value - 1) * pageSize,
         sort: [{ "timestamp": "desc" }],
         query: {
-          bool: {
-            must: [
-              { range: { "timestamp": { "gte": timeMap[selectedTimeRange.value] } } }
-            ]
-          }
+          bool: { must }
         }
       },
       {
@@ -44,6 +66,7 @@ const fetchArchives = async () => {
     );
 
     archivesList.value = response.data.hits.hits.map((hit: any) => hit._source);
+    total.value = response.data.hits.total?.value ?? response.data.hits.hits.length;
   } catch (err: any) {
     console.error(err);
     errorMsg.value = `数据获取失败: ${err.message || '未知错误'}`;
@@ -51,6 +74,38 @@ const fetchArchives = async () => {
     isLoading.value = false;
   }
 };
+
+const fetchArchives = async () => {
+  currentPage.value = 1;
+  await executeArchivesSearch();
+};
+
+const changePage = (page: number) => {
+  if (page < 1 || page > totalPages.value) return;
+  currentPage.value = page;
+  executeArchivesSearch();
+};
+
+// ── 分页计算属性 ──
+const totalPages = computed(() => Math.ceil(total.value / pageSize) || 1);
+
+const visiblePages = computed(() => {
+  const total = totalPages.value;
+  const cur = currentPage.value;
+  const pages: (number | string)[] = [];
+  if (total <= 7) {
+    for (let i = 1; i <= total; i++) pages.push(i);
+    return pages;
+  }
+  pages.push(1);
+  if (cur > 3) pages.push('…');
+  const start = Math.max(2, cur - 1);
+  const end = Math.min(total - 1, cur + 1);
+  for (let i = start; i <= end; i++) pages.push(i);
+  if (cur < total - 2) pages.push('…');
+  pages.push(total);
+  return pages;
+});
 
 const formatTime = (timestamp: string) => {
   if (!timestamp) return '--';
@@ -66,6 +121,18 @@ const getLevelColor = (level: any) => {
   if (l >= 12) return '#f5023d';
   if (l >= 8) return '#e3b337';
   return '#31ABE3';
+};
+
+// ── JSON 弹窗 & 复制 ──
+const openJsonDetail = (log: any) => {
+  selectedLog.value = log;
+  detailVisible.value = true;
+};
+
+const copyToClipboard = (text: string) => {
+  navigator.clipboard.writeText(text).then(() => {
+    alert("JSON 内容已复制");
+  });
 };
 
 onMounted(() => {
@@ -101,7 +168,26 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Body -->
+    <!-- ── 模糊搜索（参照 alerts_query 实现） ── -->
+    <div class="fz-search-area flex items-center gap-2 px-4 py-2">
+      <div class="fz-search-wrap flex-1 relative" style="min-width:200px">
+        <div :class="['fz-input-wrap', fuzzyKeyword ? 'fz-input-wrap--active' : '']">
+          <span class="fz-search-prefix">🔎</span>
+          <input
+            v-model="fuzzyKeyword"
+            placeholder="模糊搜索 (任意关键字)"
+            @keyup.enter="fetchArchives"
+            class="fz-search-input"
+          />
+          <button v-if="fuzzyKeyword" class="fz-search-clear" @click="fuzzyKeyword = ''; fetchArchives()">×</button>
+        </div>
+      </div>
+      <button class="fz-btn-query flex-shrink-0" @click="fetchArchives" :disabled="isLoading">
+        {{ isLoading ? '搜索中...' : '搜索' }}
+      </button>
+    </div>
+
+    <!-- Body (scrollable) -->
     <div class="aq-body flex-1 overflow-y-auto px-4 pb-4">
       <!-- Loading state -->
       <div v-if="isLoading && archivesList.length === 0" class="flex items-center justify-center h-40">
@@ -150,18 +236,9 @@ onMounted(() => {
               {{ log.rule?.description || log.full_log || log.message || '--' }}
             </span>
             <span class="text-center text-xs">
-              <details class="json-details">
-                <summary class="json-summary">JSON</summary>
-                <div class="json-popup">
-                  <pre class="json-pre"><code>{{ JSON.stringify(log, null, 2) }}</code></pre>
-                </div>
-              </details>
+              <button class="json-btn" @click="openJsonDetail(log)">JSON</button>
             </span>
           </div>
-        </div>
-
-        <div class="aq-footer text-center py-2 text-[10px] text-[var(--muted-foreground)] opacity-40 font-mono">
-          共 {{ archivesList.length }} 条归档记录
         </div>
       </div>
 
@@ -174,6 +251,49 @@ onMounted(() => {
         </span>
       </div>
     </div>
+
+    <!-- ── Archives Pagination ── -->
+    <div v-if="archivesList.length > 0" class="pagination-bar">
+      <span class="pagination-info">共 {{ total }} 条</span>
+      <div class="pagination-controls">
+        <button
+          class="pg-btn"
+          :disabled="currentPage <= 1"
+          @click="changePage(currentPage - 1)"
+        >‹ 上一页</button>
+        <template v-for="p in visiblePages" :key="p">
+          <span v-if="p === '…'" class="pg-ellipsis">…</span>
+          <button
+            v-else
+            :class="['pg-btn', 'pg-num', currentPage === p ? 'pg-num--active' : '']"
+            @click="changePage(p as number)"
+          >{{ p }}</button>
+        </template>
+        <button
+          class="pg-btn"
+          :disabled="currentPage >= totalPages"
+          @click="changePage(currentPage + 1)"
+        >下一页 ›</button>
+      </div>
+    </div>
+
+    <!-- ── JSON Detail Modal ── -->
+    <Teleport to="body">
+      <div v-if="detailVisible" class="modal-mask" @click.self="detailVisible = false">
+        <div class="modal-panel">
+          <div class="modal-header">
+            <h3 class="text-sm font-bold text-[#31ABE3] m-0">归档日志 JSON</h3>
+            <div class="flex items-center gap-2">
+              <button class="modal-btn modal-btn--copy" @click="copyToClipboard(JSON.stringify(selectedLog, null, 2))">复制 JSON</button>
+              <button class="modal-btn modal-btn--close" @click="detailVisible = false">关闭</button>
+            </div>
+          </div>
+          <div class="modal-body">
+            <pre class="modal-pre">{{ JSON.stringify(selectedLog, null, 2) }}</pre>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -252,6 +372,92 @@ onMounted(() => {
 
   &:disabled {
     opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+
+// ── Fuzzy Search Bar（参照 alerts_query 模糊查询 UI） ──
+.fz-search-area {
+  z-index: 10;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f8fafc;
+}
+
+.fz-search-wrap {
+  position: relative;
+}
+
+.fz-input-wrap {
+  display: flex;
+  align-items: center;
+  background: #f9fafb;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 0 12px;
+  transition: all 0.2s ease;
+
+  &:focus-within,
+  &--active {
+    border-color: rgba(49, 171, 227, 0.3);
+    box-shadow: 0 0 0 2px rgba(49, 171, 227, 0.06);
+  }
+}
+
+.fz-search-prefix {
+  color: var(--muted-foreground, #7c8a9e);
+  font-size: 13px;
+  margin-right: 6px;
+  opacity: 0.6;
+}
+
+.fz-search-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 9px 8px;
+  color: #1f2937;
+  outline: none;
+  font-family: ui-monospace, monospace;
+  font-size: 12.5px;
+
+  &::placeholder {
+    color: var(--muted-foreground, #7c8a9e);
+    opacity: 0.4;
+  }
+}
+
+.fz-search-clear {
+  background: none;
+  border: none;
+  color: var(--muted-foreground, #7c8a9e);
+  font-size: 18px;
+  cursor: pointer;
+  opacity: 0.4;
+  padding: 0;
+  line-height: 1;
+  &:hover { opacity: 0.8; color: var(--foreground); }
+}
+
+.fz-btn-query {
+  background: rgba(49, 171, 227, 0.1);
+  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  color: #31ABE3;
+  padding: 0 16px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  height: 38px;
+
+  &:hover:not(:disabled) {
+    background: rgba(49, 171, 227, 0.18);
+    border-color: rgba(49, 171, 227, 0.3);
+  }
+
+  &:disabled {
+    opacity: 0.5;
     cursor: not-allowed;
   }
 }
@@ -340,13 +546,8 @@ onMounted(() => {
   &:last-child { border-bottom: none; }
 }
 
-// ── JSON Details ──
-.json-details {
-  position: relative;
-  display: inline-block;
-}
-
-.json-summary {
+// ── JSON Button ──
+.json-btn {
   display: inline-block;
   padding: 1px 8px;
   font-size: 10px;
@@ -358,9 +559,6 @@ onMounted(() => {
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.15s ease;
-  list-style: none;
-
-  &::-webkit-details-marker { display: none; }
 
   &:hover {
     background: rgba(49, 171, 227, 0.12);
@@ -368,39 +566,150 @@ onMounted(() => {
   }
 }
 
-.json-popup {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 50;
-  width: 420px;
-  max-height: 300px;
-  overflow: auto;
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-  padding: 10px 12px;
+// ── Modal ──
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+}
 
-  &::-webkit-scrollbar { width: 3px; }
-  &::-webkit-scrollbar-thumb {
-    background: color-mix(in oklab, var(--muted-foreground, #7c8a9e) 15%, transparent);
-    border-radius: 2px;
+.modal-panel {
+  width: 75%;
+  max-height: 85vh;
+  background: var(--card, #ffffff);
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 20px;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .modal-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 16px 20px;
+  }
+
+  .modal-pre {
+    margin: 0;
+    color: #374151;
+    font-family: 'Courier New', ui-monospace, monospace;
+    font-size: 12.5px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.6;
   }
 }
 
-.json-pre {
-  margin: 0;
-  color: #374151;
-  font-family: 'Courier New', ui-monospace, monospace;
-  font-size: 11.5px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
+.modal-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+
+  &--copy {
+    background: transparent;
+    border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+    color: #31ABE3;
+    &:hover { background: rgba(49, 171, 227, 0.1); }
+  }
+
+  &--close {
+    background: #31ABE3;
+    color: #fff;
+    &:hover { background: #00fdfa; color: #000; }
+  }
 }
 
-// ── Footer ──
-.aq-footer {
-  border-top: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+// ── Pagination Bar（对齐 alerts_query / VulnerabilityQuery 风格） ──
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid #e5e7eb;
+  background: #f8fafc;
+  flex-shrink: 0;
+}
+
+.pagination-info {
+  font-size: 12px;
+  color: var(--muted-foreground, #7c8a9e);
+  white-space: nowrap;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground, #7c8a9e);
+  background: transparent;
+  border: 1px solid var(--border, rgba(49, 171, 227, 0.12));
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  user-select: none;
+}
+.pg-btn:hover:not(:disabled) {
+  color: #31ABE3;
+  border-color: rgba(49, 171, 227, 0.3);
+  background: rgba(49, 171, 227, 0.06);
+}
+.pg-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.pg-num {
+  min-width: 28px;
+  padding: 0 6px;
+  font-family: ui-monospace, monospace;
+}
+.pg-num--active {
+  color: #31ABE3;
+  background: rgba(49, 171, 227, 0.1);
+  border-color: rgba(49, 171, 227, 0.25);
+  font-weight: 600;
+  cursor: default;
+}
+
+.pg-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  font-size: 13px;
+  color: #7c8a9e;
+  letter-spacing: 2px;
+  user-select: none;
 }
 </style>

@@ -353,8 +353,6 @@ const openSvgPreview = (title: string, svgRaw: string | null | undefined) => {
     max-height: 100%;
     width: auto;
     height: auto;
-
-    text { fill: #f0f4fa !important; }
   }
 }
 

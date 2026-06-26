@@ -273,13 +273,13 @@ const handleSend = async () => {
   const currentSessionList = initSessions[sessionKey] ? [...initSessions[sessionKey]] : [];
   currentSessionList.push({ role: 'user', content: msg });
   initSessions[sessionKey] = currentSessionList;
-  
+
   userInput.value = "";
   isTyping.value = true;
   emit('update:sessions', initSessions);
 
   let lastNodeName = "";
-  let currentAiMsgIndex = -1; 
+  let currentAiMsgIndex = -1;
 
   await nextTick();
   scrollToBottom();
@@ -295,6 +295,100 @@ const handleSend = async () => {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
 
+    // ── 核心数据处理：将单个解析后的数据对象写入会话 ──
+    // 闭包捕获 lastNodeName / currentAiMsgIndex / sessionKey
+    const processDataObject = (data: any) => {
+      let incomingContent = "";
+      let nodeName = data.node || lastNodeName || "model";
+      let isJsonNode = false;
+      let extractedReply = "";
+
+      // 工具节点 → 深度解析双重序列化的 content
+      if (nodeName === 'tools') {
+        isJsonNode = true;
+        let parsedInnerContent: any = null;
+        if (data.content) {
+          try {
+            parsedInnerContent = typeof data.content === 'string'
+              ? JSON.parse(data.content)
+              : data.content;
+          } catch (innerErr) {
+            console.warn("二次反序列化 tools.content 失败:", innerErr);
+          }
+        }
+        if (parsedInnerContent) {
+          incomingContent = JSON.stringify(parsedInnerContent, null, 2);
+          if (parsedInnerContent.reply) {
+            extractedReply = parsedInnerContent.reply;
+          }
+        } else {
+          incomingContent = typeof data.content === 'string'
+            ? data.content
+            : JSON.stringify(data, null, 2);
+        }
+      } else if (data.content) {
+        incomingContent = data.content;
+      }
+
+      if (!incomingContent) return;
+
+      const currentSessions = { ...props.sessions };
+      const sessionData = currentSessions[sessionKey]
+        ? [...currentSessions[sessionKey]]
+        : [];
+
+      if (nodeName !== lastNodeName || currentAiMsgIndex === -1) {
+        // ── 新步骤 ──
+        lastNodeName = nodeName;
+        sessionData.push({
+          role: 'assistant',
+          content: incomingContent,
+          node: nodeName,
+          isNewStep: true,
+        });
+        currentAiMsgIndex = sessionData.length - 1;
+
+        if (isJsonNode && extractedReply) {
+          sessionData.push({
+            role: 'assistant',
+            content: extractedReply,
+            node: 'reply',
+            isNewStep: true,
+          });
+        }
+      } else {
+        // ── 追加到当前步骤 ──
+        if (currentAiMsgIndex !== -1 && sessionData[currentAiMsgIndex]) {
+          const targetMsg = { ...sessionData[currentAiMsgIndex] };
+
+          if (isJsonNode) {
+            // 工具节点 → 替换为最终格式化后的 JSON
+            targetMsg.content = incomingContent;
+            sessionData[currentAiMsgIndex] = targetMsg;
+
+            const nextIdx = currentAiMsgIndex + 1;
+            if (extractedReply && sessionData[nextIdx]?.node === 'reply') {
+              sessionData[nextIdx].content = extractedReply;
+            } else if (extractedReply) {
+              sessionData.splice(nextIdx, 0, {
+                role: 'assistant',
+                content: extractedReply,
+                node: 'reply',
+                isNewStep: true,
+              });
+            }
+          } else {
+            // 文本节点 → 流式累加
+            targetMsg.content += incomingContent;
+            sessionData[currentAiMsgIndex] = targetMsg;
+          }
+        }
+      }
+
+      currentSessions[sessionKey] = sessionData;
+      emit('update:sessions', currentSessions);
+    };
+
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -304,99 +398,45 @@ const handleSend = async () => {
 
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
-        
+
         const dataStr = line.replace('data: ', '').trim();
         if (dataStr === '[DONE]') break;
 
-        let incomingContent = "";
-        let nodeName = lastNodeName || "model"; 
-        let isJsonNode = false;
-        let extractedReply = "";
-
-        try {
-          const data = JSON.parse(dataStr);
-          nodeName = data.node || lastNodeName || "model";
-          
-          if (nodeName === 'tools') {
-            isJsonNode = true;
-            
-            let parsedInnerContent: any = null;
-            if (data.content) {
-              try {
-                parsedInnerContent = typeof data.content === 'string' ? JSON.parse(data.content) : data.content;
-              } catch (innerErr) {
-                console.warn("二次反序列化 tools.content 失败:", innerErr);
-              }
-            }
-
-            if (parsedInnerContent) {
-              incomingContent = JSON.stringify(parsedInnerContent, null, 2);
-              if (parsedInnerContent.reply) {
-                extractedReply = parsedInnerContent.reply;
-              }
-            } else {
-              incomingContent = typeof data.content === 'string' ? data.content : JSON.stringify(data, null, 2);
-            }
-          } else if (data.content) {
-            incomingContent = data.content;
+        // ─── 1) 标准 JSON 解析（数据干净时的快速路径） ───
+        {
+          let cleanParsed = false;
+          try {
+            const data = JSON.parse(dataStr);
+            processDataObject(data);
+            cleanParsed = true;
+          } catch {
+            // 脏数据：继续走容错路径
           }
-        } catch (e) {
-          incomingContent = dataStr;
-          nodeName = "model";
+          if (cleanParsed) {
+            await nextTick();
+            scrollToBottom();
+            continue;
+          }
         }
 
-        if (incomingContent) {
-          const currentSessions = { ...props.sessions };
-          const sessionData = currentSessions[sessionKey] ? [...currentSessions[sessionKey]] : [];
-
-          if (nodeName !== lastNodeName || currentAiMsgIndex === -1) {
-            lastNodeName = nodeName;
-            
-            sessionData.push({ 
-              role: 'assistant', 
-              content: incomingContent,
-              node: nodeName,
-              isNewStep: true 
-            });
-            currentAiMsgIndex = sessionData.length - 1;
-
-            if (isJsonNode && extractedReply) {
-              sessionData.push({
-                role: 'assistant',
-                content: extractedReply,
-                node: 'reply', 
-                isNewStep: true
-              });
-            }
-          } else {
-            if (currentAiMsgIndex !== -1 && sessionData[currentAiMsgIndex]) {
-              const targetMsg = { ...sessionData[currentAiMsgIndex] };
-              
-              if (isJsonNode) {
-                targetMsg.content = incomingContent; 
-                sessionData[currentAiMsgIndex] = targetMsg;
-                
-                const nextMsgIndex = currentAiMsgIndex + 1;
-                if (extractedReply && sessionData[nextMsgIndex] && sessionData[nextMsgIndex].node === 'reply') {
-                  sessionData[nextMsgIndex].content = extractedReply;
-                } else if (extractedReply && (!sessionData[nextMsgIndex] || sessionData[nextMsgIndex].node !== 'reply')) {
-                  sessionData.splice(nextMsgIndex, 0, {
-                    role: 'assistant',
-                    content: extractedReply,
-                    node: 'reply',
-                    isNewStep: true
-                  });
-                }
-              } else {
-                targetMsg.content += incomingContent;
-                sessionData[currentAiMsgIndex] = targetMsg;
+        // ─── 2) 脏数据容错：text + JSON 混合 → 分段提取 ───
+        // 复用已有的 findJsonSegmentsInText 扫描混合文本中的 JSON 子串
+        const segments = findJsonSegmentsInText(dataStr);
+        for (const seg of segments) {
+          if (seg.type === 'json') {
+            try {
+              const data = JSON.parse(seg.content);
+              processDataObject(data);
+            } catch {
+              // 极低概率兜底（findJsonSegmentsInText 已验证过可解析）
+              if (seg.content.trim()) {
+                processDataObject({ node: 'model', content: seg.content });
               }
             }
+          } else if (seg.content.trim()) {
+            // 纯文本片段（例如 "好的，用户已确认线索…"）→ 作为 model 输出
+            processDataObject({ node: 'model', content: seg.content });
           }
-          
-          currentSessions[sessionKey] = sessionData;
-          emit('update:sessions', currentSessions);
-          
           await nextTick();
           scrollToBottom();
         }
@@ -475,7 +515,7 @@ const scrollToBottom = async () => {
             <!-- AI 纯 JSON → 全量占位 -->
             <div v-if="isJsonContent(msg) && msg.content" class="json_log_placeholder" @click="openDrawer(msg)">
               <span class="json_log_icon">📋</span>
-              <span class="json_log_label">攻击日志</span>
+              <span class="json_log_label">AI-json回复</span>
               <span class="json_log_hint">点击查看详情 →</span>
             </div>
             <!-- AI 非 JSON → markdown -->
