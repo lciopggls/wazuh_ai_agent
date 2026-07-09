@@ -1831,18 +1831,10 @@ def rule_verification_node(state: RuleGeneratorState, config: RunnableConfig, mo
                 "validation_error": f"Rule {rule_id} was not found in the loaded manager ruleset after restart{extra_text}."
             }
 
-<<<<<<< HEAD
-        # if state.get("rule_requirements", {}).get("user_provided_full_log"):
-        return {
-                "logtest_passed": True,
-                "verification_feedback": f"Verification passed: rule uploaded and loaded. New rule ID: {rule_id}.",
-            }
-=======
         return {
             "logtest_passed": True,
             "verification_feedback": f"Verification passed: rule uploaded and loaded. New rule ID: {rule_id}.",
         }
->>>>>>> origin/master
 
         raw_logs = state.get("raw_logs", [])
         if not raw_logs:

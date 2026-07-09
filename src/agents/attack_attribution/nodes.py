@@ -2202,7 +2202,7 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     }
 
     same_layer_pairs: dict[tuple[str, str], tuple[str, str | None]] = {}
-    cross_layer_relations: list[dict] = []
+    cross_layer_pairs: dict[tuple[str, str], tuple[str, str | None]] = {}
     for rel in relations:
         src, tgt = rel.get("source", ""), rel.get("target", "")
         if src not in node_pos or tgt not in node_pos:
@@ -2218,7 +2218,13 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
             if REL_PRIORITY.get(rel_type, 0) > existing_prio:
                 same_layer_pairs[pair] = (rel_type, ts)
         elif x1 < x2:
-            cross_layer_relations.append(rel)
+            pair = (src, tgt)  # directed — dedup identical edges
+            rel_type = rel.get("relation", "")
+            ts = rel.get("timestamp")
+            existing = cross_layer_pairs.get(pair)
+            existing_prio = REL_PRIORITY.get(existing[0], 0) if existing else 0
+            if REL_PRIORITY.get(rel_type, 0) > existing_prio:
+                cross_layer_pairs[pair] = (rel_type, ts)
         # x1 > x2: reverse edge (right→left) — silently dropped
 
     edge_paths: list[str] = []
@@ -2252,12 +2258,11 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
 
     # --- cross-layer edges: L-shaped routing ---
     target_entry_slots: dict[str, int] = {}
-    for rel in cross_layer_relations:
-        src, tgt = rel.get("source", ""), rel.get("target", "")
+    for (src, tgt), (rel_type, _ts) in cross_layer_pairs.items():
         x1, y1 = node_pos[src]
         x2, y2 = node_pos[tgt]
 
-        rel_type = rel.get("relation", "")
+        rel_type = rel_type
         sw, dash, edge_color, arrow_id = rel_styles.get(
             rel_type, ("2", "none", "#94a3b8", "arrow-gray")
         )
