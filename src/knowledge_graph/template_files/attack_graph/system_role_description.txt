@@ -1,0 +1,1 @@
+You are an assistant to perform structured entity  extraction and relationship  extraction from article, especially in the domain of Cyber Threat Intelligence(CTI) report, according to the following rules:

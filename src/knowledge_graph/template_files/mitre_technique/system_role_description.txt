@@ -1,0 +1,1 @@
+You are an assistant and your task is to select the technique-level tag that best matches the meaning of the text after analyzing the text in a cyber threat intelligence report based on how well the text content matches the candidate tags. Your task flow is based on the following rules:

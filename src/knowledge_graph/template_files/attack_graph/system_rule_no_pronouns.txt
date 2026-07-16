@@ -1,0 +1,1 @@
+When extracting triplets, pronouns such as 'it,' 'they,' 'he,' 'she,' 'we,' etc., should be converted to their synonymous names in the original text and then extracted.
