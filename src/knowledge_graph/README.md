@@ -2,7 +2,7 @@
 
 从 CTI 报告自动生成 MITRE ATT&CK 知识图谱。
 
-## 前置条件
+## 前置条件⭐
 
 **1. 同步依赖**
 
@@ -42,6 +42,7 @@ uv run python -c "import nltk; nltk.data.find('tokenizers/punkt')"
 src/knowledge_graph/
 ├── input/                   ← ★ 用户放入 CTI 报告
 ├── output/                  ← ★ HTML 知识图谱输出
+├── gallery/                 ← ★ 精选图谱展示（需手动存入）
 ├── data/                    ← 流水线中间产物（自动管理）
 │   ├── 1_rewrite/
 │   ├── 2_extract/
@@ -58,7 +59,7 @@ src/knowledge_graph/
 
 
 
-## 使用规范
+## 使用规范⭐
 
 1. **输入**：将 CTI 报告放入 `input/` 目录
 2. **运行**：执行入口脚本

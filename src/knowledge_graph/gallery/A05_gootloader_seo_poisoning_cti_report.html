@@ -1,0 +1,167 @@
+<html>
+    <head>
+        <meta charset="utf-8">
+        
+            <script src="lib/bindings/utils.js"></script>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js" integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+            
+        
+<center>
+<h1></h1>
+</center>
+
+<!-- <link rel="stylesheet" href="../node_modules/vis/dist/vis.min.css" type="text/css" />
+<script type="text/javascript" src="../node_modules/vis/dist/vis.js"> </script>-->
+        <link
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css"
+          rel="stylesheet"
+          integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6"
+          crossorigin="anonymous"
+        />
+        <script
+          src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf"
+          crossorigin="anonymous"
+        ></script>
+
+
+        <center>
+          <h1></h1>
+        </center>
+        <style type="text/css">
+
+             #mynetwork {
+                 width: 1800px;
+                 height: 1200px;
+                 background-color: #ffffff;
+                 border: 1px solid lightgray;
+                 position: relative;
+                 float: left;
+             }
+
+             
+
+             
+             #config {
+                 float: left;
+                 width: 400px;
+                 height: 600px;
+             }
+             
+
+             
+        </style>
+    </head>
+
+
+    <body>
+        <div class="card" style="width: 100%">
+            
+            
+            <div id="mynetwork" class="card-body"></div>
+        </div>
+
+        
+        
+            <div id="config"></div>
+        
+
+        <script type="text/javascript">
+
+              // initialize global variables.
+              var edges;
+              var nodes;
+              var allNodes;
+              var allEdges;
+              var nodeColors;
+              var originalNodes;
+              var network;
+              var container;
+              var options, data;
+              var filter = {
+                  item : '',
+                  property : '',
+                  value : []
+              };
+
+              
+
+              
+
+              // This method is responsible for drawing the graph, returns the drawn network
+              function drawGraph() {
+                  var container = document.getElementById('mynetwork');
+
+                  
+
+                  // parsing and collecting nodes and edges from the python
+                  nodes = new vis.DataSet([{"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "compromise_0", "label": "compromise", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Resource Development", "technique": "Resource Development-Others", "type": "event", "x": 0.0, "y": 0.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "websites", "label": "websites", "shape": "dot", "size": 14.0, "type": "entity", "x": 0.0, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "contain_1", "label": "contain", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Initial Access", "technique": "Initial Access-Others", "type": "event", "x": 150.0, "y": 0.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "attacker", "label": "attacker", "shape": "dot", "size": 14.0, "type": "entity", "x": 550.0, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_7", "label": "use", "sent_nums": [3], "shape": "triangle", "size": 14.0, "tactic": "Defense Evasion", "technique": "Defense Evasion-Others", "type": "event", "x": 750.0, "y": 40.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_9", "label": "use", "sent_nums": [5], "shape": "triangle", "size": 14.0, "tactic": "Defense Evasion", "technique": "Defense Evasion-Others", "type": "event", "x": 900.0, "y": 0.0}, {"color": "#287271", "depth": 2, "font": {"size": 20.0}, "id": "file", "label": "file", "shape": "dot", "size": 14.0, "type": "entity", "x": 587.5, "y": 260.0}, {"color": "#287271", "depth": 2, "font": {"size": 20.0}, "id": "file share", "label": "file share", "shape": "dot", "size": 14.0, "type": "entity", "x": 512.5, "y": 260.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "gootloader", "label": "gootloader", "shape": "dot", "size": 14.0, "type": "entity", "x": 1020.0, "y": 260.0}, {"color": "#287271", "depth": 2, "font": {"size": 20.0}, "id": "victims", "label": "victims", "shape": "dot", "size": 14.0, "type": "entity", "x": 0.0, "y": 260.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Resource Development", "label": "Resource Development", "shape": "box", "size": 14.0, "type": "tactic", "x": 0.0, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Resource Development-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 0.0, "y": -144.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "cobalt strike", "label": "cobalt strike", "shape": "dot", "size": 14.0, "type": "entity", "x": 945.0, "y": 340.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "create_2", "label": "create", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Execution", "technique": "Execution-Others", "type": "event", "x": 300.0, "y": 0.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "communicate with_14", "label": "communicate with", "sent_nums": [7], "shape": "triangle", "size": 14.0, "tactic": "Command and Control", "technique": "Command and Control-Others", "type": "event", "x": 1650.0, "y": 40.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "communicate with_15", "label": "communicate with", "sent_nums": [7], "shape": "triangle", "size": 14.0, "tactic": "Command and Control", "technique": "Command and Control-Others", "type": "event", "x": 1650.0, "y": -40.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_16", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Command and Control", "technique": "Command and Control-Others", "type": "event", "x": 1500.0, "y": 0.0}, {"color": "#B4B4D5", "depth": 2, "font": {"size": 20.0}, "id": "compromised website", "label": "compromised website", "shape": "dot", "size": 14.0, "type": "entity", "x": 187.5, "y": 260.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "olympus_plea_agreement 34603.js", "label": "olympus_plea_agreement 34603.js", "shape": "dot", "size": 14.0, "type": "entity", "x": 112.5, "y": 180.0}, {"color": "#287271", "depth": 2, "font": {"size": 20.0}, "id": "6e141779a4695a637682d64f7bc09973bb82cd24211b2020c8c1648cdb41001b", "label": "6e141779a4695a637682d64f7bc09973bb82cd24211b2020c8c1648cdb41001b", "shape": "dot", "size": 14.0, "type": "entity", "x": 112.5, "y": 260.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "olympus plea agreement(46196).zip", "label": "olympus plea agreement(46196).zip", "shape": "dot", "size": 14.0, "type": "entity", "x": 187.5, "y": 180.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Initial Access", "label": "Initial Access", "shape": "box", "size": 14.0, "type": "tactic", "x": 206.25, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Initial Access-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 206.25, "y": -144.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "communicate with_3", "label": "communicate with", "sent_nums": [5], "shape": "triangle", "size": 14.0, "tactic": "Execution", "technique": "Execution-Others", "type": "event", "x": 450.0, "y": 0.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_8", "label": "use", "sent_nums": [3], "shape": "triangle", "size": 14.0, "tactic": "Defense Evasion", "technique": "Defense Evasion-Others", "type": "event", "x": 750.0, "y": -40.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_13", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Lateral Movement", "technique": "Lateral Movement-T1570-Lateral Tool Transfer", "type": "event", "x": 1350.0, "y": -40.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "registry key", "label": "registry key", "shape": "dot", "size": 14.0, "type": "entity", "x": 300.0, "y": 180.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Execution", "label": "Execution", "shape": "box", "size": 14.0, "type": "tactic", "x": 412.5, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Execution-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 412.5, "y": -144.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "37.120.198.225", "label": "37.120.198.225", "shape": "dot", "size": 14.0, "type": "entity", "x": 450.0, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "create_4", "label": "create", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Persistence", "technique": "Persistence-Others", "type": "event", "x": 600.0, "y": 80.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_5", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Persistence", "technique": "Persistence-Others", "type": "event", "x": 600.0, "y": 0.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "execute_6", "label": "execute", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Persistence", "technique": "Persistence-Others", "type": "event", "x": 600.0, "y": -80.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "infrastructure", "label": "infrastructure", "shape": "dot", "size": 14.0, "type": "entity", "x": 675.0, "y": 180.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "powershell", "label": "powershell", "shape": "dot", "size": 14.0, "type": "entity", "x": 825.0, "y": 180.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Persistence", "label": "Persistence", "shape": "box", "size": 14.0, "type": "tactic", "x": 618.75, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Persistence-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 618.75, "y": -144.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "when user logs on", "label": "when user logs on", "shape": "dot", "size": 14.0, "type": "entity", "x": 525.0, "y": 180.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "scheduled task", "label": "scheduled task", "shape": "dot", "size": 14.0, "type": "entity", "x": 600.0, "y": 180.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Defense Evasion", "label": "Defense Evasion", "shape": "box", "size": 14.0, "type": "tactic", "x": 825.0, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Defense Evasion-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 825.0, "y": -144.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "rundll32", "label": "rundll32", "shape": "dot", "size": 14.0, "type": "entity", "x": 750.0, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_10", "label": "use", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Credential Access", "technique": "Credential Access-Others", "type": "event", "x": 1050.0, "y": 0.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "ls.exe", "label": "ls.exe", "shape": "dot", "size": 14.0, "type": "entity", "x": 1012.5, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_11", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Discovery", "technique": "Discovery-T1069-Permission Groups Discovery", "type": "event", "x": 1200.0, "y": 0.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "lazagne", "label": "lazagne", "shape": "dot", "size": 14.0, "type": "entity", "x": 1087.5, "y": 180.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Credential Access", "label": "Credential Access", "shape": "box", "size": 14.0, "type": "tactic", "x": 1031.25, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Credential Access-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 1031.25, "y": -144.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "deploy_12", "label": "deploy", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Lateral Movement", "technique": "Lateral Movement-T1570-Lateral Tool Transfer", "type": "event", "x": 1350.0, "y": 40.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "sharphound", "label": "sharphound", "shape": "dot", "size": 14.0, "type": "entity", "x": 1200.0, "y": 180.0}, {"color": "#287271", "depth": 2, "font": {"size": 20.0}, "id": "activedirectory", "label": "activedirectory", "shape": "dot", "size": 14.0, "type": "entity", "x": 1200.0, "y": 260.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Discovery", "label": "Discovery", "shape": "box", "size": 14.0, "type": "tactic", "x": 1237.5, "y": -208.0}, {"caption": "T1069", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Discovery-T1069-Permission Groups Discovery", "label": "T1069", "shape": "box", "size": 14.0, "type": "technique", "x": 1237.5, "y": -144.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "windows services", "label": "windows services", "shape": "dot", "size": 14.0, "type": "entity", "x": 1387.5, "y": 180.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Lateral Movement", "label": "Lateral Movement", "shape": "box", "size": 14.0, "type": "tactic", "x": 1443.75, "y": -208.0}, {"caption": "T1570", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Lateral Movement-T1570-Lateral Tool Transfer", "label": "T1570", "shape": "box", "size": 14.0, "type": "technique", "x": 1443.75, "y": -144.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "smb", "label": "smb", "shape": "dot", "size": 14.0, "type": "entity", "x": 1312.5, "y": 180.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "35.206.117.64", "label": "35.206.117.64", "shape": "dot", "size": 14.0, "type": "entity", "x": 1687.5, "y": 180.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Command and Control", "label": "Command and Control", "shape": "box", "size": 14.0, "type": "tactic", "x": 1650.0, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Command and Control-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 1650.0, "y": -144.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "kakiosk.adsparkdev.com", "label": "kakiosk.adsparkdev.com", "shape": "dot", "size": 14.0, "type": "entity", "x": 1612.5, "y": 180.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "test.php?hjkiofilihyl=", "label": "test.php?hjkiofilihyl=", "shape": "dot", "size": 14.0, "type": "entity", "x": 1500.0, "y": 180.0}]);
+                  edges = new vis.DataSet([{"arrows": "to", "from": "compromise_0", "relation": "Object", "to": "websites", "width": 1}, {"arrows": "to", "from": "compromise_0", "to": "contain_1", "width": 1}, {"arrows": "to", "from": "attacker", "relation": "Subject", "to": "compromise_0", "width": 1}, {"arrows": "to", "from": "attacker", "relation": "Subject", "to": "use_7", "width": 1}, {"arrows": "to", "from": "attacker", "relation": "Subject", "to": "use_9", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "attacker", "label": "access", "relation": "access", "to": "file", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "attacker", "label": "enumerate", "relation": "enumerate", "to": "file share", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "websites", "label": "host", "relation": "host", "to": "gootloader", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "websites", "label": "target", "relation": "target", "to": "victims", "width": 1}, {"arrows": "to", "from": "Resource Development", "to": "Resource Development-Others", "width": 1}, {"arrows": "to", "from": "Resource Development-Others", "to": "compromise_0", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "gootloader", "label": "drop", "relation": "drop", "to": "cobalt strike", "width": 1}, {"arrows": "to", "from": "gootloader", "relation": "Subject", "to": "create_2", "width": 1}, {"arrows": "to", "from": "gootloader", "relation": "Subject", "to": "communicate with_14", "width": 1}, {"arrows": "to", "from": "gootloader", "relation": "Subject", "to": "communicate with_15", "width": 1}, {"arrows": "to", "from": "gootloader", "relation": "Subject", "to": "use_16", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "compromised website", "label": "host", "relation": "host", "to": "olympus_plea_agreement 34603.js", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "olympus_plea_agreement 34603.js", "label": "have", "relation": "have", "to": "6e141779a4695a637682d64f7bc09973bb82cd24211b2020c8c1648cdb41001b", "width": 1}, {"arrows": "to", "from": "contain_1", "relation": "Object", "to": "olympus_plea_agreement 34603.js", "width": 1}, {"arrows": "to", "from": "contain_1", "to": "create_2", "width": 1}, {"arrows": "to", "from": "olympus plea agreement(46196).zip", "relation": "Subject", "to": "contain_1", "width": 1}, {"arrows": "to", "from": "Initial Access", "to": "Initial Access-Others", "width": 1}, {"arrows": "to", "from": "Initial Access-Others", "to": "contain_1", "width": 1}, {"arrows": "to", "from": "cobalt strike", "relation": "Subject", "to": "communicate with_3", "width": 1}, {"arrows": "to", "from": "cobalt strike", "relation": "Subject", "to": "use_8", "width": 1}, {"arrows": "to", "from": "cobalt strike", "relation": "Subject", "to": "use_13", "width": 1}, {"arrows": "to", "from": "create_2", "relation": "Object", "to": "registry key", "width": 1}, {"arrows": "to", "from": "create_2", "to": "communicate with_3", "width": 1}, {"arrows": "to", "from": "Execution", "to": "Execution-Others", "width": 1}, {"arrows": "to", "from": "Execution-Others", "to": "create_2", "width": 1}, {"arrows": "to", "from": "Execution-Others", "to": "communicate with_3", "width": 1}, {"arrows": "to", "from": "communicate with_3", "relation": "Object", "to": "37.120.198.225", "width": 1}, {"arrows": "to", "from": "communicate with_3", "to": "create_4", "width": 1}, {"arrows": "to", "from": "communicate with_3", "to": "use_5", "width": 1}, {"arrows": "to", "from": "communicate with_3", "to": "execute_6", "width": 1}, {"arrows": "to", "from": "create_4", "relation": "Object", "to": "infrastructure", "width": 1}, {"arrows": "to", "from": "create_4", "to": "use_7", "width": 1}, {"arrows": "to", "from": "create_4", "to": "use_8", "width": 1}, {"arrows": "to", "from": "powershell", "relation": "Subject", "to": "create_4", "width": 1}, {"arrows": "to", "from": "powershell", "relation": "Subject", "to": "use_5", "width": 1}, {"arrows": "to", "from": "Persistence", "to": "Persistence-Others", "width": 1}, {"arrows": "to", "from": "Persistence-Others", "to": "create_4", "width": 1}, {"arrows": "to", "from": "Persistence-Others", "to": "use_5", "width": 1}, {"arrows": "to", "from": "Persistence-Others", "to": "execute_6", "width": 1}, {"arrows": "to", "from": "use_5", "relation": "Object", "to": "infrastructure", "width": 1}, {"arrows": "to", "from": "use_5", "to": "use_7", "width": 1}, {"arrows": "to", "from": "use_5", "to": "use_8", "width": 1}, {"arrows": "to", "from": "execute_6", "relation": "Object", "to": "when user logs on", "width": 1}, {"arrows": "to", "from": "execute_6", "to": "use_7", "width": 1}, {"arrows": "to", "from": "execute_6", "to": "use_8", "width": 1}, {"arrows": "to", "from": "scheduled task", "relation": "Subject", "to": "execute_6", "width": 1}, {"arrows": "to", "from": "use_7", "relation": "Object", "to": "cobalt strike", "width": 1}, {"arrows": "to", "from": "use_7", "to": "use_9", "width": 1}, {"arrows": "to", "from": "Defense Evasion", "to": "Defense Evasion-Others", "width": 1}, {"arrows": "to", "from": "Defense Evasion-Others", "to": "use_7", "width": 1}, {"arrows": "to", "from": "Defense Evasion-Others", "to": "use_8", "width": 1}, {"arrows": "to", "from": "Defense Evasion-Others", "to": "use_9", "width": 1}, {"arrows": "to", "from": "use_8", "relation": "Object", "to": "rundll32", "width": 1}, {"arrows": "to", "from": "use_8", "to": "use_9", "width": 1}, {"arrows": "to", "from": "use_9", "relation": "Object", "to": "powershell", "width": 1}, {"arrows": "to", "from": "use_9", "to": "use_10", "width": 1}, {"arrows": "to", "from": "use_10", "relation": "Object", "to": "ls.exe", "width": 1}, {"arrows": "to", "from": "use_10", "to": "use_11", "width": 1}, {"arrows": "to", "from": "lazagne", "relation": "Subject", "to": "use_10", "width": 1}, {"arrows": "to", "from": "Credential Access", "to": "Credential Access-Others", "width": 1}, {"arrows": "to", "from": "Credential Access-Others", "to": "use_10", "width": 1}, {"arrows": "to", "from": "use_11", "relation": "Object", "to": "powershell", "width": 1}, {"arrows": "to", "from": "use_11", "to": "deploy_12", "width": 1}, {"arrows": "to", "from": "use_11", "to": "use_13", "width": 1}, {"arrows": "to", "from": "sharphound", "relation": "Subject", "to": "use_11", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "sharphound", "label": "target", "relation": "target", "to": "activedirectory", "width": 1}, {"arrows": "to", "from": "Discovery", "to": "Discovery-T1069-Permission Groups Discovery", "width": 1}, {"arrows": "to", "from": "Discovery-T1069-Permission Groups Discovery", "to": "use_11", "width": 1}, {"arrows": "to", "from": "deploy_12", "relation": "Object", "to": "cobalt strike", "width": 1}, {"arrows": "to", "from": "deploy_12", "to": "use_16", "width": 1}, {"arrows": "to", "from": "windows services", "relation": "Subject", "to": "deploy_12", "width": 1}, {"arrows": "to", "from": "Lateral Movement", "to": "Lateral Movement-T1570-Lateral Tool Transfer", "width": 1}, {"arrows": "to", "from": "Lateral Movement-T1570-Lateral Tool Transfer", "to": "deploy_12", "width": 1}, {"arrows": "to", "from": "Lateral Movement-T1570-Lateral Tool Transfer", "to": "use_13", "width": 1}, {"arrows": "to", "from": "use_13", "relation": "Object", "to": "smb", "width": 1}, {"arrows": "to", "from": "use_13", "to": "use_16", "width": 1}, {"arrows": "to", "from": "communicate with_14", "relation": "Object", "to": "35.206.117.64", "width": 1}, {"arrows": "to", "from": "Command and Control", "to": "Command and Control-Others", "width": 1}, {"arrows": "to", "from": "Command and Control-Others", "to": "communicate with_14", "width": 1}, {"arrows": "to", "from": "Command and Control-Others", "to": "communicate with_15", "width": 1}, {"arrows": "to", "from": "Command and Control-Others", "to": "use_16", "width": 1}, {"arrows": "to", "from": "communicate with_15", "relation": "Object", "to": "kakiosk.adsparkdev.com", "width": 1}, {"arrows": "to", "from": "use_16", "relation": "Object", "to": "test.php?hjkiofilihyl=", "width": 1}, {"arrows": "to", "from": "use_16", "to": "communicate with_14", "width": 1}, {"arrows": "to", "from": "use_16", "to": "communicate with_15", "width": 1}]);
+
+                  nodeColors = {};
+                  allNodes = nodes.get({ returnType: "Object" });
+                  for (nodeId in allNodes) {
+                    nodeColors[nodeId] = allNodes[nodeId].color;
+                  }
+                  allEdges = edges.get({ returnType: "Object" });
+                  // adding nodes and edges to the graph
+                  data = {nodes: nodes, edges: edges};
+
+                  var options = {
+    "configure": {
+        "enabled": true
+    },
+    "edges": {
+        "color": {
+            "inherit": true
+        },
+        "smooth": {
+            "enabled": true,
+            "type": "dynamic"
+        }
+    },
+    "interaction": {
+        "dragNodes": true,
+        "hideEdgesOnDrag": false,
+        "hideNodesOnDrag": false
+    },
+    "physics": {
+        "enabled": false,
+        "stabilization": {
+            "enabled": true,
+            "fit": true,
+            "iterations": 1000,
+            "onlyDynamicEdges": false,
+            "updateInterval": 50
+        }
+    }
+};
+
+                  
+
+
+                  
+                  // if this network requires displaying the configure window,
+                  // put it in its div
+                  options.configure["container"] = document.getElementById("config");
+                  
+
+                  network = new vis.Network(container, data, options);
+
+                  
+
+                  
+
+                  
+
+
+                  
+
+                  return network;
+
+              }
+              drawGraph();
+        </script>
+    </body>
+</html>
