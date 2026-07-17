@@ -19,3 +19,4 @@ src/knowledge_graph/data/4_sort/
 src/knowledge_graph/data/vis_cache/
 src/knowledge_graph/input/*.txt
 src/knowledge_graph/input/*.pdf
+src/knowledge_graph/output/*.html
