@@ -10,3 +10,13 @@
 .idea
 package-lock.json
 .claude/
+
+# Knowledge Graph
+src/knowledge_graph/data/1_rewrite/
+src/knowledge_graph/data/2_extract/
+src/knowledge_graph/data/3_label/
+src/knowledge_graph/data/4_sort/
+src/knowledge_graph/data/vis_cache/
+src/knowledge_graph/input/*.txt
+src/knowledge_graph/input/*.pdf
+src/knowledge_graph/output/*.html

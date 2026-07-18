@@ -1,0 +1,6 @@
+article 0:
+APT40(Organization) ; Use ; MURKYSHELL(Malware)
+APT40(Organization) ; Use ; net.exe(Filename) 
+
+article 1:
+APT40(Organization) ; Use ; MURKYSHELL(Malware)

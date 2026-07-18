@@ -1,0 +1,3 @@
+Extract each entity group in format: 
+"entity 1(entity type); relation; entity 2(entity type); article_id."
+article_id is the the id of the article where the triplets is extracted from.
