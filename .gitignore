@@ -10,6 +10,7 @@
 .idea
 package-lock.json
 .claude/
+.agents/
 
 # Knowledge Graph
 src/knowledge_graph/data/1_rewrite/
