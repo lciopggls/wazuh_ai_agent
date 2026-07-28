@@ -1,29 +1,30 @@
 """Stage 1: Rewrite CTI reports organized by MITRE ATT&CK tactics."""
-import os, sys
-_KG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _KG_ROOT)
-import time
-import json
-import re
+
 import asyncio
+import json
+import os
+import re
+import sys
+import time
 from os import path as op
 
 import openai
 import tiktoken
-
+from openai import OpenAI
 from pdfminer.high_level import extract_text as pdfminer_extract_text
 
-from template import rewriting_template, Tactic_label_order
-from openai import OpenAI
-from config import openai_api_key, openai_api_base, current_model
+_KG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _KG_ROOT)
 
+from config import current_model, openai_api_base, openai_api_key  # noqa: E402
+from template import Tactic_label_order, rewriting_template  # noqa: E402
 
 client = OpenAI(
     api_key=openai_api_key,
     base_url=openai_api_base,
 )
 
-usage_save_dir = f'./dataset_CTI/usage/rewriting/{current_model}'
+usage_save_dir = f"./dataset_CTI/usage/rewriting/{current_model}"
 
 
 def async_wrap(func, args):
@@ -34,7 +35,7 @@ def openai_usage2dict(usage):
     return {
         "prompt_tokens": usage.prompt_tokens,
         "completion_tokens": usage.completion_tokens,
-        "total_tokens": usage.total_tokens
+        "total_tokens": usage.total_tokens,
     }
 
 
@@ -42,7 +43,7 @@ def num_tokens_from_string(string: str, model_name: str) -> int:
     try:
         encoding = tiktoken.encoding_for_model(model_name)
     except KeyError:
-        encoding = tiktoken.encoding_for_model('gpt-4o')
+        encoding = tiktoken.encoding_for_model("gpt-4o")
     return len(encoding.encode(string))
 
 
@@ -51,21 +52,25 @@ def _parse_rewrite_response(raw_text: str, mitre: dict) -> dict:
     Layers: JSON → markdown-headers → plain-text headers → fallback."""
 
     raw_text = raw_text.strip()
-    if raw_text.startswith('```'):
-        lines = raw_text.split('\n')
-        raw_text = '\n'.join(lines[1:-1]) if len(lines) > 2 else raw_text
+    if raw_text.startswith("```"):
+        lines = raw_text.split("\n")
+        raw_text = "\n".join(lines[1:-1]) if len(lines) > 2 else raw_text
 
-    tactics = [t['name'] for t in mitre['tactics']]
+    tactics = [t["name"] for t in mitre["tactics"]]
 
     # Helper: split text by markdown headers (## / ** / ###)
     def _split_by_md_headers(text: str) -> dict:
         md_result = {}
-        md_pattern = r'(?:\*\*|#{1,3}\s?)(' + '|'.join(re.escape(t) for t in tactics) + r'|Others)(?:\*\*)?\s*\n?'
+        md_pattern = (
+            r"(?:\*\*|#{1,3}\s?)("
+            + "|".join(re.escape(t) for t in tactics)
+            + r"|Others)(?:\*\*)?\s*\n?"
+        )
         md_parts = re.split(md_pattern, text)
         if len(md_parts) > 1:
             for i in range(1, len(md_parts), 2):
                 key = md_parts[i].strip()
-                value = md_parts[i + 1].strip() if i + 1 < len(md_parts) else ''
+                value = md_parts[i + 1].strip() if i + 1 < len(md_parts) else ""
                 md_result[key] = value
         return md_result
 
@@ -73,11 +78,11 @@ def _parse_rewrite_response(raw_text: str, mitre: dict) -> dict:
     try:
         result = json.loads(raw_text)
         if isinstance(result, dict):
-            first_key = list(result.keys())[0] if result else ''
+            first_key = list(result.keys())[0] if result else ""
             if first_key and first_key.strip() in Tactic_label_order:
                 # If all content is under "Others", try markdown split
-                if len(result) == 1 and 'Others' in result:
-                    md = _split_by_md_headers(result['Others'])
+                if len(result) == 1 and "Others" in result:
+                    md = _split_by_md_headers(result["Others"])
                     if md:
                         return md
                 return result
@@ -91,26 +96,33 @@ def _parse_rewrite_response(raw_text: str, mitre: dict) -> dict:
 
     # Layer 3: "TacticName:\ncontent..." format
     result = {}
-    pattern = '(' + '|'.join(re.escape(t) + ':' for t in tactics) + '|' + 'Others:' + ')'
+    pattern = "(" + "|".join(re.escape(t) + ":" for t in tactics) + "|" + "Others:" + ")"
     parts = re.split(pattern, raw_text, flags=re.MULTILINE)
     for i in range(1, len(parts), 2):
-        key = parts[i].rstrip(':').strip()
-        value = parts[i + 1].strip() if i + 1 < len(parts) else ''
+        key = parts[i].rstrip(":").strip()
+        value = parts[i + 1].strip() if i + 1 < len(parts) else ""
         result[key] = value
     if result:
         return result
 
     # Layer 4: Fallback to Others
-    return {'Others': raw_text}
+    return {"Others": raw_text}
 
 
-def request_rewriting(report_dir, mitre, file_name='', ext='.txt',
-                      model=current_model, temperature=0, max_token=120000):
+def request_rewriting(
+    report_dir,
+    mitre,
+    file_name="",
+    ext=".txt",
+    model=current_model,
+    temperature=0,
+    max_token=120000,
+):
     file_path = op.join(report_dir, file_name + ext)
-    if ext.lower() == '.pdf':
+    if ext.lower() == ".pdf":
         text = pdfminer_extract_text(file_path)
     else:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding="utf-8") as f:
             text = f.read()
 
     messages, tools = rewriting_template(text, mitre)
@@ -132,7 +144,7 @@ def request_rewriting(report_dir, mitre, file_name='', ext='.txt',
 
             usage_dir = usage_save_dir
             os.makedirs(usage_dir, exist_ok=True)
-            with open(op.join(usage_dir, file_name + '.json'), 'w', encoding='utf-8') as f:
+            with open(op.join(usage_dir, file_name + ".json"), "w", encoding="utf-8") as f:
                 json.dump(openai_usage2dict(response.usage), f, indent=4)
 
             return {
@@ -154,11 +166,11 @@ def request_rewriting(report_dir, mitre, file_name='', ext='.txt',
 
 
 async def request_files(input_dir=None, skip_existed=True):
-    file_dir = input_dir or os.path.join(_KG_ROOT, 'input')
-    save_dir = os.path.join(_KG_ROOT, 'data', '1_rewrite')
-    mitre_json_path = os.path.join(_KG_ROOT, 'data', 'mitre.json')
+    file_dir = input_dir or os.path.join(_KG_ROOT, "input")
+    save_dir = os.path.join(_KG_ROOT, "data", "1_rewrite")
+    mitre_json_path = os.path.join(_KG_ROOT, "data", "mitre.json")
 
-    with open(mitre_json_path, 'r') as f:
+    with open(mitre_json_path) as f:
         mitre = json.load(f)
 
     os.makedirs(save_dir, exist_ok=True)
@@ -167,29 +179,36 @@ async def request_files(input_dir=None, skip_existed=True):
     tasks = []
     for file in os.listdir(file_dir):
         name, ext = op.splitext(file)
-        if skip_existed and op.exists(op.join(save_dir, name + '.json')):
+        if skip_existed and op.exists(op.join(save_dir, name + ".json")):
             continue
-        args = {'report_dir': file_dir, 'mitre': mitre, 'file_name': name,
-                'ext': ext, 'model': current_model, "max_token": 120000}
+        args = {
+            "report_dir": file_dir,
+            "mitre": mitre,
+            "file_name": name,
+            "ext": ext,
+            "model": current_model,
+            "max_token": 120000,
+        }
         tasks.append(async_wrap(request_rewriting, args))
 
     sub_task_step = 20
     for i in range(0, len(tasks), sub_task_step):
-        sub_tasks = tasks[i:i + sub_task_step]
+        sub_tasks = tasks[i : i + sub_task_step]
         responses = await asyncio.gather(*sub_tasks)
         for response in responses:
             if response is None:
                 continue
-            with open(op.join(save_dir, response['name'] + '.json'), 'w', encoding='utf-8') as f:
+            with open(op.join(save_dir, response["name"] + ".json"), "w", encoding="utf-8") as f:
                 try:
-                    json.dump(response['result'], f, indent=4)
+                    json.dump(response["result"], f, indent=4)
                 except Exception:
                     pass
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input-dir', default=os.path.join(_KG_ROOT, 'input') + '/')
+    parser.add_argument("--input-dir", default=os.path.join(_KG_ROOT, "input") + "/")
     args = parser.parse_args()
     asyncio.run(request_files(input_dir=args.input_dir))

@@ -5,6 +5,7 @@
     "router_agent": "./src/agents/agent.py:router_agent",
     "rule_agent": "./src/agents/agent.py:rule_agent",
     "attack_attributor": "./src/agents/agent.py:attack_attributor",
+    "baseline_agent": "./src/agents/agent.py:baseline_agent",
     "response_agent": "./src/agents/agent.py:response_agent"
   },
   "env": ".env"

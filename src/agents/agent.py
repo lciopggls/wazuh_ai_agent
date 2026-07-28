@@ -2,6 +2,7 @@ import httpx
 from langchain_openai import ChatOpenAI
 
 from agents.attack_attribution.attack_attributor import get_attack_attribution_agent
+from agents.baseline_agent.baseline_agent import get_baseline_agent
 from agents.demo_agent import get_demo_agent
 from agents.response_agent import get_response_agent
 from agents.router_agent import get_router_agent
@@ -42,6 +43,7 @@ model_attribution = ChatOpenAI(**llm_attribution_params)
 demo_agent = get_demo_agent(model)
 rule_agent = get_rule_agent(model)
 attack_attributor = get_attack_attribution_agent(model_attribution)
+baseline_agent = get_baseline_agent(model)
 router_agent = get_router_agent(
     model, rule_model=model, attack_model=model_attribution, response_model=model
 )

@@ -114,7 +114,14 @@ if __name__ == "__main__":
     )
     agent = get_response_agent(model)
     for chunk in agent.stream(
-        {"messages": [{"role": "user", "content": "请帮我在 agent 006 上封禁 IP 192.168.109.114，封禁1小时"}]},
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "请帮我在 agent 006 上封禁 IP 192.168.109.114，封禁1小时",
+                }
+            ]
+        },
         stream_mode="values",
     ):
         latest_message = chunk["messages"][-1]
