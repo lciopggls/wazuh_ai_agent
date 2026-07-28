@@ -31,6 +31,47 @@ const userInput = ref("");
 const isTyping = ref(false);
 const scrollRef = ref<HTMLElement | null>(null);
 
+// --- 报告下载状态追踪（按消息索引） ---
+const downloadStates = ref<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({});
+
+/** 判断气泡内容是否为攻击溯源报告 */
+function isReportContent(msg: any): boolean {
+  if (msg.role !== 'assistant' || msg.node !== 'reply') return false;
+  const content = getMessageContent(msg);
+  return content.includes('攻击溯源调查');
+}
+
+/** 下载报告：调用后端 API 保存到指定目录 */
+async function downloadReport(msg: any, index: number) {
+  const content = getMessageContent(msg);
+  if (!content) return;
+
+  downloadStates.value[index] = 'saving';
+  try {
+    const response = await fetch('http://127.0.0.1:8001/api/report/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+    const result = await response.json();
+    if (result.status === 'ok') {
+      downloadStates.value[index] = 'saved';
+      setTimeout(() => {
+        if (downloadStates.value[index] === 'saved') {
+          downloadStates.value[index] = 'idle';
+        }
+      }, 3000);
+    } else {
+      downloadStates.value[index] = 'error';
+      setTimeout(() => { downloadStates.value[index] = 'idle'; }, 3000);
+    }
+  } catch (err: any) {
+    console.error('保存报告失败:', err);
+    downloadStates.value[index] = 'error';
+    setTimeout(() => { downloadStates.value[index] = 'idle'; }, 3000);
+  }
+}
+
 // --- 5. JSON 日志抽屉状态 ---
 const drawerVisible = ref(false);
 const drawerContent = ref("");
@@ -517,7 +558,32 @@ const scrollToBottom = async () => {
         <div class="content_box">
           <div v-if="msg.role === 'assistant' && msg.node" class="node_tag">
             <template v-if="msg.node === 'tools'">⚙️ 工具输出 (原始数据)</template>
-            <template v-else-if="msg.node === 'reply'">📋 提取结论</template>
+            <template v-else-if="msg.node === 'reply'">
+              📋 提取结论
+              <!-- 攻击溯源报告下载按钮 -->
+              <button
+                v-if="isReportContent(msg)"
+                class="report_download_btn"
+                :class="{
+                  'report_download_btn--saving': downloadStates[index] === 'saving',
+                  'report_download_btn--saved': downloadStates[index] === 'saved',
+                  'report_download_btn--error': downloadStates[index] === 'error',
+                }"
+                :disabled="downloadStates[index] === 'saving'"
+                @click.stop="downloadReport(msg, index)"
+                :title="
+                  downloadStates[index] === 'saving' ? '保存中...' :
+                  downloadStates[index] === 'saved' ? '已保存 ✓' :
+                  downloadStates[index] === 'error' ? '保存失败' :
+                  '保存报告到本地'
+                "
+              >
+                <template v-if="downloadStates[index] === 'saving'">⏳</template>
+                <template v-else-if="downloadStates[index] === 'saved'">✅</template>
+                <template v-else-if="downloadStates[index] === 'error'">❌</template>
+                <template v-else>💾 下载报告</template>
+              </button>
+            </template>
             <template v-else-if="msg.node === 'model'">🤖 AI 文本回复</template>
             <template v-else>⚡ 步骤: {{ msg.node }}</template>
           </div>
@@ -928,5 +994,53 @@ const scrollToBottom = async () => {
 @keyframes overlayFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+// ── 报告下载按钮 ──
+.report_download_btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #1d4ed8;
+  background: rgba(29, 78, 216, 0.08);
+  border: 1px solid rgba(29, 78, 216, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  vertical-align: middle;
+  line-height: 1.4;
+
+  &:hover:not(:disabled) {
+    background: rgba(29, 78, 216, 0.15);
+    border-color: #1d4ed8;
+    box-shadow: 0 0 8px rgba(29, 78, 216, 0.15);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  &--saving {
+    color: #f59e0b;
+    border-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.08);
+  }
+
+  &--saved {
+    color: #10b981;
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.08);
+  }
+
+  &--error {
+    color: #ef4444;
+    border-color: #ef4444;
+    background: rgba(239, 68, 68, 0.08);
+  }
 }
 </style>

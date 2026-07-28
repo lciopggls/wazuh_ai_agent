@@ -72,7 +72,11 @@ class TripletsGPTSorter:
         sents = []
         for line in text.splitlines():
             if line:
-                sents.extend(nltk.sent_tokenize(line))
+                try:
+                    sents.extend(nltk.sent_tokenize(line))
+                except LookupError:
+                    import re as _re
+                    sents.extend(_re.split(r'(?<=[.!?])\s+', line))
         return sents
 
     def request_triplets_order(self, tactic=None,

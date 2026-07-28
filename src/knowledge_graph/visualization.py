@@ -2,16 +2,18 @@ import os
 from os import path as op
 import json
 import re
-import random
 
 import networkx as nx
 import matplotlib.pyplot as plt
 from pyvis.network import Network
 
 
-from nltk.stem import WordNetLemmatizer
-from nltk import word_tokenize, pos_tag
-from nltk.corpus import wordnet
+try:
+    from nltk.stem import WordNetLemmatizer
+    from nltk import word_tokenize, pos_tag
+    from nltk.corpus import wordnet
+except LookupError:
+    pass
 
 
 Tactic_label_order = {
@@ -46,14 +48,25 @@ def get_wordnet_pos(tag):
         return None
 
 def lemmatize(s:str):
-    tokens = word_tokenize(s) # tokenization"
-    tagged_sent = pos_tag(tokens) # part-of-speech tagging
-    wnl = WordNetLemmatizer()
-    lemmas = []
-    for tag in tagged_sent:
-        wordnet_pos = get_wordnet_pos(tag[1]) or wordnet.NOUN
-        lemmas.append(wnl.lemmatize(tag[0], pos=wordnet_pos))
-    result = ' '.join(lemmas)
+    try:
+        tokens = word_tokenize(s) # tokenization"
+    except LookupError:
+        # Fallback: simple space split when punkt_tab unavailable
+        tokens = s.split()
+    try:
+        tagged_sent = pos_tag(tokens) # part-of-speech tagging
+    except LookupError:
+        tagged_sent = [(t, 'NN') for t in tokens]
+    try:
+        wnl = WordNetLemmatizer()
+        lemmas = []
+        for tag in tagged_sent:
+            wordnet_pos = get_wordnet_pos(tag[1]) or wordnet.NOUN
+            lemmas.append(wnl.lemmatize(tag[0], pos=wordnet_pos))
+        result = ' '.join(lemmas)
+    except LookupError:
+        # Fallback: no lemmatization when wordnet is unavailable
+        result = ' '.join(t for t, _ in tagged_sent)
     return result
 
 def filtering(x:str, filter_type='e', lemmatization=False):
@@ -268,51 +281,18 @@ def get_networkx(json_dict, size_multipler=1.0):
             y = outside_length_max + TTP_base_vertical
             y = -1 * y
             pos.update({tech: (x,y)})
-    # reassign the position for entity nodes
+    # reassign the position for entity nodes — 水平分散 + 垂直交错
     for p in pos2nodes:
         n_l = pos2nodes[p]
-        n_l_positive = [] # put the y of predecessors > 0 in the front
-        n_l_negtive = [] # n_l = positive + negtive
-
-        for n in n_l:
-            pre_n = [nn for nn in G.predecessors(n)]
-            suc_n = [nn for nn in G.successors(n) ]
-            nei_n = pre_n + suc_n
-            nei_pos = 0
-            nei_neg = 0
-            for nn in nei_n:
-                if pos[nn][1] >= 0:
-                    nei_pos += 1
-                else:
-                    nei_neg += 1
-            if nei_pos >= nei_neg:
-                n_l_positive.append(n)
-            else:
-                n_l_negtive.append(n)
-        
-        up_nodes = []
-        down_nodes = []
-        # put all nodes to down_nodes
-        for i in range(len(n_l)):
-            if i <= int((len(n_l)-1) / 2):
-                up_nodes.append(n_l[i]) # replace down_nodes with up_nodes for tact and tech vis
-            else:
-                up_nodes.append(n_l[i])
-        if random.randint(0, 1) == 2: # dont exchange
-            # exchange for 50% probability
-            t = up_nodes
-            up_nodes = down_nodes
-            down_nodes = t
-
-        for i, n in enumerate(up_nodes):
-            x = ((len(up_nodes) - 1) / 2 - i) * reassign_horizontal + p[0]
-            y = p[1]
+        for i, n in enumerate(n_l):
+            # 水平散布
+            x = ((len(n_l) - 1) / 2 - i) * reassign_horizontal + p[0]
+            # 垂直交错：每 3 个一组形成多层，避免长标签重叠
+            row = i // 3
+            col = i % 3
+            stagger_y = (col - 1) * 32   # -32 / 0 / +32
+            y = p[1] + row * 80 + stagger_y
             pos.update({n: (x, y)})
-        
-        for i, n in enumerate(down_nodes):
-            x = ((len(down_nodes) - 1) / 2 - i) * reassign_horizontal + p[0]
-            y = -1 * p[1]
-            pos.update({n: (x, y)})     
 
     remove_ns = []
     for n in G.nodes:
@@ -328,7 +308,7 @@ def get_networkx(json_dict, size_multipler=1.0):
 def draw_matplotlib():
     pass
 
-def draw_pyvis(nx_graph, pos, pic_dir='./', pic_name='nx.html', xpx=800, ypx=1200, size_multipler=1.0):
+def draw_pyvis(nx_graph, pos, pic_dir='./', pic_name='nx.html', xpx=1800, ypx=3200, size_multipler=1.0):
     nt = Network('{}px'.format(xpx), '{}px'.format(ypx), notebook=True, directed=True)
     
     nt.from_nx(nx_graph)
@@ -362,8 +342,24 @@ def draw_pyvis(nx_graph, pos, pic_dir='./', pic_name='nx.html', xpx=800, ypx=120
             else:
                 n['color'] = '#287271'
         n['size'] = 14 * size_multipler
-        n['font'] = {'size': 20 * size_multipler}
-        
+        # ── 按节点类型差异化字体 + 白色描边防重叠 ──
+        label = n.get('label', '')
+        if n['type'] == 'event':
+            n['font'] = {'size': 14, 'strokeWidth': 2, 'strokeColor': '#ffffff'}
+        elif n['type'] == 'tactic':
+            n['font'] = {'size': 24, 'strokeWidth': 3, 'strokeColor': '#ffffff', 'face': 'Arial Black'}
+        elif n['type'] == 'technique':
+            n['font'] = {'size': 18, 'strokeWidth': 2, 'strokeColor': '#ffffff'}
+        elif n['type'] == 'entity':
+            # 长标签自动缩小
+            fs = max(11, min(18, 20 - len(label) * 0.25))
+            n['font'] = {'size': fs, 'strokeWidth': 2, 'strokeColor': '#ffffff'}
+        else:
+            n['font'] = {'size': 20 * size_multipler}
+        # ── 固定非实体节点，让实体节点在物理排斥中自动散布 ──
+        if n['type'] != 'entity':
+            n['fixed'] = True
+
         # print(n['font_size'])
     
     for e in nt.edges:
@@ -371,9 +367,28 @@ def draw_pyvis(nx_graph, pos, pic_dir='./', pic_name='nx.html', xpx=800, ypx=120
             e["font"]={"size": 16 * size_multipler}
         if "dashline" in e:
             e['dashes'] = True        
+    # ── 实体节点物理排斥：被弹开避免文字重合，其它节点固定不动 ──
+    nt.set_options("""
+    {
+      "physics": {
+        "enabled": true,
+        "solver": "repulsion",
+        "repulsion": {
+          "nodeDistance": 250,
+          "centralGravity": 0.008,
+          "springLength": 500,
+          "springConstant": 0.003,
+          "damping": 0.6
+        },
+        "stabilization": {
+          "enabled": true,
+          "iterations": 300,
+          "updateInterval": 25
+        }
+      }
+    }
+    """)
     nt.show_buttons()
-    nt.toggle_physics(False)
-    # nt.set_edge_smooth('dynamic')
     nt.show(op.join(pic_dir, pic_name))
     
 
@@ -388,12 +403,12 @@ def draw_one_pic(json_dir, name, save_dir = './data/pics'):
     size_multipler = 1.0
     try:
         graph_data = get_networkx(data_dict, size_multipler=size_multipler)
-        draw_pyvis(graph_data['graph'], graph_data['pos'], pic_dir=save_dir, pic_name=name+'.html', xpx=1200, ypx=1800, size_multipler=size_multipler)
+        draw_pyvis(graph_data['graph'], graph_data['pos'], pic_dir=save_dir, pic_name=name+'.html', xpx=1800, ypx=3200, size_multipler=size_multipler)
     except Exception as e:
         print('Exception:')
         print(e)
     # gpt_draw(nx_graph)
-    
+
 def draw_pics():
     json_dir = op.join('data', 'vis_cache')
     save_dir = './data/pics'
@@ -409,7 +424,7 @@ def draw_pics():
         size_multipler = 1.0
         try:
             graph_data = get_networkx(data_dict, size_multipler=size_multipler)
-            draw_pyvis(graph_data['graph'], graph_data['pos'], pic_dir=save_dir, pic_name=name+'.html', xpx=1200, ypx=1800, size_multipler=size_multipler)
+            draw_pyvis(graph_data['graph'], graph_data['pos'], pic_dir=save_dir, pic_name=name+'.html', xpx=1800, ypx=3200, size_multipler=size_multipler)
         except Exception as e:
             print('Exception:')
             print(e)
