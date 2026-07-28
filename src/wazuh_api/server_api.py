@@ -475,9 +475,7 @@ def block_ip_on_agent(
             netsh86400 - 1 day
             netsh0    - permanent
     """
-    logger.info(
-        "Blocking IP %s on agent %s with command %s", target_ip, agent_id, command_name
-    )
+    logger.info("Blocking IP %s on agent %s with command %s", target_ip, agent_id, command_name)
     requests_headers["Authorization"] = f"Bearer {wazuh_server_token()}"
     response = requests.put(
         f"{protocol}://{host}:{port}/active-response?agents_list={agent_id}",
@@ -489,18 +487,16 @@ def block_ip_on_agent(
         verify=False,
     )
     if response.status_code == 200:
-        logger.info(
-            "Block IP %s on agent %s successfully", target_ip, agent_id
-        )
+        logger.info("Block IP %s on agent %s successfully", target_ip, agent_id)
     else:
-        logger.error(
-            "Failed to block IP %s on agent %s: %s", target_ip, agent_id, response.text
-        )
+        logger.error("Failed to block IP %s on agent %s: %s", target_ip, agent_id, response.text)
     return response.json()
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
     # print(get_wazuh_server_api_info())
     # print(get_agents_status_summary())
     # print(get_agents_os_summary())
@@ -516,7 +512,3 @@ if __name__ == "__main__":
 
     # 在 agent 006 上封禁 192.168.109.137，10分钟
     print(block_ip_on_agent(agent_id="006", target_ip="192.168.109.137", command_name="netsh600"))
-
-
-
-

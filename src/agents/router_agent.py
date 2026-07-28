@@ -8,7 +8,10 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.config import get_config
 
 from agents.attack_attribution.attack_attributor import get_attack_attribution_agent
-from agents.attack_attribution.utils import extract_agent_ip_mapping
+from agents.attack_attribution.utils import (
+    extract_agent_ip_mapping,
+    format_attribution_report_message,
+)
 from agents.response_agent import get_response_agent
 from agents.rule_agent.rule_agent import get_rule_agent
 
@@ -140,6 +143,7 @@ def _summarize_attack_state(attack_state: dict[str, Any] | None) -> str:
         "requires_mitre_kb": attack_state.get("requires_mitre_kb"),
         "has_final_report": bool(attack_state.get("final_report")),
         "is_full_attribution_complete": bool(attack_state.get("is_full_attribution_complete")),
+        "analysis_elapsed_seconds": attack_state.get("analysis_elapsed_seconds"),
         "latest_reply": _extract_latest_ai_content(attack_state.get("messages")),
     }
     return json.dumps(summary, ensure_ascii=False)
@@ -193,8 +197,18 @@ def _invoke_specialist(
         state_summary = "{}"
 
     artifacts = None
+    analysis_elapsed_seconds = (
+        result.get("analysis_elapsed_seconds") if specialist_name == "attack_attribution" else None
+    )
     if specialist_name == "attack_attribution" and result.get("is_full_attribution_complete"):
-        reply = result.get("final_report") or "报告生成失败。"
+        final_report = result.get("final_report")
+        if not final_report:
+            raise RuntimeError("Completed attack attribution state is missing final_report")
+        if analysis_elapsed_seconds is None:
+            raise RuntimeError(
+                "Completed attack attribution state is missing analysis_elapsed_seconds"
+            )
+        reply = format_attribution_report_message(final_report, analysis_elapsed_seconds)
         artifacts = {
             "svg_chart": result.get("svg_chart"),
             "attack_abstract": result.get("attack_abstract"),
@@ -210,6 +224,7 @@ def _invoke_specialist(
             "plan_summary": plan_summary,
             "plan_steps": plan_steps,
             "reply": reply or f"{specialist_name} 未返回可展示内容。",
+            "analysis_elapsed_seconds": analysis_elapsed_seconds,
             "state_summary": json.loads(state_summary),
             "artifacts": artifacts,
             "executed_steps": session["executed_steps"],
@@ -510,7 +525,12 @@ Agent → IP 映射表
 
     return create_agent(
         model=router_model,
-        tools=[write_task_plan, delegate_rule_agent, delegate_attack_attribution, delegate_response_agent],
+        tools=[
+            write_task_plan,
+            delegate_rule_agent,
+            delegate_attack_attribution,
+            delegate_response_agent,
+        ],
         system_prompt=system_prompt,
         checkpointer=checkpointer,
     )

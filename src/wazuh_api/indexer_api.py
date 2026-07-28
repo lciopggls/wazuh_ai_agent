@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 
 import requests
 import urllib3
@@ -16,6 +17,14 @@ username = settings.WAZUH_INDEXER_USER
 password = settings.WAZUH_INDEXER_PASSWORD
 
 urllib3.disable_warnings()
+
+_INDEXER_QUERY_LOCK = threading.Lock()
+
+
+def _post_indexer(url: str, **kwargs):
+    """串行执行 Indexer POST 请求。"""
+    with _INDEXER_QUERY_LOCK:
+        return requests.post(url, **kwargs)
 
 
 def count_agent_alerts(agent_id, starttime="now-24h", endtime="now"):
@@ -34,36 +43,41 @@ def count_agent_alerts(agent_id, starttime="now-24h", endtime="now"):
         }
     }
 
-    response = requests.post(
-        url, auth=HTTPBasicAuth(username, password), json=payload, verify=False, timeout=10
+    response = _post_indexer(
+        url,
+        auth=HTTPBasicAuth(username, password),
+        json=payload,
+        verify=False,
+        timeout=10,
     )
 
     logger.info("Get the number of alerts successfully")
     return response.json()
 
 
-def agent_alerts(agent_id, x_limit=5, ruleId=-1, timeout=600):
+def agent_alerts(agent_id, x_limit=5, ruleId=-1, timeout=600, payload=None):
     logger.info("Getting alerts information")
 
     url = f"{protocol}://{host}:{port}/wazuh-alerts-*/_search"
     headers = {"Content-Type": "application/json"}
 
-    # 1. 初始化基础查询：必须匹配特定的 Agent ID
-    must_conditions = [{"term": {"agent.id": agent_id}}]
+    if payload is None:
+        # 1. 初始化基础查询：必须匹配特定的 Agent ID
+        must_conditions = [{"term": {"agent.id": agent_id}}]
 
-    # 2. 如果提供了 ruleId，则动态追加过滤条件
-    if ruleId != -1:
-        must_conditions.append({"term": {"rule.id": str(ruleId)}})
+        # 2. 如果提供了 ruleId，则动态追加过滤条件
+        if ruleId != -1:
+            must_conditions.append({"term": {"rule.id": str(ruleId)}})
 
-    # 3. 构建完整的 DSL Payload
-    payload = {
-        "size": x_limit,
-        "query": {"bool": {"must": must_conditions}},
-        "sort": [{"timestamp": {"order": "desc"}}],
-    }
+        # 3. 构建完整的 DSL Payload
+        payload = {
+            "size": x_limit,
+            "query": {"bool": {"must": must_conditions}},
+            "sort": [{"timestamp": {"order": "desc"}}],
+        }
 
     try:
-        response = requests.post(
+        response = _post_indexer(
             url,
             auth=HTTPBasicAuth(username, password),
             headers=headers,
@@ -147,7 +161,7 @@ def agent_archives(
         }
 
     try:
-        response = requests.post(
+        response = _post_indexer(
             url,
             auth=HTTPBasicAuth(username, password),
             headers=headers,
@@ -175,7 +189,7 @@ def search_archived_logs(query_body: dict):
     url = f"{protocol}://{host}:{port}/wazuh-archives-*/_search"
     headers = {"Content-Type": "application/json"}
 
-    response = requests.post(
+    response = _post_indexer(
         url,
         auth=HTTPBasicAuth(username, password),
         headers=headers,
