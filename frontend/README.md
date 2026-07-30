@@ -121,3 +121,8 @@ python -m src.service.memory
 ```bash
 pnpm install vue-markdown-render
 ```
+
+### 知识图谱展示需要依赖
+```bash
+pip install python-multipart
+```

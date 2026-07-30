@@ -47,9 +47,29 @@ def num_tokens_from_string(string: str, model_name: str) -> int:
     return len(encoding.encode(string))
 
 
+def _normalize_bilingual_headers(text: str, tactics: list) -> str:
+    """Normalize bilingual markdown headers from LLM output.
+    Handles formats like:
+      ### 4. 执行 (Execution)         →  ### Execution
+      #### 1. 侦察 (Reconnaissance)   →  #### Reconnaissance
+      **防御规避 (Defense Evasion)**   →  **Defense Evasion**
+      ### 其他 (Others)               →  ### Others
+    """
+    if not text:
+        return text
+    tactic_names = '|'.join(re.escape(t) for t in tactics + ['Others'])
+    # Match: line-start, `#`/`**` prefix, optional `Num. `, any text, then `(EnglishName)` at end
+    # Uses `.*` before the parenthesized English name to handle Chinese/any content
+    pattern = re.compile(
+        r'(^|\n)(#{1,6}\s+|\*\*)(?:\d+\.\s+)?.*?\((' + tactic_names + r')\)',
+        re.MULTILINE
+    )
+    return pattern.sub(r'\1\2\3', text)
+
+
 def _parse_rewrite_response(raw_text: str, mitre: dict) -> dict:
     """Parse LLM response into {tactic_name: summary_text} dict.
-    Layers: JSON → markdown-headers → plain-text headers → fallback."""
+    Layers: bilingual-normalization → JSON → markdown-headers → plain-text headers → fallback."""
 
     raw_text = raw_text.strip()
     if raw_text.startswith("```"):
@@ -58,14 +78,13 @@ def _parse_rewrite_response(raw_text: str, mitre: dict) -> dict:
 
     tactics = [t["name"] for t in mitre["tactics"]]
 
-    # Helper: split text by markdown headers (## / ** / ###)
+    # Normalize bilingual headers (DeepSeek often returns Chinese + English)
+    raw_text = _normalize_bilingual_headers(raw_text, tactics)
+
+    # Helper: split text by markdown headers (# to ######, ** bold)
     def _split_by_md_headers(text: str) -> dict:
         md_result = {}
-        md_pattern = (
-            r"(?:\*\*|#{1,3}\s?)("
-            + "|".join(re.escape(t) for t in tactics)
-            + r"|Others)(?:\*\*)?\s*\n?"
-        )
+        md_pattern = r'(?:\*\*|#{1,6}\s?)(' + '|'.join(re.escape(t) for t in tactics) + r'|Others)(?:\*\*)?\s*\n?'
         md_parts = re.split(md_pattern, text)
         if len(md_parts) > 1:
             for i in range(1, len(md_parts), 2):
@@ -136,11 +155,38 @@ def request_rewriting(
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
+                tools=tools,
+                tool_choice="auto",
                 temperature=temperature,
                 max_tokens=16000,
             )
-            raw_content = response.choices[0].message.content
-            result = _parse_rewrite_response(raw_content, mitre)
+            if response.choices[0].message.tool_calls:
+                # Structured response via function calling
+                arguments = response.choices[0].message.tool_calls[0].function.arguments
+                result = json.loads(arguments)
+                # Map underscore keys back to tactic names (DeepSeek workaround)
+                key_map = {
+                    'Resource_Development': 'Resource Development',
+                    'Initial_Access': 'Initial Access',
+                    'Privilege_Escalation': 'Privilege Escalation',
+                    'Defense_Evasion': 'Defense Evasion',
+                    'Credential_Access': 'Credential Access',
+                    'Lateral_Movement': 'Lateral Movement',
+                    'Command_and_Control': 'Command and Control',
+                }
+                mapped = {}
+                for k, v in result.items():
+                    mapped[key_map.get(k, k)] = v
+                result = mapped
+                # Remove None-valued entries (tactics not present in the report)
+                result = {k: v for k, v in result.items() if v not in (None, 'None', '')}
+                # Ensure at least 'Others' exists as fallback
+                if not result:
+                    result = {'Others': 'No specific tactic content identified.'}
+            else:
+                # Fall back to text parsing
+                raw_content = response.choices[0].message.content
+                result = _parse_rewrite_response(raw_content, mitre)
 
             usage_dir = usage_save_dir
             os.makedirs(usage_dir, exist_ok=True)

@@ -31,6 +31,47 @@ const userInput = ref("");
 const isTyping = ref(false);
 const scrollRef = ref<HTMLElement | null>(null);
 
+// --- 报告下载状态追踪（按消息索引） ---
+const downloadStates = ref<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({});
+
+/** 判断气泡内容是否为攻击溯源报告 */
+function isReportContent(msg: any): boolean {
+  if (msg.role !== 'assistant' || msg.node !== 'reply') return false;
+  const content = getMessageContent(msg);
+  return content.includes('攻击溯源调查');
+}
+
+/** 下载报告：调用后端 API 保存到指定目录 */
+async function downloadReport(msg: any, index: number) {
+  const content = getMessageContent(msg);
+  if (!content) return;
+
+  downloadStates.value[index] = 'saving';
+  try {
+    const response = await fetch('http://127.0.0.1:8001/api/report/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+    const result = await response.json();
+    if (result.status === 'ok') {
+      downloadStates.value[index] = 'saved';
+      setTimeout(() => {
+        if (downloadStates.value[index] === 'saved') {
+          downloadStates.value[index] = 'idle';
+        }
+      }, 3000);
+    } else {
+      downloadStates.value[index] = 'error';
+      setTimeout(() => { downloadStates.value[index] = 'idle'; }, 3000);
+    }
+  } catch (err: any) {
+    console.error('保存报告失败:', err);
+    downloadStates.value[index] = 'error';
+    setTimeout(() => { downloadStates.value[index] = 'idle'; }, 3000);
+  }
+}
+
 // --- 5. JSON 日志抽屉状态 ---
 const drawerVisible = ref(false);
 const drawerContent = ref("");
@@ -284,6 +325,12 @@ const handleSend = async () => {
   await nextTick();
   scrollToBottom();
 
+  // ⚡ 本地会话累加器：脏数据路径中多个段共享同一份 session 状态
+  //    避免 processDataObject 每次从 stale 的 props.sessions 拷贝
+  let streamSessionData: any[] = [...(props.sessions[sessionKey] || [])];
+  // ⚡ SSE 行缓冲：处理 TCP 分片跨越 data: 行边界的情况
+  let lineBuffer = '';
+
   try {
     const response = await fetch('http://127.0.0.1:8001/api/chat/stream', {
       method: 'POST',
@@ -332,24 +379,21 @@ const handleSend = async () => {
 
       if (!incomingContent) return;
 
-      const currentSessions = { ...props.sessions };
-      const sessionData = currentSessions[sessionKey]
-        ? [...currentSessions[sessionKey]]
-        : [];
-
+      // ⚡ 使用 streamSessionData 本地累加器替代每次都从 props.sessions 拷贝
+      //    确保同一 chunk 内多个 data 行操作始终基于最新的流状态
       if (nodeName !== lastNodeName || currentAiMsgIndex === -1) {
-        // ── 新步骤 ──
+        // ── 新步骤（切换 Node 类型或首次进入 → 新建气泡） ──
         lastNodeName = nodeName;
-        sessionData.push({
+        streamSessionData.push({
           role: 'assistant',
           content: incomingContent,
           node: nodeName,
           isNewStep: true,
         });
-        currentAiMsgIndex = sessionData.length - 1;
+        currentAiMsgIndex = streamSessionData.length - 1;
 
         if (isJsonNode && extractedReply) {
-          sessionData.push({
+          streamSessionData.push({
             role: 'assistant',
             content: extractedReply,
             node: 'reply',
@@ -357,20 +401,19 @@ const handleSend = async () => {
           });
         }
       } else {
-        // ── 追加到当前步骤 ──
-        if (currentAiMsgIndex !== -1 && sessionData[currentAiMsgIndex]) {
-          const targetMsg = { ...sessionData[currentAiMsgIndex] };
+        // ── 追加到当前步骤（同一 Node 类型 → 流式累加） ──
+        if (currentAiMsgIndex !== -1 && streamSessionData[currentAiMsgIndex]) {
+          const targetMsg = { ...streamSessionData[currentAiMsgIndex] };
 
           if (isJsonNode) {
-            // 工具节点 → 替换为最终格式化后的 JSON
             targetMsg.content = incomingContent;
-            sessionData[currentAiMsgIndex] = targetMsg;
+            streamSessionData[currentAiMsgIndex] = targetMsg;
 
             const nextIdx = currentAiMsgIndex + 1;
-            if (extractedReply && sessionData[nextIdx]?.node === 'reply') {
-              sessionData[nextIdx].content = extractedReply;
+            if (extractedReply && streamSessionData[nextIdx]?.node === 'reply') {
+              streamSessionData[nextIdx].content = extractedReply;
             } else if (extractedReply) {
-              sessionData.splice(nextIdx, 0, {
+              streamSessionData.splice(nextIdx, 0, {
                 role: 'assistant',
                 content: extractedReply,
                 node: 'reply',
@@ -378,68 +421,78 @@ const handleSend = async () => {
               });
             }
           } else {
-            // 文本节点 → 流式累加
             targetMsg.content += incomingContent;
-            sessionData[currentAiMsgIndex] = targetMsg;
+            streamSessionData[currentAiMsgIndex] = targetMsg;
           }
         }
       }
 
-      currentSessions[sessionKey] = sessionData;
-      emit('update:sessions', currentSessions);
+      // 用本地累加器构建最新状态发射出去
+      emit('update:sessions', { ...props.sessions, [sessionKey]: streamSessionData });
+    };
+
+    // ⚡ 辅助函数：对单条 data 字符串尝试 JSON.parse → 失败则走脏数据容错路径
+    const processDataStr = (dataStr: string) => {
+      try {
+        const data = JSON.parse(dataStr);
+        processDataObject(data);
+        return; // 干净数据 → 直接返回
+      } catch {
+        // 脏数据：走下面的容错路径
+      }
+      // 脏数据路径：text + JSON 混合 → 分段提取
+      const segments = findJsonSegmentsInText(dataStr);
+      for (const seg of segments) {
+        if (seg.type === 'json') {
+          try {
+            const data = JSON.parse(seg.content);
+            processDataObject(data);
+          } catch {
+            if (seg.content.trim()) {
+              processDataObject({ node: 'model', content: seg.content });
+            }
+          }
+        } else if (seg.content.trim()) {
+          processDataObject({ node: 'model', content: seg.content });
+        }
+      }
     };
 
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
+      const chunk = decoder.decode(value, { stream: true });
+      const allText = lineBuffer + chunk;
+      const lines = allText.split('\n');
+
+      // ⚡ SSE 行缓冲：处理 TCP 分片跨越 data: 行边界
+      //   - 以 \n 结尾 → 最后一项是空串，弹出；buffer 清空
+      //   - 不以 \n 结尾 → 最后一项不完整，放入 buffer 等下一块
+      if (allText.endsWith('\n')) {
+        lines.pop();
+        lineBuffer = '';
+      } else {
+        lineBuffer = lines.pop() || '';
+      }
 
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
-
         const dataStr = line.replace('data: ', '').trim();
         if (dataStr === '[DONE]') break;
+        processDataStr(dataStr);
+        await nextTick();
+        scrollToBottom();
+      }
+    }
 
-        // ─── 1) 标准 JSON 解析（数据干净时的快速路径） ───
-        {
-          let cleanParsed = false;
-          try {
-            const data = JSON.parse(dataStr);
-            processDataObject(data);
-            cleanParsed = true;
-          } catch {
-            // 脏数据：继续走容错路径
-          }
-          if (cleanParsed) {
-            await nextTick();
-            scrollToBottom();
-            continue;
-          }
-        }
-
-        // ─── 2) 脏数据容错：text + JSON 混合 → 分段提取 ───
-        // 复用已有的 findJsonSegmentsInText 扫描混合文本中的 JSON 子串
-        const segments = findJsonSegmentsInText(dataStr);
-        for (const seg of segments) {
-          if (seg.type === 'json') {
-            try {
-              const data = JSON.parse(seg.content);
-              processDataObject(data);
-            } catch {
-              // 极低概率兜底（findJsonSegmentsInText 已验证过可解析）
-              if (seg.content.trim()) {
-                processDataObject({ node: 'model', content: seg.content });
-              }
-            }
-          } else if (seg.content.trim()) {
-            // 纯文本片段（例如 "好的，用户已确认线索…"）→ 作为 model 输出
-            processDataObject({ node: 'model', content: seg.content });
-          }
-          await nextTick();
-          scrollToBottom();
-        }
+    // ⚡ 流结束后，处理 buffer 中残留的不完整 data 行
+    if (lineBuffer.startsWith('data: ')) {
+      const dataStr = lineBuffer.replace('data: ', '').trim();
+      if (dataStr && dataStr !== '[DONE]') {
+        processDataStr(dataStr);
+        await nextTick();
+        scrollToBottom();
       }
     }
   } catch (error: any) {
@@ -505,7 +558,32 @@ const scrollToBottom = async () => {
         <div class="content_box">
           <div v-if="msg.role === 'assistant' && msg.node" class="node_tag">
             <template v-if="msg.node === 'tools'">⚙️ 工具输出 (原始数据)</template>
-            <template v-else-if="msg.node === 'reply'">📋 提取结论</template>
+            <template v-else-if="msg.node === 'reply'">
+              📋 提取结论
+              <!-- 攻击溯源报告下载按钮 -->
+              <button
+                v-if="isReportContent(msg)"
+                class="report_download_btn"
+                :class="{
+                  'report_download_btn--saving': downloadStates[index] === 'saving',
+                  'report_download_btn--saved': downloadStates[index] === 'saved',
+                  'report_download_btn--error': downloadStates[index] === 'error',
+                }"
+                :disabled="downloadStates[index] === 'saving'"
+                @click.stop="downloadReport(msg, index)"
+                :title="
+                  downloadStates[index] === 'saving' ? '保存中...' :
+                  downloadStates[index] === 'saved' ? '已保存 ✓' :
+                  downloadStates[index] === 'error' ? '保存失败' :
+                  '保存报告到本地'
+                "
+              >
+                <template v-if="downloadStates[index] === 'saving'">⏳</template>
+                <template v-else-if="downloadStates[index] === 'saved'">✅</template>
+                <template v-else-if="downloadStates[index] === 'error'">❌</template>
+                <template v-else>💾 下载报告</template>
+              </button>
+            </template>
             <template v-else-if="msg.node === 'model'">🤖 AI 文本回复</template>
             <template v-else>⚡ 步骤: {{ msg.node }}</template>
           </div>
@@ -916,5 +994,53 @@ const scrollToBottom = async () => {
 @keyframes overlayFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+// ── 报告下载按钮 ──
+.report_download_btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #1d4ed8;
+  background: rgba(29, 78, 216, 0.08);
+  border: 1px solid rgba(29, 78, 216, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  vertical-align: middle;
+  line-height: 1.4;
+
+  &:hover:not(:disabled) {
+    background: rgba(29, 78, 216, 0.15);
+    border-color: #1d4ed8;
+    box-shadow: 0 0 8px rgba(29, 78, 216, 0.15);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  &--saving {
+    color: #f59e0b;
+    border-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.08);
+  }
+
+  &--saved {
+    color: #10b981;
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.08);
+  }
+
+  &--error {
+    color: #ef4444;
+    border-color: #ef4444;
+    background: rgba(239, 68, 68, 0.08);
+  }
 }
 </style>
