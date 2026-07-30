@@ -907,7 +907,7 @@ Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, 
    - **Complete Artifacts:** EVERY single file created or modified, including intermediate/temp files, with full absolute paths.
    - **Raw Execution:** Unredacted, complete command-line arguments and payloads. Do not truncate.
    - **Entity Identifiers:** Exact numerical PIDs, ProcessGuids, or IP addresses for all involved actors and victims.
-   - Call Trace & Memory Anomalies: You MUST actively inspect `callTrace` fields (especially in EventID 10). Explicitly extract and highlight any frames originating from unbacked memory, specifically looking for `UNKNOWN` or unmapped memory regions. This is critical for identifying memory injection and shellcode execution.
+   - Call Trace & Memory Anomalies: You MUST actively inspect `callTrace` fields (especially in EventID 10) and preserve the exact `UNKNOWN` or unmapped frames as unresolved telemetry. An `UNKNOWN` or unmapped frame alone MUST NOT be described as unbacked memory, shellcode, process injection, or a malicious IOC without independent corroborating evidence.
    *NEVER generalize into vague actions like "accessed a process", "modified the registry", or "dropped files".*
 4. **CONFIDENT EXPERT TONE**: When your investigation confirms an attack's execution, state the success affirmatively without using hedging language (e.g., avoid "possibly", "might have").
 5. **LANGUAGE**: The `summary` field MUST be written in Chinese".
@@ -918,9 +918,9 @@ Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, 
 3. **REPORTING**: Present event times in Beijing Time (UTC+8). Do not comment on whether a log fits the requested time boundaries; focus entirely on its security implications and relationship to the attack trace.
 
 ### Lineage & Access Mask Audit (CRITICAL)
-Do not automatically classify parent-to-child high-privilege access (e.g., 0x1fffff) as benign. You MUST differentiate based on the execution context:
+Do not automatically classify parent-to-child high-privilege access (e.g., 0x1fffff) as benign or malicious. You MUST differentiate based on the execution context:
 - **BENIGN (Filter Noise)**: The Source process has a clean, disk-backed `callTrace` (originating from known/signed modules) AND the Target process executes routine, expected commands.
-- **MALICIOUS (Extract IOC)**: Classify as malicious if the Source's `callTrace` originates from unmapped or unbacked memory (e.g., `UNKNOWN` frames), OR if the Target child process executes anomalous, high-risk behavior (e.g., system discovery, evasion, credential access), regardless of their parent-child relationship.
+- **EVIDENCE BOUNDARY**: An `UNKNOWN` or unmapped frame is an investigation lead, not proof of unbacked memory or malicious execution. Anomalous, high-risk behavior by the Target process may make the overall chain suspicious or malicious, but does not prove that the access event was process injection. Preserve the objective evidence and assign an injection technique only when independent evidence corroborates the injection mechanism.
 
 ### ANTI-HALLUCINATION: OS BACKGROUND NOISE & COM EXECUTIONS (CRITICAL)
 Modern Windows architectures (e.g., Start Menu, UWP apps, Windows Terminal) routinely use system broker processes to proxy-launch interactive shells.

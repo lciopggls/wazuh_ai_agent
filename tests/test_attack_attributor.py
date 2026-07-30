@@ -6,6 +6,7 @@ import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from pydantic import Field
 
 from agents.attack_attribution import nodes as attribution_nodes
 from agents.attack_attribution.utils import format_attribution_report_message
@@ -14,8 +15,10 @@ from agents.attack_attribution.utils import format_attribution_report_message
 class StaticReportModel(BaseChatModel):
     response: str = "纯报告内容"
     failure: str | None = None
+    captured_messages: list = Field(default_factory=list, exclude=True)
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.captured_messages.append(messages)
         if self.failure:
             raise RuntimeError(self.failure)
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=self.response))])
@@ -197,3 +200,35 @@ def test_reporter_requires_analysis_timer():
             {},
             StaticReportModel(),
         )
+
+
+def test_synthesizer_does_not_treat_unknown_calltrace_as_injection():
+    model = StaticReportModel(
+        response=json.dumps(
+            {
+                "task_description": "Inspect process access.",
+                "detailed_findings": "Observed one process-access event.",
+                "graph_entities": [],
+                "graph_relations": [],
+            }
+        )
+    )
+
+    attribution_nodes.information_synthesizer_node(
+        {
+            "current_raw_logs": [{"callTrace": "UNKNOWN(0000000000000000)"}],
+            "next_action_fromAttributionPlannerNode": {"instruction": "Inspect process access."},
+            "mitre_knowledge_base": {},
+        },
+        {},
+        model,
+    )
+
+    system_prompt = model.captured_messages[0][0].content
+    assert (
+        "An `UNKNOWN` or unmapped frame alone MUST NOT be described as unbacked "
+        "memory, shellcode, process injection, or a malicious IOC"
+    ) in system_prompt
+    assert "does not prove that the access event was process injection" in system_prompt
+    assert "This is critical for identifying memory injection and shellcode" not in system_prompt
+    assert "Classify as malicious if the Source's `callTrace`" not in system_prompt
