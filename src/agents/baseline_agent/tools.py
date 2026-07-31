@@ -3,8 +3,8 @@ from typing import Any
 
 from wazuh_api.indexer_api import agent_alerts, agent_archives
 
-DEFAULT_BATCH_SIZE = 10
-MAX_BATCH_SIZE = 10
+DEFAULT_BATCH_SIZE = 5
+MAX_BATCH_SIZE = 5
 MAX_ALERTS = 10
 MIN_ALERT_LEVEL = 9
 

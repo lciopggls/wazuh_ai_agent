@@ -10,6 +10,25 @@ _AGENT_ID_PATTERN = re.compile(r'"id"\s*:\s*"(?P<value>[^"]+)"')
 _TIMESTAMP_PATTERN = re.compile(r'"timestamp"\s*:\s*"(?P<value>[^"\r\n]+)"')
 
 
+def remove_rule_mitre_fields(value: Any) -> Any:
+    """Return a copy of nested log data with direct ``rule.mitre`` fields removed."""
+    if isinstance(value, dict):
+        sanitized: dict[Any, Any] = {}
+        for key, item in value.items():
+            if key == "rule" and isinstance(item, dict):
+                sanitized[key] = {
+                    rule_key: remove_rule_mitre_fields(rule_value)
+                    for rule_key, rule_value in item.items()
+                    if rule_key != "mitre"
+                }
+            else:
+                sanitized[key] = remove_rule_mitre_fields(item)
+        return sanitized
+    if isinstance(value, list):
+        return [remove_rule_mitre_fields(item) for item in value]
+    return value
+
+
 def _collect_source_agent_ids(obj: Any, agent_ids: list[str]) -> None:
     """递归收集原始 Elasticsearch 日志中的 ``_source.agent.id``。"""
     if isinstance(obj, dict):

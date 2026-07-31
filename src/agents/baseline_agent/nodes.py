@@ -20,10 +20,11 @@ from agents.baseline_agent.tools import (
 from agents.baseline_agent.utils import (
     extract_agent_ids_from_logs,
     extract_beijing_time_from_logs,
+    remove_rule_mitre_fields,
 )
 
-BATCH_SIZE = 10
-MAX_BATCHES = 20
+BATCH_SIZE = 5
+MAX_BATCHES = 10
 MAX_LOGS = BATCH_SIZE * MAX_BATCHES
 BATCH_NOTE_MAX_TOKENS = 1000
 ALERT_NOTE_MAX_TOKENS = 1000
@@ -148,7 +149,7 @@ def fetch_batch_node(state: BaselineState) -> dict[str, Any]:
             "archive_error": f"归档日志查询失败：{exc}",
         }
 
-    logs = page["logs"]
+    logs = remove_rule_mitre_fields(page["logs"])
 
     if not logs and state.get("processed_logs", 0) < state.get("total_logs", 0):
         return {
@@ -235,7 +236,7 @@ def fetch_alerts_node(state: BaselineState) -> dict[str, Any]:
         }
 
     return {
-        "alert_logs": alerts,
+        "alert_logs": remove_rule_mitre_fields(alerts),
         "alert_summary": "",
         "selected_alert_count": len(alerts),
         "alert_error": None,
