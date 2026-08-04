@@ -4,20 +4,22 @@ from typing import Any
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-from agents.baseline_agent.prompt import (
+from agents.baseline.archive_tools import (
+    count_raw_archives_by_time,
+    get_raw_archives_by_time,
+)
+from agents.baseline.baseline_agent_plus.alert_tools import (
+    MAX_ALERTS,
+    MIN_ALERT_LEVEL,
+    get_high_level_alerts_near_time,
+)
+from agents.baseline.baseline_agent_plus.prompt import (
     ALERT_ANALYSIS_PROMPT,
     BATCH_ANALYSIS_PROMPT,
     FINAL_REPORT_PROMPT,
 )
-from agents.baseline_agent.state import BaselineState
-from agents.baseline_agent.tools import (
-    MAX_ALERTS,
-    MIN_ALERT_LEVEL,
-    count_raw_archives_by_time,
-    get_high_level_alerts_near_time,
-    get_raw_archives_by_time,
-)
-from agents.baseline_agent.utils import (
+from agents.baseline.baseline_agent_plus.state import BaselinePlusState
+from agents.baseline.utils import (
     extract_agent_ids_from_logs,
     extract_beijing_time_from_logs,
     remove_rule_mitre_fields,
@@ -55,27 +57,20 @@ def _invoke_model(
     return _message_text(response)
 
 
-def prepare_investigation_node(state: BaselineState) -> dict[str, Any]:
-    # 暂停记录完整分析时间；当前不使用基线智能体作为时间比对对象。
-    # analysis_started_at = time.perf_counter()
+def prepare_investigation_node(state: BaselinePlusState) -> dict[str, Any]:
     initial_input = _first_human_text(state.get("messages", []))
     time_info = extract_beijing_time_from_logs(initial_input)
     agent_ids = extract_agent_ids_from_logs(initial_input)
 
     if not initial_input:
-        return {
-            # "analysis_started_at": analysis_started_at,
-            "error": "未找到用户提供的初始日志。",
-        }
+        return {"error": "未找到用户提供的初始日志。"}
     if not time_info:
         return {
-            # "analysis_started_at": analysis_started_at,
             "initial_input": initial_input,
             "error": "未能从初始日志的 _source.timestamp 提取带时区的有效时间。",
         }
     if len(agent_ids) != 1:
         return {
-            # "analysis_started_at": analysis_started_at,
             "initial_input": initial_input,
             "error": "必须从初始日志中提取到唯一的 Agent ID。",
         }
@@ -93,7 +88,6 @@ def prepare_investigation_node(state: BaselineState) -> dict[str, Any]:
         archive_error = f"归档日志统计失败：{exc}"
 
     return {
-        # "analysis_started_at": analysis_started_at,
         "initial_input": initial_input,
         "agent_id": agent_id,
         "anchor_time": time_info["beijing_anchor"],
@@ -118,23 +112,17 @@ def prepare_investigation_node(state: BaselineState) -> dict[str, Any]:
     }
 
 
-def _append_run_statistics(report: str, state: BaselineState) -> str:
-    # 暂停输出完整分析时间；保留日志数量统计。
-    # started_at = state.get("analysis_started_at")
-    # elapsed_seconds = (
-    #     max(0.0, time.perf_counter() - started_at) if started_at is not None else 0.0
-    # )
+def _append_run_statistics(report: str, state: BaselinePlusState) -> str:
     statistics = (
         "---\n\n"
         "运行统计\n\n"
-        # f"- 完整分析时间：{elapsed_seconds:.2f} 秒\n"
         f"- 查询到的日志总数：{state.get('total_logs', 0)} 条\n"
         f"- 实际调查的日志总数：{state.get('processed_logs', 0)} 条"
     )
     return f"{report.rstrip()}\n\n{statistics}"
 
 
-def fetch_batch_node(state: BaselineState) -> dict[str, Any]:
+def fetch_batch_node(state: BaselinePlusState) -> dict[str, Any]:
     try:
         page = get_raw_archives_by_time(
             agent_id=state["agent_id"],
@@ -165,7 +153,7 @@ def fetch_batch_node(state: BaselineState) -> dict[str, Any]:
 
 
 def analyze_batch_node(
-    state: BaselineState,
+    state: BaselinePlusState,
     *,
     model: BaseChatModel,
 ) -> dict[str, Any]:
@@ -211,7 +199,7 @@ def analyze_batch_node(
     }
 
 
-def fetch_alerts_node(state: BaselineState) -> dict[str, Any]:
+def fetch_alerts_node(state: BaselinePlusState) -> dict[str, Any]:
     try:
         alerts = get_high_level_alerts_near_time(
             agent_id=state["agent_id"],
@@ -244,7 +232,7 @@ def fetch_alerts_node(state: BaselineState) -> dict[str, Any]:
 
 
 def analyze_alerts_node(
-    state: BaselineState,
+    state: BaselinePlusState,
     *,
     model: BaseChatModel,
 ) -> dict[str, Any]:
@@ -288,7 +276,7 @@ def analyze_alerts_node(
 
 
 def final_report_node(
-    state: BaselineState,
+    state: BaselinePlusState,
     *,
     model: BaseChatModel,
 ) -> dict[str, Any]:
