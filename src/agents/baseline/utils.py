@@ -29,6 +29,27 @@ def remove_rule_mitre_fields(value: Any) -> Any:
     return value
 
 
+def _remove_archive_label_fields(value: Any, *, in_eventdata: bool = False) -> Any:
+    if isinstance(value, dict):
+        sanitized: dict[Any, Any] = {}
+        for key, item in value.items():
+            if key == "full_log" or (in_eventdata and key == "ruleName"):
+                continue
+            sanitized[key] = _remove_archive_label_fields(
+                item,
+                in_eventdata=key == "eventdata",
+            )
+        return sanitized
+    if isinstance(value, list):
+        return [_remove_archive_label_fields(item) for item in value]
+    return value
+
+
+def sanitize_archive_logs(value: Any) -> Any:
+    """Return archive logs without direct MITRE and duplicated label fields."""
+    return _remove_archive_label_fields(remove_rule_mitre_fields(value))
+
+
 def _collect_source_agent_ids(obj: Any, agent_ids: list[str]) -> None:
     """递归收集原始 Elasticsearch 日志中的 ``_source.agent.id``。"""
     if isinstance(obj, dict):

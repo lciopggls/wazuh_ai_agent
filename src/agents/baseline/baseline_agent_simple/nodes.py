@@ -16,7 +16,7 @@ from agents.baseline.baseline_agent_simple.state import BaselineSimpleState
 from agents.baseline.utils import (
     extract_agent_ids_from_logs,
     extract_beijing_time_from_logs,
-    remove_rule_mitre_fields,
+    sanitize_archive_logs,
 )
 
 BATCH_SIZE = 5
@@ -123,7 +123,7 @@ def fetch_batch_node(state: BaselineSimpleState) -> dict[str, Any]:
             "archive_error": f"归档日志查询失败：{exc}",
         }
 
-    logs = remove_rule_mitre_fields(page["logs"])
+    logs = sanitize_archive_logs(page["logs"])
 
     if not logs and state.get("processed_logs", 0) < state.get("total_logs", 0):
         return {

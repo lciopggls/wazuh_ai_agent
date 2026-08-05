@@ -39,7 +39,7 @@ def route_after_alert_fetch(state: BaselinePlusState) -> str:
 
 
 def get_baseline_agent_plus(model: BaseChatModel, checkpointer=None):
-    """创建带附近高等级告警补充的固定窗口攻击溯源基线。"""
+    """创建带附近告警补充的固定窗口攻击溯源基线。"""
     graph = StateGraph(BaselinePlusState)
     graph.add_node("prepare_investigation", nodes.prepare_investigation_node)
     graph.add_node("fetch_batch", nodes.fetch_batch_node)

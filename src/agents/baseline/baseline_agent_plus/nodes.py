@@ -10,8 +10,7 @@ from agents.baseline.archive_tools import (
 )
 from agents.baseline.baseline_agent_plus.alert_tools import (
     MAX_ALERTS,
-    MIN_ALERT_LEVEL,
-    get_high_level_alerts_near_time,
+    get_nearby_alerts,
 )
 from agents.baseline.baseline_agent_plus.prompt import (
     ALERT_ANALYSIS_PROMPT,
@@ -22,7 +21,6 @@ from agents.baseline.baseline_agent_plus.state import BaselinePlusState
 from agents.baseline.utils import (
     extract_agent_ids_from_logs,
     extract_beijing_time_from_logs,
-    remove_rule_mitre_fields,
 )
 
 BATCH_SIZE = 5
@@ -31,7 +29,7 @@ MAX_LOGS = BATCH_SIZE * MAX_BATCHES
 BATCH_NOTE_MAX_TOKENS = 1000
 ALERT_NOTE_MAX_TOKENS = 1000
 FINAL_REPORT_MAX_TOKENS = 12000
-NO_ALERTS_SUMMARY = "未查询到符合条件的附近高等级告警。"
+NO_ALERTS_SUMMARY = "未查询到符合条件的附近告警。"
 
 
 def _first_human_text(messages: list[BaseMessage]) -> str:
@@ -137,7 +135,7 @@ def fetch_batch_node(state: BaselinePlusState) -> dict[str, Any]:
             "archive_error": f"归档日志查询失败：{exc}",
         }
 
-    logs = remove_rule_mitre_fields(page["logs"])
+    logs = page["logs"]
 
     if not logs and state.get("processed_logs", 0) < state.get("total_logs", 0):
         return {
@@ -201,7 +199,7 @@ def analyze_batch_node(
 
 def fetch_alerts_node(state: BaselinePlusState) -> dict[str, Any]:
     try:
-        alerts = get_high_level_alerts_near_time(
+        alerts, supplement_error = get_nearby_alerts(
             agent_id=state["agent_id"],
             anchor_time=state["anchor_time"],
             start_time=state["alert_start_time"],
@@ -210,9 +208,9 @@ def fetch_alerts_node(state: BaselinePlusState) -> dict[str, Any]:
     except Exception as exc:
         return {
             "alert_logs": [],
-            "alert_summary": f"附近高等级告警查询失败：{exc}",
+            "alert_summary": f"附近告警查询失败：{exc}",
             "selected_alert_count": 0,
-            "alert_error": f"附近高等级告警查询失败：{exc}",
+            "alert_error": f"附近告警查询失败：{exc}",
         }
 
     if not alerts:
@@ -220,14 +218,14 @@ def fetch_alerts_node(state: BaselinePlusState) -> dict[str, Any]:
             "alert_logs": [],
             "alert_summary": NO_ALERTS_SUMMARY,
             "selected_alert_count": 0,
-            "alert_error": None,
+            "alert_error": supplement_error,
         }
 
     return {
-        "alert_logs": remove_rule_mitre_fields(alerts),
+        "alert_logs": alerts,
         "alert_summary": "",
         "selected_alert_count": len(alerts),
-        "alert_error": None,
+        "alert_error": supplement_error,
     }
 
 
@@ -242,7 +240,6 @@ def analyze_alerts_node(
             "end": state["alert_end_time"],
         },
         "selection": {
-            "minimum_rule_level": MIN_ALERT_LEVEL,
             "maximum_alerts": MAX_ALERTS,
         },
         "alerts": state["alert_logs"],
@@ -255,7 +252,7 @@ def analyze_alerts_node(
                 HumanMessage(
                     content=(
                         f"初始日志（最重要的调查锚点）：\n{state['initial_input']}\n\n"
-                        "附近高等级告警：\n"
+                        "附近 Wazuh 告警：\n"
                         f"{json.dumps(alert_context, ensure_ascii=False)}"
                     )
                 ),
@@ -265,8 +262,8 @@ def analyze_alerts_node(
     except Exception as exc:
         return {
             "alert_logs": [],
-            "alert_summary": f"附近高等级告警摘要失败：{exc}",
-            "alert_error": f"附近高等级告警摘要失败：{exc}",
+            "alert_summary": f"附近告警摘要失败：{exc}",
+            "alert_error": f"附近告警摘要失败：{exc}",
         }
 
     return {
@@ -322,7 +319,7 @@ def final_report_node(
                         f"第一部分——初始日志（绝对核心）：\n{state['initial_input']}\n\n"
                         "第二部分——归档日志调查信息与批次摘要：\n"
                         f"{json.dumps(archive_context, ensure_ascii=False)}\n\n"
-                        "第三部分——附近高等级告警摘要：\n"
+                        "第三部分——附近告警摘要：\n"
                         f"{json.dumps(alert_context, ensure_ascii=False)}"
                     )
                 ),
