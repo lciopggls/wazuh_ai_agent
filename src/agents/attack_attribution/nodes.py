@@ -19,6 +19,7 @@ from .prompt import attribution_investigation_prompt_long
 from .schemas import (
     AttackAbstractModel,
     InitialClueAnalysis,
+    InvestigationFindings,
     QueryIntent,
     SynthesizedFindings,
 )
@@ -53,12 +54,77 @@ MITRE_KB_FILE_PATH = (
     / "mitre_knowledgebase.md"
 )
 
+GRAPH_EXTRACTION_INSTRUCTIONS = """### GRAPH ENTITY & RELATION EXTRACTION (CRITICAL)
+
+In addition to the narrative findings, you MUST populate `graph_entities` and `graph_relations` with structured data for the attack graph.
+
+**Entity ID Convention (STRICT):**
+- Process: `proc_<pid>` (e.g., `proc_5324`)
+- File: `file_<N>` where N is sequential starting from 1 (e.g., `file_1`, `file_2`)
+- IP: `ip_<address>` (e.g., `ip_192.168.1.100`)
+- Registry: `reg_<N>` where N is sequential starting from 1 (e.g., `reg_1`)
+- User account: `user_<name>` (e.g., `user_Administrator`)
+- Other: `other_<N>` where N is sequential starting from 1
+
+**Properties per entity type:**
+- process: {"pid": <int>, "image": "<exe path>", "command_line": "<cmdline or null>"}
+- file: {"path": "<full file path>"}
+- ip: {"address": "<ip>", "port": <int or null>}
+- registry: {"key_path": "<registry key>", "value_name": "<value or null>"}
+- user_account: {"username": "<name>", "domain": "<domain or null>"}
+- other: {} (empty dict)
+
+**Relation types (STRICT — choose exactly one):**
+- `create` — spawned child process OR created/wrote a file (creating new entities)
+- `modify` — modified a file OR modified a registry key (tampering with existing state)
+- `execute` — loaded a DLL OR injected into another process (in-memory payload operations, process→process only)
+- `instantiate` — static file was instantiated by the system loader into a running process (file→process only)
+- `communicate` — connected to network address OR DNS resolved to IP (network channel establishment)
+- `authenticate` — process ran under a user account (credential use / privilege verification)
+- `access` — process read/loaded/accessed a file as input data (e.g., encode/decode source, config file, data dump)
+
+**Entity type constraints per relation (CRITICAL — DO NOT violate):**
+Use the source entity's `type` and the target entity's `type` to choose the correct relation.
+| Source type | Relation | Target type | Description |
+|-------------|----------|-------------|-------------|
+| process | create | process | spawned a child process |
+| process | create | file | created/wrote a file |
+| process | modify | file | modified a file |
+| process | modify | registry | modified a registry key |
+| process | execute | process | injected into / loaded DLL into another process |
+| file | instantiate | process | file was instantiated by the system loader into a running process |
+| process | communicate | ip | connected to remote address |
+| ip | communicate | ip | DNS resolved to IP |
+| process | authenticate | user_account | ran under a user account |
+| process | access | file | read/loaded/accessed a file as input data |
+
+If the (source_type, target_type) pair does NOT match any row in the above table, DO NOT create a relation between those two entities. For example, process → file with `communicate` is INVALID — use `create` or `modify` instead.
+
+**Rules:**
+1. Every entity mentioned in `detailed_findings` MUST appear in `graph_entities`, UNLESS it is obvious system noise (see rule 6).
+2. Every observable behavior between entities (process→file, process→IP, process→process, etc.) MUST appear in `graph_relations`.
+3. Use the EXACT timestamps from the raw logs. Do not hallucinate timestamps.
+4. If no timestamp is available for an entity or relation, set it to `null`.
+5. Each entity's `name` should be a human-readable label like `powershell.exe (PID: 5324)` or `cmd.exe (PID: 5508)`. For file entities, use only the filename (e.g., `payload.exe`), full path goes in `properties.path`. For IP entities, use only the address (e.g., `192.168.1.100`), port goes in `properties.port`.
+6. **Noise filter (CRITICAL):** Do NOT include entities or relations that are clearly system background noise (e.g., `svchost.exe` routine activity, `RuntimeBroker.exe` launching normal windows, internal-only IPs with no malicious context). If uncertain whether an entity is attack-related or noise, keep it — better to include a borderline entity than drop a real IOC.
+"""
+
 
 def _start_analysis_timer(state: AttributionState) -> dict[str, int]:
     """Start the attribution timer once, immediately before entering the planner."""
     if state.get("analysis_started_at_ns") is not None:
         return {}
     return {"analysis_started_at_ns": time.perf_counter_ns()}
+
+
+def _lock_visualization_preference(state: AttributionState) -> dict[str, bool]:
+    """Snapshot the frontend preference once when an investigation starts."""
+    if state.get("visualization_enabled_for_investigation") is not None:
+        return {}
+
+    enabled = bool(state.get("visualization_requested", False))
+    logger.info("Visualization preference locked for investigation: %s", enabled)
+    return {"visualization_enabled_for_investigation": enabled}
 
 
 def _finish_analysis_timer(state: AttributionState) -> float:
@@ -103,6 +169,7 @@ def planner_node(state: AttributionState, config: RunnableConfig, model: BaseCha
     if state.get("investigation_clue") or state.get("pending_question_type"):
         logger.info("Ongoing attribution session detected. Routing to Attribution_Decision_Node.")
         return {
+            **_lock_visualization_preference(state),
             "next_action_fromPlannerNode": {
                 "target": "Attribution_Decision_Node",
                 "instruction": "",
@@ -117,6 +184,7 @@ def planner_node(state: AttributionState, config: RunnableConfig, model: BaseCha
     if not is_human or not user_text:
         logger.info("No valid user input. Defaulting to attack attribution.")
         return {
+            **_lock_visualization_preference(state),
             "next_action_fromPlannerNode": {
                 "target": "Attribution_Decision_Node",
                 "instruction": user_text,
@@ -166,6 +234,7 @@ def planner_node(state: AttributionState, config: RunnableConfig, model: BaseCha
 
     logger.info("Detected attack attribution request. Routing to Attribution_Decision_Node.")
     return {
+        **_lock_visualization_preference(state),
         "next_action_fromPlannerNode": {
             "target": "Attribution_Decision_Node",
             "instruction": user_text,
@@ -875,8 +944,11 @@ def information_synthesizer_node(
         logs_str = str(raw_logs[:20])
         kb_str = str(mitre_kb)
 
-    parser = PydanticOutputParser(pydantic_object=SynthesizedFindings)
+    visualization_enabled = bool(state.get("visualization_enabled_for_investigation", False))
+    findings_model = SynthesizedFindings if visualization_enabled else InvestigationFindings
+    parser = PydanticOutputParser(pydantic_object=findings_model)
     format_instructions = parser.get_format_instructions()
+    graph_extraction_instructions = GRAPH_EXTRACTION_INSTRUCTIONS if visualization_enabled else ""
 
     multi_host_instructions = ""
     # if is_multi_host:
@@ -927,59 +999,7 @@ Modern Windows architectures (e.g., Start Menu, UWP apps, Windows Terminal) rout
 - **RuntimeBroker.exe / sihost.exe / svchost.exe**: When you observe these processes launching `powershell.exe`, `cmd.exe`, or `wt.exe` (often with `-Embedding` parameters or via COM calls), DO NOT blindly classify this as malicious "Initial Access" or "COM Hijacking".
 - **The Exemption Rule**: Treat `RuntimeBroker.exe -> powershell.exe` as NORMAL user interaction (e.g., the user manually opening a terminal) UNLESS you observe explicit injected memory indicators in the broker, or the spawned shell immediately executes an encoded/malicious payload (e.g., `powershell -enc ...`).
 
-### GRAPH ENTITY & RELATION EXTRACTION (CRITICAL)
-
-In addition to the narrative findings, you MUST populate `graph_entities` and `graph_relations` with structured data for the attack graph.
-
-**Entity ID Convention (STRICT):**
-- Process: `proc_<pid>` (e.g., `proc_5324`)
-- File: `file_<N>` where N is sequential starting from 1 (e.g., `file_1`, `file_2`)
-- IP: `ip_<address>` (e.g., `ip_192.168.1.100`)
-- Registry: `reg_<N>` where N is sequential starting from 1 (e.g., `reg_1`)
-- User account: `user_<name>` (e.g., `user_Administrator`)
-- Other: `other_<N>` where N is sequential starting from 1
-
-**Properties per entity type:**
-- process: `{{"pid": <int>, "image": "<exe path>", "command_line": "<cmdline or null>"}}`
-- file: `{{"path": "<full file path>"}}`
-- ip: `{{"address": "<ip>", "port": <int or null>}}`
-- registry: `{{"key_path": "<registry key>", "value_name": "<value or null>"}}`
-- user_account: `{{"username": "<name>", "domain": "<domain or null>"}}`
-- other: `{{}}` (empty dict)
-
-**Relation types (STRICT — choose exactly one):**
-- `create` — spawned child process OR created/wrote a file (creating new entities)
-- `modify` — modified a file OR modified a registry key (tampering with existing state)
-- `execute` — loaded a DLL OR injected into another process (in-memory payload operations, process→process only)
-- `instantiate` — static file was instantiated by the system loader into a running process (file→process only)
-- `communicate` — connected to network address OR DNS resolved to IP (network channel establishment)
-- `authenticate` — process ran under a user account (credential use / privilege verification)
-- `access` — process read/loaded/accessed a file as input data (e.g., encode/decode source, config file, data dump)
-
-**Entity type constraints per relation (CRITICAL — DO NOT violate):**
-Use the source entity's `type` and the target entity's `type` to choose the correct relation.
-| Source type | Relation | Target type | Description |
-|-------------|----------|-------------|-------------|
-| process | create | process | spawned a child process |
-| process | create | file | created/wrote a file |
-| process | modify | file | modified a file |
-| process | modify | registry | modified a registry key |
-| process | execute | process | injected into / loaded DLL into another process |
-| file | instantiate | process | file was instantiated by the system loader into a running process |
-| process | communicate | ip | connected to remote address |
-| ip | communicate | ip | DNS resolved to IP |
-| process | authenticate | user_account | ran under a user account |
-| process | access | file | read/loaded/accessed a file as input data |
-
-If the (source_type, target_type) pair does NOT match any row in the above table, DO NOT create a relation between those two entities. For example, process → file with `communicate` is INVALID — use `create` or `modify` instead.
-
-**Rules:**
-1. Every entity mentioned in `detailed_findings` MUST appear in `graph_entities`, UNLESS it is obvious system noise (see rule 6).
-2. Every observable behavior between entities (process→file, process→IP, process→process, etc.) MUST appear in `graph_relations`.
-3. Use the EXACT timestamps from the raw logs. Do not hallucinate timestamps.
-4. If no timestamp is available for an entity or relation, set it to `null`.
-5. Each entity's `name` should be a human-readable label like `powershell.exe (PID: 5324)` or `cmd.exe (PID: 5508)`. For file entities, use only the filename (e.g., `payload.exe`), full path goes in `properties.path`. For IP entities, use only the address (e.g., `192.168.1.100`), port goes in `properties.port`.
-6. **Noise filter (CRITICAL):** Do NOT include entities or relations that are clearly system background noise (e.g., `svchost.exe` routine activity, `RuntimeBroker.exe` launching normal windows, internal-only IPs with no malicious context). If uncertain whether an entity is attack-related or noise, keep it — better to include a borderline entity than drop a real IOC.
+{graph_extraction_instructions}
 
 ### CONTEXT
 - **Original Instruction**: {instruction}
@@ -1030,6 +1050,7 @@ You MUST structure the `detailed_findings` field using the following generalized
                 "instruction": instruction,
                 "kb_str": kb_str,
                 "multi_host_instructions": multi_host_instructions,
+                "graph_extraction_instructions": graph_extraction_instructions,
                 "logs_str": logs_str,
                 "format_instructions": format_instructions,
             }
@@ -1063,8 +1084,8 @@ You MUST structure the `detailed_findings` field using the following generalized
 
         task_desc = getattr(result, "task_description", "未提取到指令")
         findings = getattr(result, "detailed_findings", "解析完成，未发现异常。")
-        graph_entities = getattr(result, "graph_entities", [])
-        graph_relations = getattr(result, "graph_relations", [])
+        graph_entities = getattr(result, "graph_entities", []) if visualization_enabled else []
+        graph_relations = getattr(result, "graph_relations", []) if visualization_enabled else []
 
         summary = f"【执行指令描述】\n{task_desc}\n\n【调查总结与IOC清单】\n{findings}"
 
@@ -2016,13 +2037,17 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
                     if tgt in remaining:
                         residual_indeg[tgt] = residual_indeg.get(tgt, 0) + 1
         current_layer = base_layer
-        while remaining:
+        max_iterations = len(remaining)
+        iteration_count = 0
+        while remaining and iteration_count < max_iterations:
+            iteration_count += 1
+            previous_remaining_count = len(remaining)
             batch = {eid for eid in remaining if residual_indeg.get(eid, 0) == 0}
             if not batch:
                 # true cycle — pick only the node(s) with minimum indeg to
                 # break the cycle one step at a time, preventing all remaining
                 # nodes from collapsing into a single layer
-                min_indeg = min(residual_indeg.values())
+                min_indeg = min(residual_indeg[eid] for eid in remaining)
                 batch = {eid for eid in remaining if residual_indeg[eid] == min_indeg}
             for eid in batch:
                 layers[eid] = current_layer
@@ -2032,6 +2057,25 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
                             residual_indeg[tgt] = max(0, residual_indeg[tgt] - 1)
             remaining -= batch
             current_layer += 1
+
+            if len(remaining) >= previous_remaining_count:
+                logger.warning(
+                    "Attack graph layout made no progress with %d entities remaining; "
+                    "using a fallback layer.",
+                    len(remaining),
+                )
+                break
+
+        if remaining:
+            logger.warning(
+                "Attack graph layout exceeded its safe iteration limit; placing %d "
+                "remaining entities in fallback layer %d: %s",
+                len(remaining),
+                current_layer,
+                sorted(remaining),
+            )
+            for eid in sorted(remaining):
+                layers[eid] = current_layer
 
     # --- group by layer ---
     layer_groups: dict[int, list[str]] = {}

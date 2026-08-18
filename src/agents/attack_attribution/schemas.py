@@ -86,7 +86,7 @@ class GraphRelation(BaseModel):
     )
 
 
-class SynthesizedFindings(BaseModel):
+class InvestigationFindings(BaseModel):
     task_description: str = Field(
         description="Briefly restate the exact investigation instruction you are executing (e.g., 'Downward tracking of PID 10484 on Agent 005 for Process Creation'). DO NOT include any prefixes or markdown headers. Must be in Chinese."
     )
@@ -103,6 +103,9 @@ class SynthesizedFindings(BaseModel):
         ROLE BOUNDARY (CRITICAL): You are a Fact Extractor, NOT the final judge. DO NOT forcefully assign MITRE Tactic IDs unless explicitly supported by the 'MITRE Knowledge'. If in doubt, just describe the objective behavior.
         FORMATTING RULE: You MUST strictly use the hierarchical Markdown template defined in the System Prompt (using ###, >, -, and ```cmd). Must be in Chinese. """
     )
+
+
+class SynthesizedFindings(InvestigationFindings):
     graph_entities: list[GraphEntity] = Field(
         default_factory=list,
         description="Structured attack graph entity nodes extracted from the raw logs. Include every distinct process, file, IP, registry key, and user account observed.",

@@ -90,6 +90,10 @@ class AttributionPlannerActionCommand(BaseModel):
 class AttributionState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
+    # 前端传入的可视化请求，以及本次调查开始时锁定的不可变快照
+    visualization_requested: bool | None
+    visualization_enabled_for_investigation: bool | None
+
     # 攻击溯源分析计时（不包含 Reporter_Node 之后的可视化处理）
     analysis_started_at_ns: int | None
     analysis_elapsed_seconds: float | None

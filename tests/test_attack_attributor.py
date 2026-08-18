@@ -232,3 +232,35 @@ def test_synthesizer_does_not_treat_unknown_calltrace_as_injection():
     assert "does not prove that the access event was process injection" in system_prompt
     assert "This is critical for identifying memory injection and shellcode" not in system_prompt
     assert "Classify as malicious if the Source's `callTrace`" not in system_prompt
+
+
+def test_attack_graph_layout_completes_with_multiple_cycles():
+    graph_data = {
+        "entities": [
+            {
+                "id": entity_id,
+                "type": "process",
+                "name": f"Process {entity_id}",
+                "properties": {},
+            }
+            for entity_id in ("a", "b", "c", "d", "e")
+        ],
+        "relations": [
+            {"source": "a", "target": "b", "relation": "create"},
+            {"source": "b", "target": "a", "relation": "create"},
+            {"source": "c", "target": "d", "relation": "create"},
+            {"source": "d", "target": "c", "relation": "create"},
+            {"source": "c", "target": "e", "relation": "create"},
+            {"source": "e", "target": "c", "relation": "create"},
+            {"source": "d", "target": "e", "relation": "create"},
+            {"source": "e", "target": "d", "relation": "create"},
+        ],
+    }
+    state = {"attack_graph_data": graph_data}
+
+    result = attribution_nodes.attack_graph_node(state, {}, StaticReportModel())
+
+    assert result["attack_graph"].startswith("<svg")
+    for entity_id in ("a", "b", "c", "d", "e"):
+        assert f"Process {entity_id}" in result["attack_graph"]
+    assert state["attack_graph_data"] == graph_data
