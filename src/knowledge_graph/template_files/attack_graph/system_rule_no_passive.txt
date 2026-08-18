@@ -1,1 +1,0 @@
-The "relation" in the extracted triplets should be changed to the active voice, and the order of "entity1" and "entity2" should be swapped to maintain the correct logical sequence. For example, if the extracted result is "A; used by; B," then the final output should be replaced with "B; use; A."

@@ -1,6 +1,5 @@
 import json
 import logging
-import threading
 
 import requests
 import urllib3
@@ -11,20 +10,12 @@ from core.config import settings
 logger = logging.getLogger(__name__)
 
 protocol = settings.WAZUH_SERVER_API_PROTOCOL
-host = settings.WAZUH_SERVER_API_HOST
+host = settings.WAZUH_INDEXER_HOST or settings.WAZUH_SERVER_API_HOST
 port = settings.WAZUH_INDEXER_PORT
 username = settings.WAZUH_INDEXER_USER
 password = settings.WAZUH_INDEXER_PASSWORD
 
 urllib3.disable_warnings()
-
-_INDEXER_QUERY_LOCK = threading.Lock()
-
-
-def _post_indexer(url: str, **kwargs):
-    """串行执行 Indexer POST 请求。"""
-    with _INDEXER_QUERY_LOCK:
-        return requests.post(url, **kwargs)
 
 
 def count_agent_alerts(agent_id, starttime="now-24h", endtime="now"):
@@ -43,41 +34,36 @@ def count_agent_alerts(agent_id, starttime="now-24h", endtime="now"):
         }
     }
 
-    response = _post_indexer(
-        url,
-        auth=HTTPBasicAuth(username, password),
-        json=payload,
-        verify=False,
-        timeout=10,
+    response = requests.post(
+        url, auth=HTTPBasicAuth(username, password), json=payload, verify=False, timeout=10
     )
 
     logger.info("Get the number of alerts successfully")
     return response.json()
 
 
-def agent_alerts(agent_id, x_limit=5, ruleId=-1, timeout=600, payload=None):
+def agent_alerts(agent_id, x_limit=5, ruleId=-1, timeout=600):
     logger.info("Getting alerts information")
 
     url = f"{protocol}://{host}:{port}/wazuh-alerts-*/_search"
     headers = {"Content-Type": "application/json"}
 
-    if payload is None:
-        # 1. 初始化基础查询：必须匹配特定的 Agent ID
-        must_conditions = [{"term": {"agent.id": agent_id}}]
+    # 1. 初始化基础查询：必须匹配特定的 Agent ID
+    must_conditions = [{"term": {"agent.id": agent_id}}]
 
-        # 2. 如果提供了 ruleId，则动态追加过滤条件
-        if ruleId != -1:
-            must_conditions.append({"term": {"rule.id": str(ruleId)}})
+    # 2. 如果提供了 ruleId，则动态追加过滤条件
+    if ruleId != -1:
+        must_conditions.append({"term": {"rule.id": str(ruleId)}})
 
-        # 3. 构建完整的 DSL Payload
-        payload = {
-            "size": x_limit,
-            "query": {"bool": {"must": must_conditions}},
-            "sort": [{"timestamp": {"order": "desc"}}],
-        }
+    # 3. 构建完整的 DSL Payload
+    payload = {
+        "size": x_limit,
+        "query": {"bool": {"must": must_conditions}},
+        "sort": [{"timestamp": {"order": "desc"}}],
+    }
 
     try:
-        response = _post_indexer(
+        response = requests.post(
             url,
             auth=HTTPBasicAuth(username, password),
             headers=headers,
@@ -161,7 +147,7 @@ def agent_archives(
         }
 
     try:
-        response = _post_indexer(
+        response = requests.post(
             url,
             auth=HTTPBasicAuth(username, password),
             headers=headers,
@@ -182,6 +168,39 @@ def agent_archives(
     return result
 
 
+def active_response_query_events(agent_id: str, request_id: str, timeout: int = 10):
+    """Return structured result events for one Active Response request."""
+    logger.info(
+        "Getting Active Response query events for agent %s request %s",
+        agent_id,
+        request_id,
+    )
+    url = f"{protocol}://{host}:{port}/wazuh-alerts-*/_search"
+    payload = {
+        "size": 1000,
+        "query": {
+            "bool": {
+                "filter": [
+                    {"term": {"agent.id": agent_id}},
+                    {"match_phrase": {"data.request_id": request_id}},
+                ]
+            }
+        },
+        "sort": [{"timestamp": {"order": "asc"}}],
+    }
+
+    response = requests.post(
+        url,
+        auth=HTTPBasicAuth(username, password),
+        headers={"Content-Type": "application/json"},
+        json=payload,
+        verify=False,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def search_archived_logs(query_body: dict):
     """Search archived logs in Wazuh Indexer."""
     logger.info("Searching archived logs")
@@ -189,7 +208,7 @@ def search_archived_logs(query_body: dict):
     url = f"{protocol}://{host}:{port}/wazuh-archives-*/_search"
     headers = {"Content-Type": "application/json"}
 
-    response = _post_indexer(
+    response = requests.post(
         url,
         auth=HTTPBasicAuth(username, password),
         headers=headers,

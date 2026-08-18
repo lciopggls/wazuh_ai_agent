@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from enum import StrEnum
+from enum import Enum
 
 from langchain.tools import tool
 
@@ -13,7 +13,7 @@ from wazuh_api.indexer_api import (
 logger = logging.getLogger(__name__)
 
 
-class QueryType(StrEnum):
+class QueryType(str, Enum):
     PROCESS_ID = "PROCESS_ID"
     PARENT_PROCESS_ID = "PARENT_PROCESS_ID"
     FILE_PATH = "FILE_PATH"

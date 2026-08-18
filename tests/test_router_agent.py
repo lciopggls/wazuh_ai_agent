@@ -1,4 +1,3 @@
-import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -268,7 +267,7 @@ class MockRouterReActModel(BaseChatModel):
 
 
 class FakeRuleAgent:
-    def invoke(self, state, config=None):
+    def invoke(self, state):
         messages = list(state.get("messages", []))
         latest_message = messages[-1] if messages else {}
         latest_request = (
@@ -351,7 +350,7 @@ class FakeRuleAgent:
 
 
 class FakeAttackAgent:
-    def invoke(self, state, config=None):
+    def invoke(self, state):
         messages = list(state.get("messages", []))
         latest_message = messages[-1] if messages else {}
         latest_request = (
@@ -381,24 +380,6 @@ class FakeAttackAgent:
             "is_clue_confirmed": False,
             "pending_question_type": "CLUE",
             "final_report": None,
-        }
-
-
-class CompletedAttackAgent:
-    def invoke(self, state, config=None):
-        return {
-            **state,
-            "messages": [AIMessage(content="攻击图生成完成。")],
-            "investigation_clue": "检测到可疑进程链路。",
-            "is_clue_confirmed": True,
-            "pending_question_type": None,
-            "requires_mitre_kb": True,
-            "final_report": "纯攻击溯源报告",
-            "is_full_attribution_complete": True,
-            "analysis_elapsed_seconds": 83.49,
-            "svg_chart": "<svg />",
-            "attack_abstract": {"hosts": ["Agent 005"]},
-            "attack_graph": "<svg />",
         }
 
 
@@ -482,28 +463,6 @@ def test_router_agent_preserves_attack_specialist_state_across_turns():
         tool_messages = [msg for msg in continued["messages"] if getattr(msg, "type", "") == "tool"]
         assert "报告已生成完毕。" in tool_messages[-1].content
         assert "报告已生成完毕。" in continued["messages"][-1].content
-
-
-def test_router_attack_result_exposes_and_displays_elapsed_seconds():
-    router_agent_module = _load_router_agent_for_test()
-
-    raw_result = router_agent_module._invoke_specialist(
-        specialist_name="attack_attribution",
-        session_cache_by_thread={},
-        specialist_app=CompletedAttackAgent(),
-        task="执行攻击溯源",
-        reset_context=True,
-    )
-    result = json.loads(raw_result)
-
-    assert result["analysis_elapsed_seconds"] == 83.49
-    assert result["state_summary"]["analysis_elapsed_seconds"] == 83.49
-    assert result["reply"] == ("攻击溯源调查耗时1分钟23.4秒。调查报告如下：\n\n纯攻击溯源报告")
-    assert result["artifacts"] == {
-        "svg_chart": "<svg />",
-        "attack_abstract": {"hosts": ["Agent 005"]},
-        "attack_graph": "<svg />",
-    }
 
 
 def test_router_agent_isolates_specialist_state_by_thread_id():

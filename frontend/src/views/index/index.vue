@@ -24,7 +24,6 @@ import asset_list from './asset_list.vue';
 import process_monitor from './process_monitor.vue';
 import threat_hunt from './threat_hunt.vue';
 import SecurityInsights from './security_insights.vue';
-import knowledge_graph from './knowledge_graph.vue';
 
 // 控制页面切换
 const currentPage = ref(1);
@@ -72,7 +71,6 @@ const sidebarGroups = [
     items: [
       { key: 'tactical',  icon: '📊', label: '战术卡片' },
       { key: 'topology',  icon: '🕸️', label: '攻击拓扑图' },
-      { key: 'knowledge-graph', icon: '🧠', label: '知识图谱' },
     ]
   },
 ];
@@ -274,9 +272,6 @@ const latestAttackSvgs = computed(() => {
         </template>
         <template v-else-if="currentMenu === 'topology'">
           <topology_view :svgs="latestAttackSvgs" />
-        </template>
-        <template v-else-if="currentMenu === 'knowledge-graph'">
-          <knowledge_graph />
         </template>
       </div>
     </div>

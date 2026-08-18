@@ -1,0 +1,13 @@
+<!--
+  Install this group as /var/ossec/etc/rules/wazuh_ai_endpoint_response.xml
+  on the Wazuh Manager.
+-->
+<group name="wazuh_ai_active_response,">
+  <rule id="100211" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="event_type" type="pcre2">^wazuh_ai_endpoint_response_result$</field>
+    <description>Wazuh AI endpoint response result: $(action) $(operation_status)</description>
+    <group>active_response,wazuh_ai_endpoint_response,</group>
+    <options>no_full_log</options>
+  </rule>
+</group>

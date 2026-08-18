@@ -58,19 +58,3 @@ uv run ruff check . --fix
 ```python
 logger.info("Do not use Chinese.")
 ```
-
-### Windows 下 LangGraph 启动编码错误
-
-如果运行 `uv run langgraph dev` 时在 `openapi_str = f.read()` 处出现
-`UnicodeDecodeError: 'gbk'`，是因为中文 Windows 默认使用 GBK 读取了 UTF-8 文件。
-在 PowerShell 中执行以下命令，永久为当前用户启用 Python UTF-8 模式：
-
-```powershell
-[Environment]::SetEnvironmentVariable("PYTHONUTF8", "1", "User")
-```
-
-执行后重新打开终端，再运行 `uv run langgraph dev`。可使用以下命令确认输出为 `utf-8`：
-
-```powershell
-uv run python -c "import locale; print(locale.getpreferredencoding(False))"
-```

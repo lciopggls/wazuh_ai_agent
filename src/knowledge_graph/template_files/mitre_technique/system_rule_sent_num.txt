@@ -1,1 +1,0 @@
-The input article are splitted into sentences, and the number of the sentences are list in the beginning of the sentence. In the following case, 15 is the number of the sentence: 15: APT40  used  MURKYSHELL  at  a  compromised  victim  organization  to  port  scan  IP  addresses  and  conduct  network  enumeration.

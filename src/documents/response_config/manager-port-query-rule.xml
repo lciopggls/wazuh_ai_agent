@@ -1,0 +1,13 @@
+<!--
+  Copy this file to the Manager rules directory.
+  Rule ID 100212 is in the recommended custom-rule range (100000-120000).
+-->
+<group name="demo_port_active_response,">
+  <rule id="100212" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="event_type" type="pcre2">^wazuh_ai_port_query_(rule|complete)$</field>
+    <description>Managed Windows Firewall port query result: $(event_type)</description>
+    <group>active_response,demo_port_query,</group>
+    <options>no_full_log</options>
+  </rule>
+</group>

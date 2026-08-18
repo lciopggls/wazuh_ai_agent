@@ -1,0 +1,12 @@
+<!--
+  Add this block inside the Windows Agent ossec.conf.
+  Default path: C:\Program Files (x86)\ossec-agent\ossec.conf
+-->
+<ossec_config>
+  <localfile>
+    <location>C:\Program Files (x86)\ossec-agent\active-response\block-port-query.log</location>
+    <log_format>json</log_format>
+    <only-future-events>yes</only-future-events>
+    <label key="@source">demo-port-query</label>
+  </localfile>
+</ossec_config>

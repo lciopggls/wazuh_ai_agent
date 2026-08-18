@@ -27,7 +27,6 @@ from .utils import (
     _fix_svg_viewbox_height,
     eids_to_investigation,
     extract_beijing_time_from_logs,
-    format_attribution_report_message,
     fp_target,
     get_agents_identity,
     load_mitre,
@@ -52,29 +51,6 @@ MITRE_KB_FILE_PATH = (
     / "attribution_skills"
     / "mitre_knowledgebase.md"
 )
-
-
-def _start_analysis_timer(state: AttributionState) -> dict[str, int]:
-    """Start the attribution timer once, immediately before entering the planner."""
-    if state.get("analysis_started_at_ns") is not None:
-        return {}
-    return {"analysis_started_at_ns": time.perf_counter_ns()}
-
-
-def _finish_analysis_timer(state: AttributionState) -> float:
-    """Finish the attribution timer once and return elapsed wall-clock seconds."""
-    elapsed_seconds = state.get("analysis_elapsed_seconds")
-    if elapsed_seconds is not None:
-        return elapsed_seconds
-
-    started_at_ns = state.get("analysis_started_at_ns")
-    if started_at_ns is None:
-        raise RuntimeError(
-            "Reporter_Node requires analysis_started_at_ns to be set before execution"
-        )
-
-    elapsed_ns = max(0, time.perf_counter_ns() - started_at_ns)
-    return elapsed_ns / 1_000_000_000
 
 
 """
@@ -378,7 +354,6 @@ def attribution_decision_node(
     if is_clue_confirmed and requires_mitre_kb is None:
         return {
             **multi_host_updates,
-            **_start_analysis_timer(state),
             "requires_mitre_kb": True,
             "pending_question_type": None,
             "messages": [AIMessage(content="开启 MITRE 专家知识库辅助攻击溯源调查...")],
@@ -389,7 +364,6 @@ def attribution_decision_node(
     logger.info("Initialization complete. Routing to Attribution Planner Node.")
     return {
         **multi_host_updates,
-        **_start_analysis_timer(state),
         "next_action_fromDecisionNode": {"target": "Attribution_Planner_Node"},
         "next_action_fromAttributionPlannerNode": None,
     }
@@ -907,7 +881,7 @@ Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, 
    - **Complete Artifacts:** EVERY single file created or modified, including intermediate/temp files, with full absolute paths.
    - **Raw Execution:** Unredacted, complete command-line arguments and payloads. Do not truncate.
    - **Entity Identifiers:** Exact numerical PIDs, ProcessGuids, or IP addresses for all involved actors and victims.
-   - Call Trace & Memory Anomalies: You MUST actively inspect `callTrace` fields (especially in EventID 10) and preserve the exact `UNKNOWN` or unmapped frames as unresolved telemetry. An `UNKNOWN` or unmapped frame alone MUST NOT be described as unbacked memory, shellcode, process injection, or a malicious IOC without independent corroborating evidence.
+   - Call Trace & Memory Anomalies: You MUST actively inspect `callTrace` fields (especially in EventID 10). Explicitly extract and highlight any frames originating from unbacked memory, specifically looking for `UNKNOWN` or unmapped memory regions. This is critical for identifying memory injection and shellcode execution.
    *NEVER generalize into vague actions like "accessed a process", "modified the registry", or "dropped files".*
 4. **CONFIDENT EXPERT TONE**: When your investigation confirms an attack's execution, state the success affirmatively without using hedging language (e.g., avoid "possibly", "might have").
 5. **LANGUAGE**: The `summary` field MUST be written in Chinese".
@@ -918,9 +892,9 @@ Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, 
 3. **REPORTING**: Present event times in Beijing Time (UTC+8). Do not comment on whether a log fits the requested time boundaries; focus entirely on its security implications and relationship to the attack trace.
 
 ### Lineage & Access Mask Audit (CRITICAL)
-Do not automatically classify parent-to-child high-privilege access (e.g., 0x1fffff) as benign or malicious. You MUST differentiate based on the execution context:
+Do not automatically classify parent-to-child high-privilege access (e.g., 0x1fffff) as benign. You MUST differentiate based on the execution context:
 - **BENIGN (Filter Noise)**: The Source process has a clean, disk-backed `callTrace` (originating from known/signed modules) AND the Target process executes routine, expected commands.
-- **EVIDENCE BOUNDARY**: An `UNKNOWN` or unmapped frame is an investigation lead, not proof of unbacked memory or malicious execution. Anomalous, high-risk behavior by the Target process may make the overall chain suspicious or malicious, but does not prove that the access event was process injection. Preserve the objective evidence and assign an injection technique only when independent evidence corroborates the injection mechanism.
+- **MALICIOUS (Extract IOC)**: Classify as malicious if the Source's `callTrace` originates from unmapped or unbacked memory (e.g., `UNKNOWN` frames), OR if the Target child process executes anomalous, high-risk behavior (e.g., system discovery, evasion, credential access), regardless of their parent-child relationship.
 
 ### ANTI-HALLUCINATION: OS BACKGROUND NOISE & COM EXECUTIONS (CRITICAL)
 Modern Windows architectures (e.g., Start Menu, UWP apps, Windows Terminal) routinely use system broker processes to proxy-launch interactive shells.
@@ -1173,11 +1147,6 @@ def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseCh
     """Node 6: Reporter Node."""
     logger.info("Executing Reporter Node: Formatting the final report...")
 
-    if state.get("analysis_started_at_ns") is None:
-        raise RuntimeError(
-            "Reporter_Node requires analysis_started_at_ns to be set before execution"
-        )
-
     next_action = state.get("next_action_fromAttributionPlannerNode")
     mitre_kb = state.get("mitre_knowledge_base", {})
     messages = state.get("messages", [])
@@ -1319,28 +1288,17 @@ excluded by this rule, it MUST NOT appear anywhere in the report.
             }
         )
 
-        elapsed_seconds = _finish_analysis_timer(state)
         logger.info("Final report generated successfully.")
 
         return {
             "final_report": final_report_msg.content,
-            "analysis_elapsed_seconds": elapsed_seconds,
             "is_full_attribution_complete": True,
             "next_action_fromAttributionPlannerNode": None,
-            "messages": [
-                AIMessage(
-                    content=format_attribution_report_message(
-                        final_report_msg.content,
-                        elapsed_seconds,
-                    )
-                )
-            ],
+            "messages": [AIMessage(content=f"报告已生成完毕。\n\n{final_report_msg.content}")],
         }
     except Exception as e:
-        elapsed_seconds = _finish_analysis_timer(state)
         logger.error("Error generating final report: %s", e)
         return {
-            "analysis_elapsed_seconds": elapsed_seconds,
             "next_action_fromAttributionPlannerNode": None,
             "messages": [AIMessage(content=f"报告生成失败，发生异常: {e}")],
         }
@@ -1958,11 +1916,7 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     if not entities:
         return {
             "attack_graph": None,
-            "messages": [
-                AIMessage(
-                    content="[Attack Graph] 所有实体均为孤立节点，无法生成攻击实体关系网状图。"
-                )
-            ],
+            "messages": [AIMessage(content="[Attack Graph] 所有实体均为孤立节点，无法生成攻击实体关系网状图。")],
         }
 
     # --- build lookup & adjacency ---
@@ -2083,7 +2037,7 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     NODE_WIDTH = 230
     NODE_HEIGHT = 62
     LAYER_GAP_X = 400
-    GAP_CLOSE = 24  # standard gap between unrelated nodes in the same column
+    GAP_CLOSE = 24   # standard gap between unrelated nodes in the same column
     GAP_LINKED = 70  # larger gap when an edge exists between the two nodes
     MARGIN = 40
     TITLE_H = 36
@@ -2193,6 +2147,8 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         "access": ("2", "2,6", "#14b8a6", "arrow-access"),  # medium dot-dash teal
     }
 
+
+
     # --- build SVG ---
     lines: list[str] = []
 
@@ -2237,16 +2193,16 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     # edges — separate same-layer from cross-layer
     REL_PRIORITY = {
         "instantiate": 7,  # 实例化 (生命周期 - 最高)
-        "create": 6,  # 创建 (生命周期)
-        "execute": 5,  # 执行 (控制流)
-        "modify": 4,  # 修改 (状态改变)
-        "authenticate": 3,  # 认证
+        "create": 6,       # 创建 (生命周期)
+        "execute": 5,      # 执行 (控制流)
+        "modify": 4,       # 修改 (状态改变)
+        "authenticate": 3, # 认证
         "communicate": 2,  # 通信
-        "access": 1,  # 访问 (被动读取 - 最低)
+        "access": 1,       # 访问 (被动读取 - 最低)
     }
 
     same_layer_pairs: dict[tuple[str, str], tuple[str, str | None]] = {}
-    cross_layer_pairs: dict[tuple[str, str], tuple[str, str | None]] = {}
+    cross_layer_relations: list[dict] = []
     for rel in relations:
         src, tgt = rel.get("source", ""), rel.get("target", "")
         if src not in node_pos or tgt not in node_pos:
@@ -2262,13 +2218,7 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
             if REL_PRIORITY.get(rel_type, 0) > existing_prio:
                 same_layer_pairs[pair] = (rel_type, ts)
         elif x1 < x2:
-            pair = (src, tgt)  # directed — dedup identical edges
-            rel_type = rel.get("relation", "")
-            ts = rel.get("timestamp")
-            existing = cross_layer_pairs.get(pair)
-            existing_prio = REL_PRIORITY.get(existing[0], 0) if existing else 0
-            if REL_PRIORITY.get(rel_type, 0) > existing_prio:
-                cross_layer_pairs[pair] = (rel_type, ts)
+            cross_layer_relations.append(rel)
         # x1 > x2: reverse edge (right→left) — silently dropped
 
     edge_paths: list[str] = []
@@ -2302,11 +2252,12 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
 
     # --- cross-layer edges: L-shaped routing ---
     target_entry_slots: dict[str, int] = {}
-    for (src, tgt), (rel_type, _ts) in cross_layer_pairs.items():
+    for rel in cross_layer_relations:
+        src, tgt = rel.get("source", ""), rel.get("target", "")
         x1, y1 = node_pos[src]
         x2, y2 = node_pos[tgt]
 
-        rel_type = rel_type
+        rel_type = rel.get("relation", "")
         sw, dash, edge_color, arrow_id = rel_styles.get(
             rel_type, ("2", "none", "#94a3b8", "arrow-gray")
         )

@@ -27,9 +27,9 @@ def get_wazuh_url() -> str:
 
 
 def get_indexer_url() -> str:
+    indexer_host = settings.WAZUH_INDEXER_HOST or settings.WAZUH_SERVER_API_HOST
     return (
-        f"{settings.WAZUH_SERVER_API_PROTOCOL}://"
-        f"{settings.WAZUH_SERVER_API_HOST}:{settings.WAZUH_INDEXER_PORT}"
+        f"{settings.WAZUH_SERVER_API_PROTOCOL}://" f"{indexer_host}:{settings.WAZUH_INDEXER_PORT}"
     )
 
 

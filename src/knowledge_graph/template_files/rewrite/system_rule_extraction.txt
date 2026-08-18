@@ -1,1 +1,0 @@
-Process of section extraction: For each section, extract each entity group in format: entity 1(entity type); relationship; entity 2(entity type), and put the triples after the this section summarization and before next one.

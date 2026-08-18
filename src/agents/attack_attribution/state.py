@@ -90,10 +90,6 @@ class AttributionPlannerActionCommand(BaseModel):
 class AttributionState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
-    # 攻击溯源分析计时（不包含 Reporter_Node 之后的可视化处理）
-    analysis_started_at_ns: int | None
-    analysis_elapsed_seconds: float | None
-
     next_action_fromPlannerNode: PlannerActionCommand | None
     next_action_fromDecisionNode: DecisionActionCommand | None
     next_action_fromAttributionPlannerNode: AttributionPlannerActionCommand | None

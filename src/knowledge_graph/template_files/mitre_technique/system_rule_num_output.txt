@@ -1,1 +1,0 @@
-Please separate the numbers when expressing them. For example, if you want to express the numbers from 1 to 5, you should write them as 1, 2, 3, 4, 5 instead of using a dash 1-5.

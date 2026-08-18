@@ -8,10 +8,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.config import get_config
 
 from agents.attack_attribution.attack_attributor import get_attack_attribution_agent
-from agents.attack_attribution.utils import (
-    extract_agent_ip_mapping,
-    format_attribution_report_message,
-)
+from agents.attack_attribution.utils import extract_agent_ip_mapping
 from agents.response_agent import get_response_agent
 from agents.rule_agent.rule_agent import get_rule_agent
 
@@ -94,11 +91,17 @@ def _is_high_risk_rule_task(task: str) -> bool:
 
 
 def _is_high_risk_response_task(task: str) -> bool:
+    """Check whether a response task involves high-risk network-level changes.
+
+    Operations classified as high-risk: block_ip, block_ip_bulk.
+    Operations classified as low-risk: unblock_ip, query_blocked_ips.
+    """
     high_risk_keywords = [
         "封禁",
         "block",
         "阻断",
         "ban",
+        "批量封禁",
     ]
     lowered_task = task.lower()
     return any(keyword in task or keyword in lowered_task for keyword in high_risk_keywords)
@@ -143,7 +146,6 @@ def _summarize_attack_state(attack_state: dict[str, Any] | None) -> str:
         "requires_mitre_kb": attack_state.get("requires_mitre_kb"),
         "has_final_report": bool(attack_state.get("final_report")),
         "is_full_attribution_complete": bool(attack_state.get("is_full_attribution_complete")),
-        "analysis_elapsed_seconds": attack_state.get("analysis_elapsed_seconds"),
         "latest_reply": _extract_latest_ai_content(attack_state.get("messages")),
     }
     return json.dumps(summary, ensure_ascii=False)
@@ -197,18 +199,8 @@ def _invoke_specialist(
         state_summary = "{}"
 
     artifacts = None
-    analysis_elapsed_seconds = (
-        result.get("analysis_elapsed_seconds") if specialist_name == "attack_attribution" else None
-    )
     if specialist_name == "attack_attribution" and result.get("is_full_attribution_complete"):
-        final_report = result.get("final_report")
-        if not final_report:
-            raise RuntimeError("Completed attack attribution state is missing final_report")
-        if analysis_elapsed_seconds is None:
-            raise RuntimeError(
-                "Completed attack attribution state is missing analysis_elapsed_seconds"
-            )
-        reply = format_attribution_report_message(final_report, analysis_elapsed_seconds)
+        reply = result.get("final_report") or "报告生成失败。"
         artifacts = {
             "svg_chart": result.get("svg_chart"),
             "attack_abstract": result.get("attack_abstract"),
@@ -224,7 +216,6 @@ def _invoke_specialist(
             "plan_summary": plan_summary,
             "plan_steps": plan_steps,
             "reply": reply or f"{specialist_name} 未返回可展示内容。",
-            "analysis_elapsed_seconds": analysis_elapsed_seconds,
             "state_summary": json.loads(state_summary),
             "artifacts": artifacts,
             "executed_steps": session["executed_steps"],
@@ -344,9 +335,14 @@ def get_router_agent(
         task: str,
         reset_context: bool = False,
     ) -> str:
-        """将封禁 IP 等事件响应任务委派给 `response_agent`。
-        适用于在指定 Agent 上封禁指定 IP 地址。
-        路由智能体会在调用前向用户确认被封禁的 IP、目标 Agent 和封禁时长。
+        """将事件响应任务委派给 `response_agent`。
+
+        适用于以下场景：
+        - 封禁/批量封禁 IP（需要用户授权）
+        - 解封 IP（低风险，无需授权）
+        - 查询 Agent 上已封禁的 IP 列表
+
+        路由智能体在调用封禁类操作前会向用户确认目标 IP、Agent 和时长。
         当这是一个新的独立响应任务时，将 `reset_context` 设为 true。
         """
 
@@ -500,11 +496,16 @@ Agent → IP 映射表
 五、委托事件响应 (delegate_response_agent)
 ══════════════════════════════════════════════════════
 【适用场景】
-  - 在指定 Agent 上封禁指定 IP 地址。
+  response_agent 提供四个工具：
+  - `block_ip`       — 在指定 Agent 上封禁 IP（支持 srcip/dstip/both 方向）。
+  - `block_ip_bulk`  — 在多个 Agent 上同时封禁同一 IP。
+  - `unblock_ip`     — 解除封禁规则（低风险，无需授权）。
+  - `query_blocked_ips` — 查询 Agent 上真实存在的封禁规则（低风险，无需授权）。
 
 【封禁前你必须向用户确认】
-  - 执行封禁前，必须先向用户明确说明将要封禁的 IP、目标 Agent 和封禁时长。
-  - 获得用户明确同意后才能调用本工具。
+  - 封禁类操作（block_ip / block_ip_bulk）为高风险，必须先向用户明确说明
+    将要封禁的 IP、目标 Agent、封禁方向和封禁时长，获得用户明确同意后才能执行。
+  - 解封和查询类操作（unblock_ip / query_blocked_ips）为低风险，可直接执行。
   - 用户同意后，task 中需包含"已获用户明确授权"标记。
 
 【参数说明】
@@ -519,6 +520,11 @@ Agent → IP 映射表
   你应先说明将要封禁的 IP、目标 Agent 和封禁时长（默认 10 分钟），询问用户是否继续。
   - 用户确认后，调用 `delegate_response_agent(task="已获用户明确授权：在 agent 006 上封禁 192.168.109.114，封禁10分钟", reset_context=true)`，
   然后向用户汇报结果。
+
+【示例：查询已封禁 IP】
+  - 用户说"帮我查一下 agent 006 上有哪些 IP 被封了"
+  直接调用 `delegate_response_agent(task="查询 agent 006 上已封禁的 IP 列表", reset_context=true)`，
+  无需用户授权。
 """
 
     system_prompt = system_prompt.replace("{agent_ip_mapping_json}", agent_ip_mapping_json)

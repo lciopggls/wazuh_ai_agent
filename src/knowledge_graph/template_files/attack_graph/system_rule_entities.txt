@@ -1,1 +1,0 @@
-Extract entities only from the following candidate entity types : 

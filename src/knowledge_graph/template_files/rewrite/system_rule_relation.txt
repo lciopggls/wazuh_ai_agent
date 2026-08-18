@@ -1,1 +1,0 @@
-The following relation types should be preserved as the key information as much as possible when rewriting:
