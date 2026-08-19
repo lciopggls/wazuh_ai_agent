@@ -1,3 +1,4 @@
+import logging
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -16,6 +17,8 @@ from .context_loader import ScoringContextLoader
 from .errors import ReportScoringError
 from .report_repository import ReportRepository
 from .score_repository import ScoreRepository
+
+logger = logging.getLogger(__name__)
 
 
 class ScoringService:
@@ -172,7 +175,16 @@ class ScoringService:
             }
             try:
                 final_state = self.graph.invoke(state)
-            except Exception:
+            except Exception as exc:
+                logger.exception(
+                    "Scoring graph invocation failed",
+                    extra={
+                        "attempt_id": attempt.attempt_id,
+                        "report_id": report.report_id,
+                        "request_id": request_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
                 safe_message = "评分模型调用失败"
                 self.score_repository.complete_failure(
                     attempt.attempt_id, "SCORING_MODEL_ERROR", safe_message

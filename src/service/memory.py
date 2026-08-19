@@ -321,7 +321,7 @@ async def kg_list_gallery():
                 )
         return {"status": "ok", "files": files}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/knowledge-graph/gallery/{filename:path}")
@@ -354,7 +354,7 @@ async def kg_list_output():
                 )
         return {"status": "ok", "files": files}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.get("/api/knowledge-graph/output/{filename:path}")
@@ -397,7 +397,7 @@ async def kg_upload_file(file: UploadFile = File(...)):
             "message": f"文件 {file.filename} 上传成功",
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/knowledge-graph/generate")
@@ -445,11 +445,11 @@ async def kg_generate():
             "message": f"图谱生成完成，共 {len(output_files)} 个文件",
         }
     except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="图谱生成超时（300秒）")
+        raise HTTPException(status_code=504, detail="图谱生成超时（300秒）") from None
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/api/knowledge-graph/save-to-gallery")
@@ -475,7 +475,7 @@ async def kg_save_to_gallery(data: dict):
             "message": f"图谱 {safe_name} 已存入 gallery",
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 if __name__ == "__main__":
