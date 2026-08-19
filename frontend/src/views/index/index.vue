@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed, watch, defineAsyncComponent } from 'vue';
 import ItemWrap from "@/components/item-wrap";
 // 第一页组件
 import LeftTop from "./left-top.vue";
@@ -26,6 +26,11 @@ import threat_hunt from './threat_hunt.vue';
 import SecurityInsights from './security_insights.vue';
 import knowledge_graph from './knowledge_graph.vue';
 
+const reportScoringEnabled = import.meta.env.VITE_ENABLE_REPORT_SCORING === 'true';
+const ReportScoring = reportScoringEnabled
+  ? defineAsyncComponent(() => import('./report_scoring.vue'))
+  : null;
+
 // 控制页面切换
 const currentPage = ref(1);
 const globalSessions = ref<Record<string, any[]>>({});
@@ -41,6 +46,9 @@ const sidebarGroups = [
     title: 'AI 智能助手',
     items: [
       { key: 'ai-chat',    icon: '💬', label: 'AI 对话窗口' },
+      ...(reportScoringEnabled
+        ? [{ key: 'report-scoring', icon: '🧮', label: '报告评分' }]
+        : []),
     ]
   },
   {
@@ -241,6 +249,9 @@ const latestAttackSvgs = computed(() => {
       <div class="main-content">
         <template v-if="currentMenu === 'ai-chat'">
           <second_right v-model:sessions="globalSessions" v-model:agent-id="currentAgentId" />
+        </template>
+        <template v-else-if="currentMenu === 'report-scoring' && reportScoringEnabled && ReportScoring">
+          <component :is="ReportScoring" />
         </template>
         <template v-else-if="currentMenu === 'alerts'">
           <alerts_query :attack-abstract="latestAttackAbstract" />

@@ -1,0 +1,81 @@
+{
+  "_index": "wazuh-alerts-4.x-2026.08.05",
+  "_id": "c2fT0p8BWAEr461gG7_L",
+  "_version": 1,
+  "_seq_no": 126,
+  "_primary_term": 1,
+  "_source": {
+    "agent": {
+      "ip": "192.168.150.105",
+      "name": "win10_node2",
+      "id": "003"
+    },
+    "manager": {
+      "name": "hyb-virtual-machine"
+    },
+    "data": {
+      "win": {
+        "eventdata": {
+          "image": "C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe",
+          "processGuid": "{5fc1445e-6933-6a73-8504-000000001600}",
+          "processId": "6980",
+          "utcTime": "2026-08-05 16:47:47.681",
+          "targetFilename": "C:\\\\Users\\\\nika\\\\AppData\\\\Local\\\\Temp\\\\WazuhLab\\\\WAZUH-LAB-SIM-206-20260805T164747Z-8613739C\\\\WAZUH-LAB-SIM-206-20260805T164747Z-8613739C-stage.cmd",
+          "creationUtcTime": "2026-08-05 16:47:47.681",
+          "user": "DESKTOP-IA2DN0I\\\\nika"
+        },
+        "system": {
+          "eventID": "11",
+          "keywords": "0x8000000000000000",
+          "providerGuid": "{5770385f-c22a-43e0-bf4c-06f5698ffbd9}",
+          "level": "4",
+          "channel": "Microsoft-Windows-Sysmon/Operational",
+          "opcode": "0",
+          "message": "\"File created:\r\nRuleName: -\r\nUtcTime: 2026-08-05 16:47:47.681\r\nProcessGuid: {5fc1445e-6933-6a73-8504-000000001600}\r\nProcessId: 6980\r\nImage: C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\r\nTargetFilename: C:\\Users\\nika\\AppData\\Local\\Temp\\WazuhLab\\WAZUH-LAB-SIM-206-20260805T164747Z-8613739C\\WAZUH-LAB-SIM-206-20260805T164747Z-8613739C-stage.cmd\r\nCreationUtcTime: 2026-08-05 16:47:47.681\r\nUser: DESKTOP-IA2DN0I\\nika\"",
+          "version": "2",
+          "systemTime": "2026-08-05T16:47:47.6916383Z",
+          "eventRecordID": "109225",
+          "threadID": "4520",
+          "computer": "DESKTOP-IA2DN0I",
+          "task": "11",
+          "processID": "2892",
+          "severityValue": "INFORMATION",
+          "providerName": "Microsoft-Windows-Sysmon"
+        }
+      }
+    },
+    "rule": {
+      "firedtimes": 4,
+      "mail": true,
+      "level": 15,
+      "description": "Executable file dropped in folder commonly used by malware",
+      "groups": [
+        "sysmon",
+        "sysmon_eid11_detections",
+        "windows"
+      ],
+      "mitre": {
+        "technique": [
+          "Ingress Tool Transfer"
+        ],
+        "id": [
+          "T1105"
+        ],
+        "tactic": [
+          "Command and Control"
+        ]
+      },
+      "id": "92213"
+    },
+    "decoder": {
+      "name": "windows_eventchannel"
+    },
+    "input": {
+      "type": "log"
+    },
+    "@timestamp": "2026-08-05T16:47:49.000Z",
+    "location": "EventChannel",
+    "id": "1785948469.74986",
+    "timestamp": "2026-08-06T01:47:49.000+0900"
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "schema_version": 3,
+  "visibility": "scoring_only",
+  "must_not_be_provided_to_tested_agent": true,
+  "scenario_id": "SIM-206",
+  "atomic_red_team_reference": {
+    "technique": "T1059.003",
+    "atomic_name": "Windows Command Shell tests using batch files and file output",
+    "source": "https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1059.003/T1059.003.md"
+  },
+  "primary_mitre": {
+    "id": "T1059.003",
+    "name": "Command and Scripting Interpreter: Windows Command Shell"
+  },
+  "candidate_wazuh_rule": {
+    "id": "92213",
+    "level": 15,
+    "description": "Executable file dropped in folder commonly used by malware",
+    "status_verified": "enabled",
+    "rule_file": "0830-sysmon_id_11.xml"
+  },
+  "executed_behaviors": [
+    "The launcher creates a run-specific command file under the current user's LocalAppData Temp directory.",
+    "cmd.exe executes the run-specific command file.",
+    "The command file writes a run-specific result file under ProgramData.",
+    "findstr.exe queries the run identifier in the result file."
+  ],
+  "process_chain": [
+    "trigger.bat -> powershell.exe -> cmd.exe -> run-specific command file",
+    "powershell.exe -> findstr.exe"
+  ],
+  "expected_artifacts": [
+    "Run-specific Temp command file",
+    "Run-specific ProgramData result file",
+    "Command stdout and stderr files",
+    "Result query stdout and stderr files",
+    "Runtime manifest"
+  ],
+  "explicit_non_actions": [
+    "The command file does not download, decode or launch an external payload.",
+    "No network, persistence, credential, account or security-control operation is performed.",
+    "No unrelated Temp or ProgramData content is removed."
+  ],
+  "negative_behavior_catalog": [
+    {
+      "behavior_id": "non_action_network_download",
+      "behavior": "The command file does not download content from a network location."
+    },
+    {
+      "behavior_id": "non_action_external_payload",
+      "behavior": "The command file does not decode or launch an external payload."
+    },
+    {
+      "behavior_id": "non_action_persistence",
+      "behavior": "No persistence operation is performed."
+    },
+    {
+      "behavior_id": "non_action_credential_access",
+      "behavior": "No credential or account operation is performed."
+    },
+    {
+      "behavior_id": "non_action_security_control",
+      "behavior": "No security-control operation is performed."
+    }
+  ],
+  "causal_boundaries": [
+    "File creation is separate from later cmd.exe execution.",
+    "The result file confirms the command file ran; the FileCreate alert alone does not prove execution.",
+    "The later findstr.exe process is a query and is not part of the command file action.",
+    "Unrelated PowerShell policy-test files in Temp are not the current RUN anchor."
+  ],
+  "expected_sysmon_event_ids": [
+    1,
+    11
+  ],
+  "preferred_anchor": "A current-RUN wazuh-alerts-* event for rule 92213 whose targetFilename is the run-specific Temp command file.",
+  "correlation_requirements": [
+    "The alert targetFilename must contain the current RUN ID.",
+    "Archives must link the creating PowerShell, the cmd.exe process and the result file."
+  ],
+  "known_telemetry_gaps": [
+    "The active rule maps Temp executable-file creation to T1105, but a local file creation alert alone does not prove network ingress.",
+    "FileCreate and process execution are separate events and must not be collapsed into one behavior."
+  ],
+  "qualification_gate": {
+    "index": "wazuh-alerts-*",
+    "minimum_rule_level": 10,
+    "required_rule_fields": [
+      "rule.id",
+      "rule.level",
+      "rule.description"
+    ],
+    "frontend_visibility_required": true
+  },
+  "cleanup_scope": [
+    "%LOCALAPPDATA%\\Temp\\WazuhLab\\<RUN_ID>",
+    "%ProgramData%\\WazuhLab\\<RUN_ID>"
+  ]
+}

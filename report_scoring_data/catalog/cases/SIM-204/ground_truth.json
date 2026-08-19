@@ -1,0 +1,97 @@
+{
+  "schema_version": 3,
+  "visibility": "scoring_only",
+  "must_not_be_provided_to_tested_agent": true,
+  "scenario_id": "SIM-204",
+  "atomic_red_team_reference": {
+    "technique": "T1059.001",
+    "atomic_name": "ATHPowerShellCommandLineParameter -EncodedCommand parameter variations",
+    "source": "https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1059.001/T1059.001.md"
+  },
+  "primary_mitre": {
+    "id": "T1059.001",
+    "name": "Command and Scripting Interpreter: PowerShell"
+  },
+  "candidate_wazuh_rule": {
+    "id": "92057",
+    "level": 12,
+    "description": "Powershell.exe spawned a powershell process which executed a base64 encoded command",
+    "status_verified": "enabled",
+    "rule_file": "0800-sysmon_id_1.xml"
+  },
+  "executed_behaviors": [
+    "The launcher PowerShell constructs a UTF-16LE Base64 command string.",
+    "The launcher PowerShell creates one child powershell.exe process with -EncodedCommand.",
+    "The child command writes a run-specific result file.",
+    "findstr.exe queries the run identifier in the result file."
+  ],
+  "process_chain": [
+    "trigger.bat -> launcher powershell.exe -> child powershell.exe",
+    "launcher powershell.exe -> findstr.exe"
+  ],
+  "expected_artifacts": [
+    "Run-specific result file",
+    "Child stdout and stderr files",
+    "Result query stdout and stderr files",
+    "Runtime manifest"
+  ],
+  "explicit_non_actions": [
+    "No encoded content is downloaded from a network location.",
+    "No external process payload is written or launched.",
+    "No persistence object or autorun location is created.",
+    "No credential, account, firewall, Defender, audit or Wazuh setting is accessed or modified."
+  ],
+  "negative_behavior_catalog": [
+    {
+      "behavior_id": "non_action_network_download",
+      "behavior": "No content is downloaded from a network location."
+    },
+    {
+      "behavior_id": "non_action_external_payload",
+      "behavior": "No external process payload is written or launched."
+    },
+    {
+      "behavior_id": "non_action_persistence",
+      "behavior": "No persistence object or autorun location is created."
+    },
+    {
+      "behavior_id": "non_action_credential_access",
+      "behavior": "No credential or account information is accessed or modified."
+    },
+    {
+      "behavior_id": "non_action_security_control",
+      "behavior": "No firewall, Defender, audit or Wazuh security-control setting is modified."
+    }
+  ],
+  "causal_boundaries": [
+    "The encoded command only writes the run-specific result file.",
+    "The child process exit code and result file are separate completion evidence.",
+    "The later findstr.exe process is a query and is not part of the encoded child command."
+  ],
+  "expected_sysmon_event_ids": [
+    1,
+    11
+  ],
+  "preferred_anchor": "A current-RUN wazuh-alerts-* event for rule 92057 with rule.id, rule.level and rule.description present.",
+  "correlation_requirements": [
+    "Correlate the alert child PID or ProcessGuid to the launcher parent PID or ParentProcessGuid.",
+    "Correlate the child process to the run-specific result file and runtime time window."
+  ],
+  "known_telemetry_gaps": [
+    "The RUN ID is inside the encoded command content, so the alert may require PID or ProcessGuid correlation to the parent and file event.",
+    "FileCreate visibility depends on the active Sysmon filter and Wazuh forwarding."
+  ],
+  "qualification_gate": {
+    "index": "wazuh-alerts-*",
+    "minimum_rule_level": 10,
+    "required_rule_fields": [
+      "rule.id",
+      "rule.level",
+      "rule.description"
+    ],
+    "frontend_visibility_required": true
+  },
+  "cleanup_scope": [
+    "%ProgramData%\\WazuhLab\\<RUN_ID>"
+  ]
+}

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -7,21 +8,28 @@ import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 # LangChain / LangGraph 导入
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from core.config import settings
+from service.report_scoring.api_models import ScoringRegistration
+from service.report_scoring.bootstrap import create_report_scoring_runtime
+from service.report_scoring.errors import ReportScoringError
+from service.report_scoring.router import (
+    create_report_scoring_router,
+    create_unavailable_report_scoring_router,
+)
 
-# 假设的项目结构
-from src.agents.agent import get_attack_attribution_agent, get_router_agent
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Wazuh SOC Multi-Agent Streaming API")
 app.add_middleware(
@@ -42,14 +50,23 @@ llm = ChatOpenAI(
 
 # 初始化智能体注册表
 def initialize_agents():
-    # 实际开发中，这里可以针对不同 agent_id 加载不同的 graph
+    # 延迟导入，避免报告保存/评分等独立接口在模块导入时连接 Wazuh。
+    from agents.agent import get_attack_attribution_agent, get_router_agent
+
     return {
         "router_agent": get_router_agent(llm, llm, llm, checkpointer=memory),
         "attack_attribution": get_attack_attribution_agent(llm, checkpointer=memory),
     }
 
 
-agents_registry = initialize_agents()
+agents_registry = None
+
+
+def get_agents_registry():
+    global agents_registry
+    if agents_registry is None:
+        agents_registry = initialize_agents()
+    return agents_registry
 
 
 class ChatInput(BaseModel):
@@ -62,13 +79,16 @@ class ChatInput(BaseModel):
 class SaveReportInput(BaseModel):
     content: str
     filename: str | None = None  # 可选，不传则自动生成
+    # Keep the optional registration raw until the core report has been saved.
+    # Otherwise FastAPI would reject the whole request before save_report runs.
+    scoring_registration: Any | None = None
 
 
 async def event_generator(data: ChatInput) -> AsyncGenerator[str, None]:
     """
     流式生成器：捕获 LangGraph 每个节点的完整输出，动态封装并推送至前端
     """
-    agent_executor = agents_registry.get(data.agent_id)
+    agent_executor = get_agents_registry().get(data.agent_id)
     if not agent_executor:
         yield f"data: {json.dumps({'error': 'Agent not found'})}\n\n"
         return
@@ -153,7 +173,9 @@ async def save_report(data: SaveReportInput):
         os.makedirs(REPORT_OUTPUT_DIR, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = data.filename or f"attack_trace_report_{timestamp}.md"
+        filename = (
+            Path(data.filename).name if data.filename else f"attack_trace_report_{timestamp}.md"
+        )
         # 确保扩展名是 .md
         if not filename.endswith(".md"):
             filename += ".md"
@@ -162,14 +184,118 @@ async def save_report(data: SaveReportInput):
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(data.content)
 
-        return {
+        response = {
             "status": "ok",
             "filepath": filepath,
             "filename": filename,
             "message": f"报告已保存: {filename}",
         }
+        if data.scoring_registration is not None:
+            try:
+                registration = ScoringRegistration.model_validate(data.scoring_registration)
+            except ValidationError as exc:
+                invalid = ReportScoringError(
+                    "INVALID_REPORT_REGISTRATION",
+                    "评分登记字段无效，原报告已按核心流程保存",
+                    status_code=422,
+                    details={
+                        "errors": [
+                            {
+                                "field": ".".join(str(part) for part in error["loc"]),
+                                "message": error["msg"],
+                            }
+                            for error in exc.errors()
+                        ]
+                    },
+                )
+                response["scoring_registration"] = {
+                    "status": "error",
+                    "error": invalid.as_dict(),
+                }
+            else:
+                if report_repository is None:
+                    unavailable = ReportScoringError(
+                        "SCORING_UNAVAILABLE",
+                        "报告评分服务当前不可用，报告已按原流程保存",
+                        status_code=503,
+                    )
+                    response["scoring_registration"] = {
+                        "status": "error",
+                        "error": unavailable.as_dict(),
+                    }
+                else:
+                    try:
+                        record = report_repository.create_report(
+                            content=data.content.encode("utf-8"),
+                            filename=filename,
+                            test_case_id=registration.test_case_id,
+                            agent_id=registration.agent_id,
+                            source_type="ai_chat",
+                            thread_id=registration.thread_id,
+                            run_id=registration.run_id,
+                            note=registration.note,
+                        )
+                        response["scoring_registration"] = {
+                            "status": "ok",
+                            "report": record.model_dump(mode="json"),
+                        }
+                    except ReportScoringError as exc:
+                        partial_failure = ReportScoringError(
+                            exc.code,
+                            f"原报告已保存；评分登记失败：{exc.message}",
+                            status_code=exc.status_code,
+                            field=exc.field,
+                            details=exc.details,
+                        )
+                        response["scoring_registration"] = {
+                            "status": "error",
+                            "error": partial_failure.as_dict(),
+                        }
+                    except Exception:
+                        logger.exception("评分登记失败；核心报告已保存")
+                        failed = ReportScoringError(
+                            "SCORING_REGISTRATION_ERROR",
+                            "评分登记失败，原报告已按核心流程保存",
+                            status_code=500,
+                        )
+                        response["scoring_registration"] = {
+                            "status": "error",
+                            "error": failed.as_dict(),
+                        }
+        return response
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# ── 开发期报告评分 API ──
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_SCORING_DATA_ROOT = _PROJECT_ROOT / "report_scoring_data"
+report_scoring_runtime = None
+case_registry = None
+report_repository = None
+score_repository = None
+scoring_service = None
+try:
+    report_scoring_runtime = create_report_scoring_runtime(_SCORING_DATA_ROOT, llm)
+    case_registry = report_scoring_runtime.case_registry
+    report_repository = report_scoring_runtime.report_repository
+    score_repository = report_scoring_runtime.score_repository
+    scoring_service = report_scoring_runtime.scoring_service
+except Exception as exc:  # optional subsystem must not block core application startup
+    logger.warning("Report scoring subsystem is unavailable: %s", type(exc).__name__)
+
+
+@app.exception_handler(ReportScoringError)
+async def report_scoring_error_handler(_request, exc: ReportScoringError):
+    return JSONResponse(status_code=exc.status_code, content=exc.as_dict())
+
+
+if report_scoring_runtime is None:
+    app.include_router(create_unavailable_report_scoring_router())
+else:
+    app.include_router(
+        create_report_scoring_router(case_registry, report_repository, scoring_service)
+    )
 
 
 # ──────────────────────────────────────────────

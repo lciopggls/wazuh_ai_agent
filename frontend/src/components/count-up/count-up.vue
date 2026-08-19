@@ -82,8 +82,9 @@ let loopCount = 0
 const loopAnim = () => {
   loopCount++
   startAnim(() => {
-    const isTruely = typeof props.loop === 'boolean' && props.loop
-    if (isTruely || props.loop > loopCount) {
+    const isInfinite = props.loop === true
+    const finiteLoopCount = typeof props.loop === 'boolean' ? 0 : Number(props.loop)
+    if (isInfinite || (Number.isFinite(finiteLoopCount) && finiteLoopCount > loopCount)) {
       delay(() => {
         countUp.value?.reset()
         loopAnim()

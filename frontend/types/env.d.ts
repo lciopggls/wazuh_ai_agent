@@ -4,3 +4,11 @@ declare module "*.vue" {
   export default Component;
 }
 
+interface ImportMetaEnv {
+  readonly VITE_ENABLE_REPORT_SCORING?: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+
