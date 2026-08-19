@@ -8,6 +8,7 @@ import {
   type AgentSummary,
   type TestCaseSummary,
 } from "@/api/report_scoring";
+import { hasFinalAttributionReportHeading } from "./report-scoring/presentation";
 
 // --- 1. 配置与状态定义 ---
 // ⚡ 修改点：将 agentId 提升为从父组件传入，便于全局共享当前选中状态
@@ -59,7 +60,7 @@ const registrationError = ref("");
 function isReportContent(msg: any): boolean {
   if (msg.role !== 'assistant' || msg.node !== 'reply') return false;
   const content = getMessageContent(msg);
-  return content.includes('攻击溯源调查');
+  return hasFinalAttributionReportHeading(content);
 }
 
 /** 下载报告：调用后端 API 保存到指定目录 */

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import threading
 import uuid
 from collections.abc import Iterable
@@ -16,6 +17,7 @@ from .safe_paths import UnsafePathError, is_reparse_point, resolve_path_within_r
 
 MAX_REPORT_BYTES = 1024 * 1024
 ALLOWED_REPORT_EXTENSIONS = {".md", ".txt"}
+REPORT_ID_PATTERN = re.compile(r"rpt_[0-9a-f]{32}")
 
 
 def atomic_write(path: Path, content: bytes) -> None:
@@ -75,43 +77,49 @@ class ReportRepository:
         for report_dir in sorted(self.reports_root.iterdir(), key=lambda item: item.name):
             if not report_dir.is_dir() or self._is_reparse_point(report_dir):
                 continue
-            metadata_path = report_dir / "metadata.json"
-            if not metadata_path.is_file():
-                continue
-            try:
-                record = ReportRecord.model_validate_json(metadata_path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, ValidationError, ValueError) as exc:
-                raise ReportScoringError(
-                    "INVALID_REPORT_RECORD",
-                    "已保存的报告元数据无效",
-                    status_code=500,
-                    details={"report_id": report_dir.name},
-                ) from exc
-            report_path = self.runtime_root / record.stored_path
-            expected_report_path = report_dir / "report.md"
-            try:
-                resolved_report_path = resolve_path_within_root(
-                    report_path, self.runtime_root, strict=True
-                )
-            except UnsafePathError:
-                raise ReportScoringError(
-                    "INVALID_REPORT_RECORD",
-                    "已保存的报告路径无效",
-                    status_code=500,
-                    details={"report_id": record.report_id},
-                ) from None
-            if (
-                record.report_id != report_dir.name
-                or resolved_report_path != expected_report_path.resolve(strict=True)
-                or self._is_reparse_point(report_path)
-            ):
-                raise ReportScoringError(
-                    "INVALID_REPORT_RECORD",
-                    "已保存的报告记录与目录不一致",
-                    status_code=500,
-                    details={"report_id": report_dir.name},
-                )
-            self._register_loaded(record)
+            self._load_record_directory(report_dir)
+
+    def _load_record_directory(self, report_dir: Path) -> ReportRecord | None:
+        """Load one complete record, including reports written by another process."""
+
+        metadata_path = report_dir / "metadata.json"
+        if not metadata_path.is_file():
+            return None
+        try:
+            record = ReportRecord.model_validate_json(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValidationError, ValueError) as exc:
+            raise ReportScoringError(
+                "INVALID_REPORT_RECORD",
+                "已保存的报告元数据无效",
+                status_code=500,
+                details={"report_id": report_dir.name},
+            ) from exc
+        report_path = self.runtime_root / record.stored_path
+        expected_report_path = report_dir / "report.md"
+        try:
+            resolved_report_path = resolve_path_within_root(
+                report_path, self.runtime_root, strict=True
+            )
+        except UnsafePathError:
+            raise ReportScoringError(
+                "INVALID_REPORT_RECORD",
+                "已保存的报告路径无效",
+                status_code=500,
+                details={"report_id": record.report_id},
+            ) from None
+        if (
+            record.report_id != report_dir.name
+            or resolved_report_path != expected_report_path.resolve(strict=True)
+            or self._is_reparse_point(report_path)
+        ):
+            raise ReportScoringError(
+                "INVALID_REPORT_RECORD",
+                "已保存的报告记录与目录不一致",
+                status_code=500,
+                details={"report_id": report_dir.name},
+            )
+        self._register_loaded(record)
+        return record
 
     def _register_loaded(self, record: ReportRecord) -> None:
         if record.report_id in self._records:
@@ -298,10 +306,22 @@ class ReportRepository:
         )
 
     def get_report(self, report_id: str) -> ReportRecord:
-        try:
-            return self._records[report_id]
-        except KeyError:
-            raise ReportScoringError("REPORT_NOT_FOUND", "报告不存在", status_code=404) from None
+        with self._lock:
+            record = self._records.get(report_id)
+            if record is not None:
+                return record
+
+            # The API service and LangGraph Studio use separate processes. A
+            # long-lived Studio graph must observe reports registered after its
+            # repository instance was created.
+            if REPORT_ID_PATTERN.fullmatch(report_id):
+                report_dir = self.reports_root / report_id
+                if report_dir.is_dir() and not self._is_reparse_point(report_dir):
+                    record = self._load_record_directory(report_dir)
+                    if record is not None:
+                        return record
+
+        raise ReportScoringError("REPORT_NOT_FOUND", "报告不存在", status_code=404)
 
     def read_report(self, report_id: str) -> str:
         record = self.get_report(report_id)

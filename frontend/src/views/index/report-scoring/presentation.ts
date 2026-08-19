@@ -7,6 +7,13 @@ const statusLabels = {
   failed: "最近评分失败",
 } as const;
 
+const FINAL_ATTRIBUTION_REPORT_HEADING =
+  /^\s{0,3}#{1,6}\s+(?:\*\*)?(?:Wazuh\s+)?攻击溯源调查报告(?:\*\*)?\s*$/imu;
+
+export function hasFinalAttributionReportHeading(content: string): boolean {
+  return FINAL_ATTRIBUTION_REPORT_HEADING.test(content);
+}
+
 export function getReportScorePresentation(
   report: ReportRecord,
   latestScore: ScoreResult | null | undefined,
