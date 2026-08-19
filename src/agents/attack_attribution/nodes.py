@@ -35,8 +35,6 @@ from .utils import (
     load_skill,
 )
 
-# from .utils import extract_agent_ip_mapping
-
 logger = logging.getLogger(__name__)
 
 CURRENT_DIR = Path(__file__).parent
@@ -53,6 +51,9 @@ MITRE_KB_FILE_PATH = (
     / "attribution_skills"
     / "mitre_knowledgebase.md"
 )
+
+REPORTER_MAX_RETRIES = 1
+REPORTER_RETRY_DELAY_SECONDS = 2
 
 GRAPH_EXTRACTION_INSTRUCTIONS = """### GRAPH ENTITY & RELATION EXTRACTION (CRITICAL)
 
@@ -254,21 +255,6 @@ def attribution_decision_node(
     pending_type = state.get("pending_question_type")
     messages = state.get("messages", [])
 
-    # 多主机场景相关逻辑已按需求暂时注释/禁用
-    multi_host_updates = {}
-    # is_multi_host = state.get("is_multi_host")
-    # agent_ip_mapping = state.get("agent_ip_mapping") or {}
-    # if is_multi_host is None:
-    #     agent_ip_mapping = extract_agent_ip_mapping()
-    #     is_multi_host = len(agent_ip_mapping) > 1
-    # if is_multi_host and not agent_ip_mapping:
-    #     agent_ip_mapping = extract_agent_ip_mapping()
-    #
-    # multi_host_updates = {
-    #     "is_multi_host": is_multi_host,
-    #     "agent_ip_mapping": agent_ip_mapping,
-    # }
-
     last_message = messages[-1] if messages else None
     is_human = last_message.type == "human" if last_message else False
     user_text = last_message.content if is_human else ""
@@ -353,7 +339,6 @@ def attribution_decision_node(
 
             # 统一要求用户确认，不依赖 LLM 自主判断是否跳过确认
             return {
-                **multi_host_updates,
                 "investigation_clue": analysis.refined_clue,
                 "default_agent_id": analysis.agent_id,
                 "default_start_time": derived_start,
@@ -394,7 +379,6 @@ def attribution_decision_node(
 
                 if intent.upper() == "AGREE":
                     return {
-                        **multi_host_updates,
                         "is_clue_confirmed": True,
                         "pending_question_type": None,
                         "next_action_fromDecisionNode": {"target": "Attribution_Decision_Node"},
@@ -431,7 +415,6 @@ def attribution_decision_node(
                         analysis = parser.parse(getattr(repaired, "content", str(repaired)))
 
                     return {
-                        **multi_host_updates,
                         "investigation_clue": intent,
                         "default_agent_id": analysis.agent_id,
                         "default_start_time": analysis.start_time_utc8,
@@ -446,7 +429,6 @@ def attribution_decision_node(
 
     if is_clue_confirmed and requires_mitre_kb is None:
         return {
-            **multi_host_updates,
             **_start_analysis_timer(state),
             "requires_mitre_kb": True,
             "pending_question_type": None,
@@ -457,7 +439,6 @@ def attribution_decision_node(
 
     logger.info("Initialization complete. Routing to Attribution Planner Node.")
     return {
-        **multi_host_updates,
         **_start_analysis_timer(state),
         "next_action_fromDecisionNode": {"target": "Attribution_Planner_Node"},
         "next_action_fromAttributionPlannerNode": None,
@@ -478,12 +459,6 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
     executed_queries = state.get("executed_queries") or []
     default_start = state.get("default_start_time", "")
     default_end = state.get("default_end_time", "")
-    # 多主机场景相关逻辑已按需求暂时注释/禁用
-    # is_multi_host = state.get("is_multi_host")
-    # agent_ip_mapping = state.get("agent_ip_mapping") or {}
-    # agent_ip_mapping_str = (
-    #     json.dumps(agent_ip_mapping, ensure_ascii=False, indent=2) if agent_ip_mapping else "{}"
-    # )
 
     attribution_investigation_prompt: str = attribution_investigation_prompt_long
 
@@ -528,20 +503,6 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
   - **Rule 3 (Deduplication & State Awareness - ABSOLUTE MANDATORY)**: Before routing to this node, you MUST check the **MITRE Knowledge Base** section in the CURRENT CASE CONTEXT section. If the TID you intend to query is ALREADY listed there, you are STRICTLY FORBIDDEN from calling this node for that exact TID again.
 """
 
-    multi_host_instructions = ""
-    # if is_multi_host:
-    #     multi_host_instructions = f"""
-    #
-    # ### MULTI-HOST MODE
-    # Agent ID -> IP Mapping (JSON):
-    # {agent_ip_mapping_str}
-    #
-    # Rules:
-    # 1. If you need to pivot by an IP address and that IP exists in the mapping, you MUST translate it into the corresponding Agent ID and query that Agent ID.
-    # 2. If you see evidence that "Agent A" interacted with "IP B" and IP B maps to "Agent B", you MUST pivot and query Agent B in a subsequent step (do NOT stop after only querying Agent A).
-    # 3. You MUST NOT create dead loops. At most one cross-host pivot per planning turn.
-    # """
-
     system_prompt = (
         """\
 You are an elite Cybersecurity Chief Attribution Planner.
@@ -571,7 +532,6 @@ specific tasks to specialized subordinate nodes.
     professional forensic report template. Prescribing a conflicting format will corrupt
     the final report.
 {mitre_instructions}\
-{multi_host_instructions}\
 
 """
         + """\
@@ -631,7 +591,6 @@ intended query against this table before routing to Log_Retrieval_Node.
                 {
                     "messages": messages,
                     "mitre_instructions": mitre_instructions,
-                    "multi_host_instructions": multi_host_instructions,
                     "query_history": query_history,
                     "kb_str": kb_str,
                     "default_start": default_start,
@@ -907,9 +866,6 @@ def information_synthesizer_node(
     raw_logs = state.get("current_raw_logs")
     next_action = state.get("next_action_fromAttributionPlannerNode")
     mitre_kb = state.get("mitre_knowledge_base", {})
-    # 多主机场景相关逻辑已按需求暂时注释/禁用
-    # is_multi_host = state.get("is_multi_host")
-    # agent_ip_mapping = state.get("agent_ip_mapping") or {}
 
     instruction = (
         next_action.get("instruction", "未命名调查任务") if next_action else "未命名调查任务"
@@ -949,19 +905,6 @@ def information_synthesizer_node(
     parser = PydanticOutputParser(pydantic_object=findings_model)
     format_instructions = parser.get_format_instructions()
     graph_extraction_instructions = GRAPH_EXTRACTION_INSTRUCTIONS if visualization_enabled else ""
-
-    multi_host_instructions = ""
-    # if is_multi_host:
-    #     agent_ip_mapping_str = json.dumps(agent_ip_mapping, ensure_ascii=False, indent=2)
-    #     multi_host_instructions = f"""
-    #
-    # ### MULTI-HOST MODE (CRITICAL)
-    # You MUST use the Agent ID -> IP mapping to translate IP addresses into Agent IDs when describing cross-host activity. If an IP appears in the logs and exists in the mapping, you MUST explicitly mention the mapped Agent ID.
-    #
-    # ### MULTI-HOST CONTEXT
-    # - **Agent ID -> IP Mapping (JSON)**:
-    # {agent_ip_mapping_str}
-    # """
 
     system_prompt = """You are an elite Cybersecurity Information Synthesizer.
 Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, extract exact Indicators of Compromise (IOCs), and write a definitive tactical summary for the Chief Planner.
@@ -1005,7 +948,6 @@ Modern Windows architectures (e.g., Start Menu, UWP apps, Windows Terminal) rout
 - **Original Instruction**: {instruction}
 - **MITRE Knowledge**:
 {kb_str}
-{multi_host_instructions}
 
 {format_instructions}
 
@@ -1049,7 +991,6 @@ You MUST structure the `detailed_findings` field using the following generalized
             {
                 "instruction": instruction,
                 "kb_str": kb_str,
-                "multi_host_instructions": multi_host_instructions,
                 "graph_extraction_instructions": graph_extraction_instructions,
                 "logs_str": logs_str,
                 "format_instructions": format_instructions,
@@ -1203,9 +1144,6 @@ def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseCh
     mitre_kb = state.get("mitre_knowledge_base", {})
     messages = state.get("messages", [])
     initial_clue = state.get("investigation_clue", "未记录初始线索。")
-    # 多主机场景相关逻辑已按需求暂时注释/禁用
-    # is_multi_host = state.get("is_multi_host")
-    # agent_ip_mapping = state.get("agent_ip_mapping") or {}
 
     draft_instruction = (
         next_action.get(
@@ -1231,19 +1169,6 @@ def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseCh
         skill_data.get("content")
         or "Please generate a structured and professional forensic report."
     )
-
-    multi_host_instructions = ""
-    multi_host_section = ""
-    # if is_multi_host:
-    #     agent_ip_mapping_str = json.dumps(agent_ip_mapping, ensure_ascii=False, indent=2)
-    #     multi_host_instructions = f"""
-    #
-    # **CRITICAL RULE 6 (MULTI-HOST MAPPING)**: You MUST use the provided Agent ID -> IP mapping to translate any referenced IP addresses into the corresponding Agent IDs in your narrative (e.g., "10.0.0.2 (Agent 002)"). Do NOT invent mappings.
-    # """
-    #     multi_host_section = (
-    #         "### MULTI-HOST MODE\n"
-    #         f"Agent ID -> IP Mapping (JSON):\n{agent_ip_mapping_str}\n\n"
-    #     )
 
     reporter_system_prompt = """You are a highly professional Cyber Security Technical Writer.
 Your task is to take the raw investigation findings provided by the Forensic Detective and format them into a strict, highly polished Attack Attribution Investigation Report (攻击溯源调查报告).
@@ -1293,7 +1218,6 @@ excluded by this rule, it MUST NOT appear anywhere in the report.
 
 ### RESPONSE FORMAT (攻击溯源调查报告)
 {format_rules}
-{multi_host_instructions}
 """
 
     try:
@@ -1311,7 +1235,6 @@ excluded by this rule, it MUST NOT appear anywhere in the report.
     human_prompt = (
         "### INITIAL TRIGGER (THE STARTING POINT)\n"
         "{initial_clue}\n\n"
-        "{multi_host_section}"
         "### CHIEF PLANNER's DRAFT & NARRATIVE FOCUS\n"
         "{draft_instruction}\n\n"
         "### INVESTIGATION NOTES (THE HARD FACTS - DO NOT LOSE ANY DETAILS)\n"
@@ -1328,17 +1251,37 @@ excluded by this rule, it MUST NOT appear anywhere in the report.
     logger.info("Generating final report...")
     try:
         reporter_chain = prompt_template | model
-        final_report_msg = reporter_chain.invoke(
-            {
-                "format_rules": format_rules,
-                "initial_clue": initial_clue,
-                "multi_host_instructions": multi_host_instructions,
-                "multi_host_section": multi_host_section,
-                "draft_instruction": draft_instruction,
-                "investigation_notes": investigation_notes,
-                "kb_str": kb_str,
-            }
-        )
+        reporter_input = {
+            "format_rules": format_rules,
+            "initial_clue": initial_clue,
+            "draft_instruction": draft_instruction,
+            "investigation_notes": investigation_notes,
+            "kb_str": kb_str,
+        }
+
+        final_report_msg = None
+        for attempt in range(REPORTER_MAX_RETRIES + 1):
+            try:
+                final_report_msg = reporter_chain.invoke(reporter_input)
+                break
+            except httpx.RemoteProtocolError as e:
+                if attempt >= REPORTER_MAX_RETRIES:
+                    raise
+
+                remaining_retries = REPORTER_MAX_RETRIES - attempt
+                logger.warning(
+                    "Reporter model call failed with RemoteProtocolError on attempt "
+                    "%d/%d; retrying in %ds (%d retry remaining): %s",
+                    attempt + 1,
+                    REPORTER_MAX_RETRIES + 1,
+                    REPORTER_RETRY_DELAY_SECONDS,
+                    remaining_retries,
+                    e,
+                )
+                time.sleep(REPORTER_RETRY_DELAY_SECONDS)
+
+        if final_report_msg is None:
+            raise RuntimeError("Reporter model call completed without a response")
 
         elapsed_seconds = _finish_analysis_timer(state)
         logger.info("Final report generated successfully.")
@@ -1353,6 +1296,25 @@ excluded by this rule, it MUST NOT appear anywhere in the report.
                     content=format_attribution_report_message(
                         final_report_msg.content,
                         elapsed_seconds,
+                    )
+                )
+            ],
+        }
+    except httpx.RemoteProtocolError as e:
+        elapsed_seconds = _finish_analysis_timer(state)
+        logger.error(
+            "Error generating final report after %d retry: %s",
+            REPORTER_MAX_RETRIES,
+            e,
+        )
+        return {
+            "analysis_elapsed_seconds": elapsed_seconds,
+            "next_action_fromAttributionPlannerNode": None,
+            "messages": [
+                AIMessage(
+                    content=(
+                        "报告生成失败：模型连接异常，已重试 "
+                        f"{REPORTER_MAX_RETRIES} 次仍未成功。\n错误详情：{e}"
                     )
                 )
             ],
