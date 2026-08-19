@@ -1,0 +1,99 @@
+{
+  "_index": "wazuh-alerts-4.x-2026.08.05",
+  "_id": "NGcD0p8BWAEr461gdrcu",
+  "_version": 1,
+  "_seq_no": 125,
+  "_primary_term": 1,
+  "_source": {
+    "agent": {
+      "ip": "192.168.150.105",
+      "name": "win10_node2",
+      "id": "003"
+    },
+    "manager": {
+      "name": "hyb-virtual-machine"
+    },
+    "data": {
+      "win": {
+        "eventdata": {
+          "originalFileName": "reg.exe",
+          "image": "C:\\\\Windows\\\\System32\\\\reg.exe",
+          "product": "Microsoft® Windows® Operating System",
+          "parentProcessGuid": "{5fc1445e-340e-6a73-1904-000000001600}",
+          "description": "Registry Console Tool",
+          "logonGuid": "{5fc1445e-ecf8-6a72-2a9e-170000000000}",
+          "parentCommandLine": "powershell.exe  -NoLogo -NoProfile -ExecutionPolicy Bypass -File \\\"C:\\\\round2\\\\SIM-205\\\\runtime\\\\simulation.ps1\\\"",
+          "processGuid": "{5fc1445e-340e-6a73-1a04-000000001600}",
+          "logonId": "0x179e2a",
+          "parentProcessId": "1760",
+          "processId": "4996",
+          "currentDirectory": "C:\\\\Windows\\\\system32\\\\",
+          "utcTime": "2026-08-05 13:01:02.897",
+          "hashes": "SHA1=C0DB341DEFA8EF40C03ED769A9001D600E0F4DAE,MD5=227F63E1D9008B36BDBCC4B397780BE4,SHA256=C0E25B1F9B22DE445298C1E96DDFCEAD265CA030FA6626F61A4A4786CC4A3B7D,IMPHASH=BE482BE427FE212CFEF2CDA0E61F19AC",
+          "parentImage": "C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe",
+          "ruleName": "technique_id=T1012,technique_name=Query Registry",
+          "company": "Microsoft Corporation",
+          "commandLine": "\\\"C:\\\\Windows\\\\System32\\\\reg.exe\\\" add \\\"HKCU\\\\Software\\\\WazuhLab\\\\WAZUH-LAB-SIM-205-20260805T130102Z-1963EF3C\\\" /v \\\"Data\\\" /t REG_SZ /d \\\"UlVOX0lEPVdBWlVILUxBQi1TSU0tMjA1LTIwMjYwODA1VDEzMDEwMlotMTk2M0VGM0M=\\\" /f",
+          "integrityLevel": "High",
+          "fileVersion": "10.0.19041.1 (WinBuild.160101.0800)",
+          "user": "DESKTOP-IA2DN0I\\\\nika",
+          "terminalSessionId": "1",
+          "parentUser": "DESKTOP-IA2DN0I\\\\nika"
+        },
+        "system": {
+          "eventID": "1",
+          "keywords": "0x8000000000000000",
+          "providerGuid": "{5770385f-c22a-43e0-bf4c-06f5698ffbd9}",
+          "level": "4",
+          "channel": "Microsoft-Windows-Sysmon/Operational",
+          "opcode": "0",
+          "message": "\"Process Create:\r\nRuleName: technique_id=T1012,technique_name=Query Registry\r\nUtcTime: 2026-08-05 13:01:02.897\r\nProcessGuid: {5fc1445e-340e-6a73-1a04-000000001600}\r\nProcessId: 4996\r\nImage: C:\\Windows\\System32\\reg.exe\r\nFileVersion: 10.0.19041.1 (WinBuild.160101.0800)\r\nDescription: Registry Console Tool\r\nProduct: Microsoft® Windows® Operating System\r\nCompany: Microsoft Corporation\r\nOriginalFileName: reg.exe\r\nCommandLine: \"C:\\Windows\\System32\\reg.exe\" add \"HKCU\\Software\\WazuhLab\\WAZUH-LAB-SIM-205-20260805T130102Z-1963EF3C\" /v \"Data\" /t REG_SZ /d \"UlVOX0lEPVdBWlVILUxBQi1TSU0tMjA1LTIwMjYwODA1VDEzMDEwMlotMTk2M0VGM0M=\" /f\r\nCurrentDirectory: C:\\Windows\\system32\\\r\nUser: DESKTOP-IA2DN0I\\nika\r\nLogonGuid: {5fc1445e-ecf8-6a72-2a9e-170000000000}\r\nLogonId: 0x179E2A\r\nTerminalSessionId: 1\r\nIntegrityLevel: High\r\nHashes: SHA1=C0DB341DEFA8EF40C03ED769A9001D600E0F4DAE,MD5=227F63E1D9008B36BDBCC4B397780BE4,SHA256=C0E25B1F9B22DE445298C1E96DDFCEAD265CA030FA6626F61A4A4786CC4A3B7D,IMPHASH=BE482BE427FE212CFEF2CDA0E61F19AC\r\nParentProcessGuid: {5fc1445e-340e-6a73-1904-000000001600}\r\nParentProcessId: 1760\r\nParentImage: C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\r\nParentCommandLine: powershell.exe  -NoLogo -NoProfile -ExecutionPolicy Bypass -File \"C:\\round2\\SIM-205\\runtime\\simulation.ps1\"\r\nParentUser: DESKTOP-IA2DN0I\\nika\"",
+          "version": "5",
+          "systemTime": "2026-08-05T13:01:02.9045051Z",
+          "eventRecordID": "108799",
+          "threadID": "4520",
+          "computer": "DESKTOP-IA2DN0I",
+          "task": "1",
+          "processID": "2892",
+          "severityValue": "INFORMATION",
+          "providerName": "Microsoft-Windows-Sysmon"
+        }
+      }
+    },
+    "rule": {
+      "firedtimes": 1,
+      "mail": false,
+      "level": 10,
+      "description": "Value added to registry key has Base64-like pattern",
+      "groups": [
+        "sysmon",
+        "sysmon_eid1_detections",
+        "windows"
+      ],
+      "mitre": {
+        "technique": [
+          "Obfuscated Files or Information",
+          "Modify Registry"
+        ],
+        "id": [
+          "T1027",
+          "T1112"
+        ],
+        "tactic": [
+          "Defense Evasion"
+        ]
+      },
+      "id": "92041"
+    },
+    "decoder": {
+      "name": "windows_eventchannel"
+    },
+    "input": {
+      "type": "log"
+    },
+    "@timestamp": "2026-08-05T13:01:04.944Z",
+    "location": "EventChannel",
+    "id": "1785934864.1342919",
+    "timestamp": "2026-08-05T22:01:04.944+0900"
+  }
+}

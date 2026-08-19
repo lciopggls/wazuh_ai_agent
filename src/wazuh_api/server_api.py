@@ -14,7 +14,6 @@ port = settings.WAZUH_SERVER_API_PORT
 
 requests_headers = {
     "Content-Type": "application/json",
-    "Authorization": f"Bearer {wazuh_server_token()}",
 }
 
 

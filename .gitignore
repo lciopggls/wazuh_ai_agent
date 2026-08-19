@@ -3,6 +3,8 @@
 .langgraph_api
 .pytest_cache
 .venv
+.uv-cache/
+.pnpm-store/
 .vscode
 .ruff_cache
 .pytest_cache
@@ -21,3 +23,11 @@ src/knowledge_graph/data/vis_cache/
 src/knowledge_graph/input/*.txt
 src/knowledge_graph/input/*.pdf
 src/knowledge_graph/output/*.html
+
+# Report scoring runtime data (catalog and placeholders remain versioned)
+report_scoring_data/runtime/reports/*
+!report_scoring_data/runtime/reports/.gitkeep
+report_scoring_data/runtime/scoring_attempts/*
+!report_scoring_data/runtime/scoring_attempts/.gitkeep
+report_scoring_data/studio_inbox/*
+!report_scoring_data/studio_inbox/.gitkeep

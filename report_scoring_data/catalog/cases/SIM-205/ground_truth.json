@@ -1,0 +1,118 @@
+{
+  "schema_version": 3,
+  "visibility": "scoring_only",
+  "must_not_be_provided_to_tested_agent": true,
+  "scenario_id": "SIM-205",
+  "atomic_red_team_reference": {
+    "technique": "T1112",
+    "atomic_name": "Modify Registry tests using reg.exe and cleanup",
+    "source": "https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1112/T1112.md"
+  },
+  "primary_mitre": {
+    "id": "T1112",
+    "name": "Modify Registry"
+  },
+  "auxiliary_mitre": {
+    "id": "T1027",
+    "name": "Obfuscated Files or Information"
+  },
+  "candidate_wazuh_rule": {
+    "id": "92041",
+    "level": 10,
+    "description": "Value added to registry key has Base64-like pattern",
+    "status_verified": "enabled",
+    "rule_file": "0800-sysmon_id_1.xml"
+  },
+  "executed_behaviors": [
+    "The launcher creates a Base64 representation of the current RUN identifier.",
+    "reg.exe adds the string to a run-specific HKCU registry key.",
+    "A second reg.exe process queries the run-specific value.",
+    "The launcher measures the stored value and records a SHA256 hash."
+  ],
+  "process_chain": [
+    "trigger.bat -> powershell.exe -> reg.exe add",
+    "powershell.exe -> reg.exe query"
+  ],
+  "expected_artifacts": [
+    "HKCU\\Software\\WazuhLab\\<RUN_ID>\\Data",
+    "Registry add stdout and stderr files",
+    "Registry query stdout and stderr files",
+    "Runtime manifest"
+  ],
+  "explicit_non_actions": [
+    "The stored Base64 text is not decoded or executed.",
+    "No autorun, policy, service, security-control or system-wide registry key is modified.",
+    "No network, credential, account or persistence operation is performed."
+  ],
+  "negative_behavior_catalog": [
+    {
+      "behavior_id": "non_action_decode_execute",
+      "behavior": "The stored Base64 text is not decoded or executed."
+    },
+    {
+      "behavior_id": "non_action_autorun",
+      "behavior": "No autorun or other persistence entry is created or modified."
+    },
+    {
+      "behavior_id": "non_action_system_policy",
+      "behavior": "No system policy or system-wide registry setting is modified."
+    },
+    {
+      "behavior_id": "non_action_security_control",
+      "behavior": "No service or security-control setting is modified."
+    },
+    {
+      "behavior_id": "non_action_network_operation",
+      "behavior": "No network operation is performed."
+    },
+    {
+      "behavior_id": "non_action_credential_operation",
+      "behavior": "No credential or account operation is performed."
+    }
+  ],
+  "causal_boundaries": [
+    "The first reg.exe process writes the value; the second reg.exe process only queries it.",
+    "Base64-like data storage is not evidence that the data was executed.",
+    "The registry Event ID 13 and reg.exe process command line are separate corroborating evidence."
+  ],
+  "expected_sysmon_event_ids": [
+    1,
+    13
+  ],
+  "preferred_anchor": "A current-RUN wazuh-alerts-* event for rule 92041 with rule.id, rule.level and rule.description present.",
+  "correlation_requirements": [
+    "The alert command line must include the current RUN registry path.",
+    "The Event ID 13 targetObject must identify the current RUN key and value."
+  ],
+  "known_telemetry_gaps": [
+    "Registry value content visibility depends on Sysmon configuration and Wazuh field forwarding.",
+    "The accepted formal run has no run-specific Sysmon Event ID 13 for HKCU\\Software\\WazuhLab\\<RUN_ID>\\Data; nearby Event ID 13 records are unrelated BAM or system activity."
+  ],
+  "accepted_runtime_telemetry_override": {
+    "accepted": true,
+    "accepted_date": "2026-08-05",
+    "run_id": "WAZUH-LAB-SIM-205-20260805T130102Z-1963EF3C",
+    "missing_evidence": "Run-specific Sysmon Event ID 13 RegistryValueSet telemetry",
+    "scoring_effect": [
+      "Do not include the unavailable run-specific Event ID 13 in any tested agent's evidence-recall denominator.",
+      "Do not deduct timeline or evidence-completeness points merely because a report does not mention that unavailable event.",
+      "Do not use the runtime manifest to supplement evidence that was not visible to the tested agent.",
+      "A report that claims it found the run-specific Event ID 13 is factually inaccurate."
+    ],
+    "uniform_application": "Apply the same boundary to simple_agent, plus_agent and attack_attribution_agent across all three repetitions."
+  },
+  "qualification_gate": {
+    "index": "wazuh-alerts-*",
+    "minimum_rule_level": 10,
+    "required_rule_fields": [
+      "rule.id",
+      "rule.level",
+      "rule.description"
+    ],
+    "frontend_visibility_required": true
+  },
+  "cleanup_scope": [
+    "HKCU\\Software\\WazuhLab\\<RUN_ID>",
+    "%ProgramData%\\WazuhLab\\<RUN_ID>"
+  ]
+}
