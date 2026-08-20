@@ -6,6 +6,7 @@ declare module "*.vue" {
 
 interface ImportMetaEnv {
   readonly VITE_ENABLE_REPORT_SCORING?: string;
+  readonly VITE_ENABLE_TEST_MODULE?: string;
 }
 
 interface ImportMeta {
