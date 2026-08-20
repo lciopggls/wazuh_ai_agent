@@ -51,11 +51,18 @@ llm = ChatOpenAI(
 # 初始化智能体注册表
 def initialize_agents():
     # 延迟导入，避免报告保存/评分等独立接口在模块导入时连接 Wazuh。
-    from agents.agent import get_attack_attribution_agent, get_router_agent
+    from agents.agent import (
+        get_attack_attribution_agent,
+        get_baseline_agent_plus,
+        get_baseline_agent_simple,
+        get_router_agent,
+    )
 
     return {
         "router_agent": get_router_agent(llm, llm, llm, checkpointer=memory),
         "attack_attribution": get_attack_attribution_agent(llm, checkpointer=memory),
+        "baseline_agent_simple": get_baseline_agent_simple(llm, checkpointer=memory),
+        "baseline_agent_plus": get_baseline_agent_plus(llm, checkpointer=memory),
     }
 
 

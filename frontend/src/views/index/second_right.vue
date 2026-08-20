@@ -10,36 +10,58 @@ import {
 } from "@/api/report_scoring";
 import { hasFinalAttributionReportHeading } from "./report-scoring/presentation";
 
+type AgentOption = {
+  id: string;
+  name: string;
+};
+
+const DEFAULT_AGENT_OPTIONS: AgentOption[] = [
+  { id: "router_agent", name: "路由智能体" },
+];
+
 // --- 1. 配置与状态定义 ---
 // ⚡ 修改点：将 agentId 提升为从父组件传入，便于全局共享当前选中状态
 const props = defineProps<{
   sessions: Record<string, any[]>;
   agentId: string; 
+  agentOptions?: AgentOption[];
+  storageNamespace?: string;
+  enableReportScoringActions?: boolean;
 }>();
 
 const emit = defineEmits(['update:sessions', 'update:agentId']);
 
-// 智能体配置列表（当前仅保留路由智能体）
-const agents = [
-  { id: 'router_agent', name: '路由智能体' }
-];
+const agents = props.agentOptions?.length ? props.agentOptions : DEFAULT_AGENT_OPTIONS;
+const defaultAgentId = agents[0]?.id || "router_agent";
+const storageNamespace = props.storageNamespace || "production";
+const storageKeys = storageNamespace === "production"
+  ? {
+      sessions: "wazuh_all_sessions",
+      agentThreadMap: "wazuh_agent_thread_map",
+    }
+  : {
+      sessions: `wazuh_${storageNamespace}_sessions`,
+      agentThreadMap: `wazuh_${storageNamespace}_agent_thread_map`,
+    };
+const reportScoringActionsEnabled =
+  import.meta.env.VITE_ENABLE_REPORT_SCORING === 'true' &&
+  props.enableReportScoringActions === true;
 
 // 当前活跃智能体（基于 prop 的计算属性，切换时通知父组件）
 const currentAgentId = computed({
-  get: () => props.agentId || "router_agent",
+  get: () => props.agentId || defaultAgentId,
   set: (val: string) => emit('update:agentId', val)
 });
 
 // 智能体与线程 ID 的映射表（本地持久化）
 const agentThreadMap = ref<Record<string, string>>(
-  JSON.parse(localStorage.getItem('wazuh_agent_thread_map') || '{}')
+  JSON.parse(localStorage.getItem(storageKeys.agentThreadMap) || '{}')
 );
 
 const userInput = ref("");
 const isTyping = ref(false);
 const scrollRef = ref<HTMLElement | null>(null);
 const visualizationRequested = ref(false);
-const reportScoringEnabled = import.meta.env.VITE_ENABLE_REPORT_SCORING === 'true';
 
 // --- 报告下载状态追踪（按消息索引） ---
 const downloadStates = ref<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({});
@@ -58,9 +80,9 @@ const registrationError = ref("");
 
 /** 判断气泡内容是否为攻击溯源报告 */
 function isReportContent(msg: any): boolean {
-  if (msg.role !== 'assistant' || msg.node !== 'reply') return false;
+  if (msg.role !== 'assistant' || !['reply', 'final_report'].includes(msg.node)) return false;
   const content = getMessageContent(msg);
-  return hasFinalAttributionReportHeading(content);
+  return msg.node === 'final_report' || hasFinalAttributionReportHeading(content);
 }
 
 /** 下载报告：调用后端 API 保存到指定目录 */
@@ -296,7 +318,7 @@ const currentThreadId = computed({
   get: () => agentThreadMap.value[currentAgentId.value] || "",
   set: (newTid: string) => {
     agentThreadMap.value[currentAgentId.value] = newTid;
-    localStorage.setItem('wazuh_agent_thread_map', JSON.stringify(agentThreadMap.value));
+    localStorage.setItem(storageKeys.agentThreadMap, JSON.stringify(agentThreadMap.value));
   }
 });
 
@@ -324,7 +346,7 @@ onMounted(() => {
   });
 
   if (mapChanged) {
-    localStorage.setItem('wazuh_agent_thread_map', JSON.stringify(agentThreadMap.value));
+    localStorage.setItem(storageKeys.agentThreadMap, JSON.stringify(agentThreadMap.value));
   }
 });
 
@@ -332,7 +354,7 @@ onMounted(() => {
 watch(currentAgentId, (newAgentId) => {
   if (!agentThreadMap.value[newAgentId]) {
     initAgentThread(newAgentId);
-    localStorage.setItem('wazuh_agent_thread_map', JSON.stringify(agentThreadMap.value));
+    localStorage.setItem(storageKeys.agentThreadMap, JSON.stringify(agentThreadMap.value));
   }
 });
 
@@ -354,8 +376,8 @@ const clearAllHistory = () => {
   if (!window.confirm('⚠️ 确定要清除所有历史对话数据吗？\n\n此操作会永久删除所有线程的聊天记录，且不可恢复！')) return;
 
   // 清空 localStorage 中持久化的会话数据
-  localStorage.removeItem('wazuh_all_sessions');
-  localStorage.removeItem('wazuh_agent_thread_map');
+  localStorage.removeItem(storageKeys.sessions);
+  localStorage.removeItem(storageKeys.agentThreadMap);
 
   // 重置本地线程映射状态
   agentThreadMap.value = {};
@@ -365,7 +387,7 @@ const clearAllHistory = () => {
 
   // 为当前智能体创建一个新的默认线程，保证界面可继续使用
   initAgentThread(currentAgentId.value);
-  localStorage.setItem('wazuh_agent_thread_map', JSON.stringify(agentThreadMap.value));
+  localStorage.setItem(storageKeys.agentThreadMap, JSON.stringify(agentThreadMap.value));
 };
 
 // 💡 动态拼装 Markdown 代码块辅助函数
@@ -652,7 +674,7 @@ const scrollToBottom = async () => {
         <div class="content_box">
           <div v-if="msg.role === 'assistant' && msg.node" class="node_tag">
             <template v-if="msg.node === 'tools'">⚙️ 工具输出 (原始数据)</template>
-            <template v-else-if="msg.node === 'reply'">
+            <template v-else-if="msg.node === 'reply' || msg.node === 'final_report'">
               📋 提取结论
               <!-- 攻击溯源报告下载按钮 -->
               <button
@@ -678,7 +700,7 @@ const scrollToBottom = async () => {
                 <template v-else>💾 下载报告</template>
               </button>
               <button
-                v-if="reportScoringEnabled && isReportContent(msg)"
+                v-if="reportScoringActionsEnabled && isReportContent(msg)"
                 class="report_download_btn report_register_btn"
                 :class="{
                   'report_download_btn--saving': registrationStates[index] === 'saving',
