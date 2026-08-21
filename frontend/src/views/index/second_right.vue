@@ -30,6 +30,7 @@ const agentThreadMap = ref<Record<string, string>>(
 const userInput = ref("");
 const isTyping = ref(false);
 const scrollRef = ref<HTMLElement | null>(null);
+const visualizationRequested = ref(false);
 
 // --- 报告下载状态追踪（按消息索引） ---
 const downloadStates = ref<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({});
@@ -335,7 +336,12 @@ const handleSend = async () => {
     const response = await fetch('http://127.0.0.1:8001/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, thread_id: tid, agent_id: aid })
+      body: JSON.stringify({
+        message: msg,
+        thread_id: tid,
+        agent_id: aid,
+        visualization_requested: visualizationRequested.value,
+      })
     });
 
     if (!response.body) throw new Error("ReadableStream not supported");
@@ -537,6 +543,16 @@ const scrollToBottom = async () => {
             对话: {{ tid }}
           </option>
         </select>
+        <button
+          type="button"
+          :class="['visualization_toggle', { active: visualizationRequested }]"
+          :aria-pressed="visualizationRequested"
+          title="仅在新调查开始时读取该设置；调查开始后的切换不会影响当前调查。"
+          @click="visualizationRequested = !visualizationRequested"
+        >
+          <span aria-hidden="true">{{ visualizationRequested ? '●' : '○' }}</span>
+          启用可视化
+        </button>
         <button @click="createNewThread" class="new_btn">+ 新对话</button>
         <button @click="clearAllHistory" class="clear_btn">🗑 清除历史</button>
       </div>
@@ -728,6 +744,28 @@ const scrollToBottom = async () => {
         cursor: pointer;
         border-radius: 4px;
         &:hover { background: rgba(29, 78, 216, 0.05); }
+      }
+
+      .visualization_toggle {
+        background: transparent;
+        border: 1px solid #6b7280;
+        color: #4b5563;
+        padding: 4px 10px;
+        font-size: 12px;
+        cursor: pointer;
+        border-radius: 4px;
+        transition: 0.2s;
+
+        &.active {
+          border-color: #1d4ed8;
+          color: #1d4ed8;
+          background: rgba(29, 78, 216, 0.05);
+        }
+
+        &:hover {
+          border-color: #1d4ed8;
+          color: #1d4ed8;
+        }
       }
 
       .clear_btn {

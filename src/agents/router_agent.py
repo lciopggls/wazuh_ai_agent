@@ -31,6 +31,20 @@ def _get_thread_id() -> str:
     return "default"
 
 
+def _get_visualization_requested() -> bool:
+    """Read the frontend preference from run config without involving the router model."""
+    try:
+        config = get_config()
+    except RuntimeError:
+        return False
+    if not isinstance(config, dict):
+        return False
+    configurable = config.get("configurable", {})
+    if not isinstance(configurable, dict):
+        return False
+    return bool(configurable.get("visualization_requested", False))
+
+
 def _get_thread_session(
     session_cache_by_thread: dict[str, dict[str, Any]],
     thread_id: str,
@@ -163,6 +177,9 @@ def _invoke_specialist(
     next_state = dict(current_state or {})
     existing_messages = list(next_state.get("messages", []))
 
+    if specialist_name == "attack_attribution":
+        next_state["visualization_requested"] = _get_visualization_requested()
+
     plan_summary = session.get("latest_plan_summary")
     plan_steps = session.get("latest_plan_steps") or []
     if plan_summary:
@@ -209,11 +226,19 @@ def _invoke_specialist(
                 "Completed attack attribution state is missing analysis_elapsed_seconds"
             )
         reply = format_attribution_report_message(final_report, analysis_elapsed_seconds)
-        artifacts = {
-            "svg_chart": result.get("svg_chart"),
-            "attack_abstract": result.get("attack_abstract"),
-            "attack_graph": result.get("attack_graph"),
-        }
+        visualization_enabled = result.get("visualization_enabled_for_investigation")
+        if visualization_enabled is None:
+            # 兼容升级前已存在、尚未写入锁定字段的调查状态。
+            visualization_enabled = any(
+                result.get(key) is not None
+                for key in ("svg_chart", "attack_abstract", "attack_graph")
+            )
+        if visualization_enabled:
+            artifacts = {
+                "svg_chart": result.get("svg_chart"),
+                "attack_abstract": result.get("attack_abstract"),
+                "attack_graph": result.get("attack_graph"),
+            }
 
     return json.dumps(
         {

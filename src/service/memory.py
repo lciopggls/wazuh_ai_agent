@@ -4,19 +4,20 @@ import shutil
 import subprocess
 import sys
 import uuid
-from datetime import datetime
 from collections.abc import AsyncGenerator
+from datetime import datetime
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 
 # LangChain / LangGraph 导入
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
+from pydantic import BaseModel
+
 from core.config import settings
 
 # 假设的项目结构
@@ -55,6 +56,7 @@ class ChatInput(BaseModel):
     message: str
     thread_id: str
     agent_id: str = "rule_generator"
+    visualization_requested: bool = False
 
 
 class SaveReportInput(BaseModel):
@@ -71,8 +73,15 @@ async def event_generator(data: ChatInput) -> AsyncGenerator[str, None]:
         yield f"data: {json.dumps({'error': 'Agent not found'})}\n\n"
         return
 
-    config = {"configurable": {"thread_id": data.thread_id}}
+    config = {
+        "configurable": {
+            "thread_id": data.thread_id,
+            "visualization_requested": data.visualization_requested,
+        }
+    }
     input_state = {"messages": [{"role": "user", "content": data.message}]}
+    if data.agent_id == "attack_attribution":
+        input_state["visualization_requested"] = data.visualization_requested
 
     try:
         # 使用 stream_mode="updates" 模式
@@ -167,6 +176,7 @@ async def save_report(data: SaveReportInput):
 # 知识图谱 API
 # ──────────────────────────────────────────────
 
+
 @app.get("/api/knowledge-graph/gallery")
 async def kg_list_gallery():
     """列出 gallery 目录下所有 HTML 图谱文件"""
@@ -176,11 +186,13 @@ async def kg_list_gallery():
         for f in sorted(os.listdir(KG_GALLERY_DIR)):
             if f.endswith(".html"):
                 fpath = os.path.join(KG_GALLERY_DIR, f)
-                files.append({
-                    "name": f,
-                    "size": os.path.getsize(fpath),
-                    "mtime": os.path.getmtime(fpath),
-                })
+                files.append(
+                    {
+                        "name": f,
+                        "size": os.path.getsize(fpath),
+                        "mtime": os.path.getmtime(fpath),
+                    }
+                )
         return {"status": "ok", "files": files}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -193,7 +205,7 @@ async def kg_get_gallery_file(filename: str):
     fpath = os.path.join(KG_GALLERY_DIR, safe_name)
     if not os.path.isfile(fpath):
         raise HTTPException(status_code=404, detail="文件不存在")
-    with open(fpath, "r", encoding="utf-8") as f:
+    with open(fpath, encoding="utf-8") as f:
         content = f.read()
     return {"status": "ok", "name": safe_name, "content": content}
 
@@ -221,11 +233,13 @@ async def kg_list_output():
         for f in sorted(os.listdir(KG_OUTPUT_DIR)):
             if f.endswith(".html"):
                 fpath = os.path.join(KG_OUTPUT_DIR, f)
-                files.append({
-                    "name": f,
-                    "size": os.path.getsize(fpath),
-                    "mtime": os.path.getmtime(fpath),
-                })
+                files.append(
+                    {
+                        "name": f,
+                        "size": os.path.getsize(fpath),
+                        "mtime": os.path.getmtime(fpath),
+                    }
+                )
         return {"status": "ok", "files": files}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -238,7 +252,7 @@ async def kg_get_output_file(filename: str):
     fpath = os.path.join(KG_OUTPUT_DIR, safe_name)
     if not os.path.isfile(fpath):
         raise HTTPException(status_code=404, detail="文件不存在")
-    with open(fpath, "r", encoding="utf-8") as f:
+    with open(fpath, encoding="utf-8") as f:
         content = f.read()
     return {"status": "ok", "name": safe_name, "content": content}
 
@@ -286,16 +300,17 @@ async def kg_generate():
             raise HTTPException(status_code=500, detail=f"脚本不存在: {script_path}")
 
         # 检查 input 目录是否有支持的文件
-        input_files = [
-            f for f in os.listdir(KG_INPUT_DIR)
-            if f.endswith((".txt", ".md", ".pdf"))
-        ]
+        input_files = [f for f in os.listdir(KG_INPUT_DIR) if f.endswith((".txt", ".md", ".pdf"))]
         if not input_files:
-            raise HTTPException(status_code=400, detail="input 目录中没有可处理的文件（仅支持 txt / pdf / md）")
+            raise HTTPException(
+                status_code=400, detail="input 目录中没有可处理的文件（仅支持 txt / pdf / md）"
+            )
 
         result = subprocess.run(
             [sys.executable, "-B", script_path],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True,
+            text=True,
+            timeout=300,
             cwd=_KG_ROOT,
         )
 
@@ -308,10 +323,7 @@ async def kg_generate():
             }
 
         # 收集 output 文件列表
-        output_files = [
-            f for f in sorted(os.listdir(KG_OUTPUT_DIR))
-            if f.endswith(".html")
-        ]
+        output_files = [f for f in sorted(os.listdir(KG_OUTPUT_DIR)) if f.endswith(".html")]
 
         return {
             "status": "ok",

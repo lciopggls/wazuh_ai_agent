@@ -6,6 +6,7 @@ import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from pydantic import Field
 
 from agents.attack_attribution import nodes as attribution_nodes
 from agents.attack_attribution.utils import format_attribution_report_message
@@ -14,8 +15,10 @@ from agents.attack_attribution.utils import format_attribution_report_message
 class StaticReportModel(BaseChatModel):
     response: str = "纯报告内容"
     failure: str | None = None
+    captured_messages: list = Field(default_factory=list, exclude=True)
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.captured_messages.append(messages)
         if self.failure:
             raise RuntimeError(self.failure)
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=self.response))])
@@ -197,3 +200,67 @@ def test_reporter_requires_analysis_timer():
             {},
             StaticReportModel(),
         )
+
+
+def test_synthesizer_does_not_treat_unknown_calltrace_as_injection():
+    model = StaticReportModel(
+        response=json.dumps(
+            {
+                "task_description": "Inspect process access.",
+                "detailed_findings": "Observed one process-access event.",
+                "graph_entities": [],
+                "graph_relations": [],
+            }
+        )
+    )
+
+    attribution_nodes.information_synthesizer_node(
+        {
+            "current_raw_logs": [{"callTrace": "UNKNOWN(0000000000000000)"}],
+            "next_action_fromAttributionPlannerNode": {"instruction": "Inspect process access."},
+            "mitre_knowledge_base": {},
+        },
+        {},
+        model,
+    )
+
+    system_prompt = model.captured_messages[0][0].content
+    assert (
+        "An `UNKNOWN` or unmapped frame alone MUST NOT be described as unbacked "
+        "memory, shellcode, process injection, or a malicious IOC"
+    ) in system_prompt
+    assert "does not prove that the access event was process injection" in system_prompt
+    assert "This is critical for identifying memory injection and shellcode" not in system_prompt
+    assert "Classify as malicious if the Source's `callTrace`" not in system_prompt
+
+
+def test_attack_graph_layout_completes_with_multiple_cycles():
+    graph_data = {
+        "entities": [
+            {
+                "id": entity_id,
+                "type": "process",
+                "name": f"Process {entity_id}",
+                "properties": {},
+            }
+            for entity_id in ("a", "b", "c", "d", "e")
+        ],
+        "relations": [
+            {"source": "a", "target": "b", "relation": "create"},
+            {"source": "b", "target": "a", "relation": "create"},
+            {"source": "c", "target": "d", "relation": "create"},
+            {"source": "d", "target": "c", "relation": "create"},
+            {"source": "c", "target": "e", "relation": "create"},
+            {"source": "e", "target": "c", "relation": "create"},
+            {"source": "d", "target": "e", "relation": "create"},
+            {"source": "e", "target": "d", "relation": "create"},
+        ],
+    }
+    state = {"attack_graph_data": graph_data}
+
+    result = attribution_nodes.attack_graph_node(state, {}, StaticReportModel())
+
+    assert result["attack_graph"].startswith("<svg")
+    for entity_id in ("a", "b", "c", "d", "e"):
+        assert f"Process {entity_id}" in result["attack_graph"]
+    assert state["attack_graph_data"] == graph_data

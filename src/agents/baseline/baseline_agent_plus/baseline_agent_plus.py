@@ -3,11 +3,11 @@ from functools import partial
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import END, StateGraph
 
-from agents.baseline_agent import nodes
-from agents.baseline_agent.state import BaselineState
+from agents.baseline.baseline_agent_plus import nodes
+from agents.baseline.baseline_agent_plus.state import BaselinePlusState
 
 
-def route_after_prepare(state: BaselineState) -> str:
+def route_after_prepare(state: BaselinePlusState) -> str:
     if state.get("error"):
         return "final_report"
     if state.get("archive_error") or state.get("total_logs", 0) == 0:
@@ -15,13 +15,13 @@ def route_after_prepare(state: BaselineState) -> str:
     return "fetch_batch"
 
 
-def route_after_fetch(state: BaselineState) -> str:
+def route_after_fetch(state: BaselinePlusState) -> str:
     if state.get("archive_error") or not state.get("current_raw_logs"):
         return "fetch_alerts"
     return "analyze_batch"
 
 
-def route_after_analysis(state: BaselineState) -> str:
+def route_after_analysis(state: BaselinePlusState) -> str:
     if state.get("archive_error"):
         return "fetch_alerts"
     if (
@@ -32,15 +32,15 @@ def route_after_analysis(state: BaselineState) -> str:
     return "fetch_batch"
 
 
-def route_after_alert_fetch(state: BaselineState) -> str:
+def route_after_alert_fetch(state: BaselinePlusState) -> str:
     if state.get("alert_logs"):
         return "analyze_alerts"
     return "final_report"
 
 
-def get_baseline_agent(model: BaseChatModel, checkpointer=None):
-    """创建按固定时间范围顺序分析全部原始日志的攻击溯源基线。"""
-    graph = StateGraph(BaselineState)
+def get_baseline_agent_plus(model: BaseChatModel, checkpointer=None):
+    """创建带附近告警补充的固定窗口攻击溯源基线。"""
+    graph = StateGraph(BaselinePlusState)
     graph.add_node("prepare_investigation", nodes.prepare_investigation_node)
     graph.add_node("fetch_batch", nodes.fetch_batch_node)
     graph.add_node("analyze_batch", partial(nodes.analyze_batch_node, model=model))

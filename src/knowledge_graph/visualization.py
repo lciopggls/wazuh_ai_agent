@@ -435,4 +435,3 @@ def draw_pics():
 if __name__ == '__main__':
     # Auto-process all .json files in visualization/vis_cache/
     draw_pics()
-    

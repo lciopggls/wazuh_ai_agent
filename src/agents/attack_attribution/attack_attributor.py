@@ -72,6 +72,13 @@ def route_attribution_planner(state: AttributionState) -> str:
         return END
 
 
+def route_reporter(state: AttributionState) -> str:
+    """Only enter presentation post-processing when this investigation enabled it."""
+    if state.get("visualization_enabled_for_investigation", False):
+        return "Attack_Abstract_Node"
+    return END
+
+
 # 构建图
 def get_attack_attribution_agent(model: BaseChatModel, checkpointer=None):
     """
@@ -139,7 +146,14 @@ def get_attack_attribution_agent(model: BaseChatModel, checkpointer=None):
     graph.add_edge("Log_Retrieval_Node", "Information_Synthesizer_Node")
     graph.add_edge("Information_Synthesizer_Node", "Attribution_Planner_Node")
     graph.add_edge("MITRE_Expert_Node", "Attribution_Planner_Node")
-    graph.add_edge("Reporter_Node", "Attack_Abstract_Node")
+    graph.add_conditional_edges(
+        "Reporter_Node",
+        route_reporter,
+        {
+            "Attack_Abstract_Node": "Attack_Abstract_Node",
+            END: END,
+        },
+    )
     graph.add_edge("Attack_Abstract_Node", "Visualization_Node")
     graph.add_edge("Visualization_Node", "Graph_Filter_Node")
     graph.add_edge("Graph_Filter_Node", "Attack_Graph_Node")

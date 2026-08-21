@@ -1,83 +1,12 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from wazuh_api.indexer_api import agent_alerts, agent_archives
+from wazuh_api.indexer_api import agent_alerts
 
-DEFAULT_BATCH_SIZE = 10
-MAX_BATCH_SIZE = 10
 MAX_ALERTS = 10
-MIN_ALERT_LEVEL = 9
-
-
-def _time_query(agent_id: str, start_time: str, end_time: str) -> dict[str, Any]:
-    return {
-        "bool": {
-            "filter": [
-                {"term": {"agent.id": agent_id}},
-                {
-                    "range": {
-                        "timestamp": {
-                            "gte": start_time,
-                            "lte": end_time,
-                        }
-                    }
-                },
-            ]
-        }
-    }
-
-
-def count_raw_archives_by_time(
-    *,
-    agent_id: str,
-    start_time: str,
-    end_time: str,
-) -> int:
-    """统计指定 Agent 和固定时间范围内的原始归档日志数量。"""
-    response = agent_archives(
-        agent_id=agent_id,
-        payload={
-            "size": 0,
-            "track_total_hits": True,
-            "query": _time_query(agent_id, start_time, end_time),
-        },
-    )
-    total = response.get("hits", {}).get("total", 0)
-    if isinstance(total, dict):
-        return int(total.get("value", 0))
-    return int(total)
-
-
-def get_raw_archives_by_time(
-    *,
-    agent_id: str,
-    start_time: str,
-    end_time: str,
-    search_after: list[Any] | None = None,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-) -> dict[str, Any]:
-    """按时间升序返回一批未经字段精简的 Wazuh Archives 原始日志。"""
-    result_size = max(1, min(batch_size, MAX_BATCH_SIZE))
-    payload: dict[str, Any] = {
-        "size": result_size,
-        "track_total_hits": False,
-        "query": _time_query(agent_id, start_time, end_time),
-        "sort": [
-            {"timestamp": {"order": "asc"}},
-            {"_id": {"order": "asc"}},
-        ],
-    }
-    if search_after is not None:
-        payload["search_after"] = search_after
-
-    response = agent_archives(agent_id=agent_id, payload=payload)
-    hits = response.get("hits", {}).get("hits", [])
-    next_search_after = hits[-1].get("sort") if hits else None
-
-    return {
-        "logs": hits,
-        "search_after": next_search_after,
-    }
+MIN_TARGET_ALERTS = 5
+HIGH_ALERT_LEVEL = 9
+SUPPLEMENT_MAX_LEVEL = 8
 
 
 def _alert_time_query(
@@ -87,6 +16,7 @@ def _alert_time_query(
     *,
     include_start: bool,
     include_end: bool,
+    level_range: dict[str, int],
 ) -> dict[str, Any]:
     time_range = {
         "gte" if include_start else "gt": start_time,
@@ -97,7 +27,7 @@ def _alert_time_query(
             "filter": [
                 {"term": {"agent.id": agent_id}},
                 {"range": {"timestamp": time_range}},
-                {"range": {"rule.level": {"gte": MIN_ALERT_LEVEL}}},
+                {"range": {"rule.level": level_range}},
             ]
         }
     }
@@ -123,16 +53,17 @@ def _alert_timestamp(alert: dict[str, Any]) -> datetime:
     return datetime.max.replace(tzinfo=UTC)
 
 
-def get_high_level_alerts_near_time(
+def _get_alert_candidates(
     *,
     agent_id: str,
     anchor_time: str,
     start_time: str,
     end_time: str,
+    level_range: dict[str, int],
+    size: int,
 ) -> list[dict[str, Any]]:
-    """选择初始时间附近最多十条高等级 Wazuh 告警。"""
     before_payload = {
-        "size": MAX_ALERTS,
+        "size": size,
         "track_total_hits": False,
         "query": _alert_time_query(
             agent_id,
@@ -140,6 +71,7 @@ def get_high_level_alerts_near_time(
             anchor_time,
             include_start=True,
             include_end=True,
+            level_range=level_range,
         ),
         "sort": [
             {"rule.level": {"order": "desc"}},
@@ -148,7 +80,7 @@ def get_high_level_alerts_near_time(
         ],
     }
     after_payload = {
-        "size": MAX_ALERTS,
+        "size": size,
         "track_total_hits": False,
         "query": _alert_time_query(
             agent_id,
@@ -156,6 +88,7 @@ def get_high_level_alerts_near_time(
             end_time,
             include_start=False,
             include_end=True,
+            level_range=level_range,
         ),
         "sort": [
             {"rule.level": {"order": "desc"}},
@@ -166,24 +99,81 @@ def get_high_level_alerts_near_time(
 
     before_response = agent_alerts(agent_id=agent_id, payload=before_payload)
     after_response = agent_alerts(agent_id=agent_id, payload=after_payload)
-    candidates = [
+    return [
         *before_response.get("hits", {}).get("hits", []),
         *after_response.get("hits", {}).get("hits", []),
     ]
-    anchor = datetime.fromisoformat(anchor_time)
 
-    selected = sorted(
+
+def _select_alerts(
+    candidates: list[dict[str, Any]],
+    *,
+    anchor: datetime,
+    limit: int,
+) -> list[dict[str, Any]]:
+    return sorted(
         candidates,
         key=lambda alert: (
             -_alert_level(alert),
             abs((_alert_timestamp(alert) - anchor).total_seconds()),
             str(alert.get("_id", "")),
         ),
-    )[:MAX_ALERTS]
+    )[:limit]
+
+
+def _sort_alerts_by_time(alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
-        selected,
+        alerts,
         key=lambda alert: (
             _alert_timestamp(alert),
             str(alert.get("_id", "")),
         ),
     )
+
+
+def get_nearby_alerts(
+    *,
+    agent_id: str,
+    anchor_time: str,
+    start_time: str,
+    end_time: str,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """优先选择高等级告警，不足五条时使用较低等级告警补足。"""
+    anchor = datetime.fromisoformat(anchor_time)
+    high_level_candidates = _get_alert_candidates(
+        agent_id=agent_id,
+        anchor_time=anchor_time,
+        start_time=start_time,
+        end_time=end_time,
+        level_range={"gte": HIGH_ALERT_LEVEL},
+        size=MAX_ALERTS,
+    )
+    high_level_alerts = _select_alerts(
+        high_level_candidates,
+        anchor=anchor,
+        limit=MAX_ALERTS,
+    )
+    if len(high_level_alerts) >= MIN_TARGET_ALERTS:
+        return _sort_alerts_by_time(high_level_alerts), None
+
+    try:
+        supplemental_candidates = _get_alert_candidates(
+            agent_id=agent_id,
+            anchor_time=anchor_time,
+            start_time=start_time,
+            end_time=end_time,
+            level_range={"lte": SUPPLEMENT_MAX_LEVEL},
+            size=MIN_TARGET_ALERTS,
+        )
+    except Exception as exc:
+        return (
+            _sort_alerts_by_time(high_level_alerts),
+            f"低等级告警补充失败：{exc}",
+        )
+
+    supplemental_alerts = _select_alerts(
+        supplemental_candidates,
+        anchor=anchor,
+        limit=MIN_TARGET_ALERTS - len(high_level_alerts),
+    )
+    return _sort_alerts_by_time([*high_level_alerts, *supplemental_alerts]), None
