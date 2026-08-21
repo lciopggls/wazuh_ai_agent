@@ -198,6 +198,20 @@ async def kg_get_gallery_file(filename: str):
     return {"status": "ok", "name": safe_name, "content": content}
 
 
+@app.delete("/api/knowledge-graph/gallery/{filename:path}")
+async def kg_delete_gallery_file(filename: str):
+    """删除 gallery 中指定的图谱文件"""
+    safe_name = Path(filename).name
+    fpath = os.path.join(KG_GALLERY_DIR, safe_name)
+    if not os.path.isfile(fpath):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    try:
+        os.remove(fpath)
+        return {"status": "ok", "message": f"文件 {safe_name} 已删除"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/knowledge-graph/output")
 async def kg_list_output():
     """列出 output 目录下所有生成的 HTML 图谱文件"""

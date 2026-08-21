@@ -221,21 +221,13 @@ def attack_graph_template(request_text, template_path=attack_graph_dir):
     # add 'Demonstration n:'
     demonstrations = [f"Demonstration {i+1}: {demo}" for i, demo in enumerate(demonstrations)]
     system_content = system_background + "\n" + "\n".join(rules) + "\n" + "\n".join(demonstrations)
-
+    example_request = load_txt(op.join(template_path, "example_request_1.txt"))
+    example_response = load_txt(op.join(template_path, "example_response_1.txt"))
     messages = [
         {"role": "system", "content": system_content},
-<<<<<<< HEAD
         {"role": "user", "content": example_request},
         {"role": "assistant", "content": example_response},
         {"role": "user", "content": "Please extract the  please extract the security triplets in the artciles below:\n{}\nExtracted triplets are:".format(request_text)}
-=======
-        # {"role": "user", "content": example_request},
-        # {"role": "assistant", "content": example_response},
-        {
-            "role": "user",
-            "content": f"Please extract the  please extract the security triplets in the artciles below:\n{request_text}\nExtracted triplets are:",
-        },
->>>>>>> origin/master
     ]
     return messages, output_format
 
@@ -389,7 +381,6 @@ def mitre_technique_label_template(
         if len(tech["examples"]) == 0:
             continue
         # select the first example as the prompt example
-<<<<<<< HEAD
         try:
             sents = nltk.sent_tokenize(tech['examples'][0]['description']) # split the example paragraph into sents
         except LookupError:
@@ -397,12 +388,6 @@ def mitre_technique_label_template(
             import re as _re
             sents = _re.split(r'(?<=[.!?])\s+', tech['examples'][0]['description'])
         tag = '{}-{}'.format(tech['id'], tech['name'])
-=======
-        sents = nltk.sent_tokenize(
-            tech["examples"][0]["description"]
-        )  # split the example paragraph into sents
-        tag = "{}-{}".format(tech["id"], tech["name"])
->>>>>>> origin/master
         for sent in sents:
             examples.append({"tag": tag, "text": sent})
     # add negative examples
@@ -692,21 +677,13 @@ def stage_state_pool_summarization_template(
     # add 'Demonstration n:'
     demonstrations = [f"Demonstration {i+1}: {demo}" for i, demo in enumerate(demonstrations)]
     system_content = system_background + "\n" + "\n".join(rules) + "\n" + "\n".join(demonstrations)
-
+    example_request = load_txt(op.join(template_path, "example_request_1.txt"))
+    example_response = load_txt(op.join(template_path, "example_response_1.txt"))
     messages = [
         {"role": "system", "content": system_content},
-<<<<<<< HEAD
         {"role": "user", "content": example_request},
         {"role": "assistant", "content": example_response},
         {"role": "user", "content": "Please summarize the article below:\n{}\nThe summary is:".format(request_text)}
-=======
-        # {"role": "user", "content": example_request},
-        # {"role": "assistant", "content": example_response},
-        {
-            "role": "user",
-            "content": f"Please summarize the article below:\n{request_text}\nThe summary is:",
-        },
->>>>>>> origin/master
     ]
     return messages
 
@@ -792,18 +769,13 @@ def rewriting_template(request_text, mitre, template_path=rewrite_dir):
     # add 'Rule n:'
     rules = [f"Rule {i+1}: {rule}" for i, rule in enumerate(rules)]
     system_content = system_background + "\n" + "\n".join(rules)
-
+    example_request = load_txt(op.join(template_path, "example_request_1.txt"))
+    example_response = load_txt(op.join(template_path, "example_response_1.txt"))
     messages = [
         {"role": "system", "content": system_content},
-<<<<<<< HEAD
         {"role": "user", "content": example_request},
         {"role": "assistant", "content": example_response},
         {"role": "user", "content": "article:\n{}".format(request_text)}
-=======
-        # {"role": "user", "content": example_request},
-        # {"role": "assistant", "content": example_response},
-        {"role": "user", "content": f"article:\n{request_text}"},
->>>>>>> origin/master
     ]
     return messages, output_format
 
@@ -838,18 +810,13 @@ def labeled_text_template(request_text, template_path=label_entities_dir):
     # add 'Rule n:'
     rules = [f"Rule {i+1}: {rule}" for i, rule in enumerate(rules)]
     system_content = system_background + "\n" + "\n".join(rules)
-
+    example_request = load_txt(op.join(template_path, "example_request_1.txt"))
+    example_response = load_txt(op.join(template_path, "example_response_1.txt"))
     messages = [
         {"role": "system", "content": system_content},
-<<<<<<< HEAD
         {"role": "user", "content": example_request},
         {"role": "assistant", "content": example_response},
         {"role": "user", "content": "article:\n{}".format(request_text)}
-=======
-        # {"role": "user", "content": example_request},
-        # {"role": "assistant", "content": example_response},
-        {"role": "user", "content": f"article:\n{request_text}"},
->>>>>>> origin/master
     ]
     return messages, output_format
 
