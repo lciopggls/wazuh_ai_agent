@@ -250,7 +250,7 @@ def get_networkx(json_dict, size_multipler=1.0):
     outside_length = []  # length of between the most outside event nodes and x-axis
     # some params
     base_vertical = 80 * size_multipler
-    base_horizontal = 1800 / len(sorted_sentence_num_event_dict.keys()) * size_multipler
+    base_horizontal = max(1800 / len(sorted_sentence_num_event_dict.keys()), 100) * size_multipler
     reassign_horizontal = base_horizontal / 2
     vertical_margin = 20 * size_multipler  # margin between event and enitities
     # put event nodes in a sequential manner
@@ -338,7 +338,8 @@ def get_networkx(json_dict, size_multipler=1.0):
     total_horizontal = max(base_horizontal * (len(sorted_sentence_num_event_dict.keys()) - 1), 0)
     if count <= 1:
         return {"graph": G, "pos": pos}
-    tech_horizontal_base = total_horizontal / (count - 1)
+    tactic_min_spacing = 210  # 战术节点宽度 160，加上至少 50 的间距
+    tech_horizontal_base = max(total_horizontal / (count - 1), tactic_min_spacing)
     TTP_base_vertical = base_vertical * 0.8
     # add tact tech pos
     for tact in sorted_TTP_labels:
@@ -402,10 +403,12 @@ def draw_pyvis(
             n["label"] = n["label"]
             n["shape"] = "box"
             n["color"] = "#FF6347"
+            n["widthConstraint"] = {"minimum": 160, "maximum": 160}
         elif n["type"] == "technique":
             n["label"] = n["caption"]
             n["shape"] = "box"
             n["color"] = "#FFD700"
+            n["widthConstraint"] = {"minimum": 100, "maximum": 100}
         elif n["type"] == "entity":
             successors = list(nx_graph.successors(n["id"]))
             if len(successors) > 0:
@@ -448,12 +451,12 @@ def draw_pyvis(
     {
       "physics": {
         "enabled": true,
-        "solver": "repulsion",
-        "repulsion": {
-          "nodeDistance": 250,
-          "centralGravity": 0.008,
-          "springLength": 500,
-          "springConstant": 0.003,
+        "solver": "barnesHut",
+        "barnesHut": {
+          "gravitationalConstant": -8000,
+          "centralGravity": 0.3,
+          "springLength": 95,
+          "springConstant": 0.04,
           "damping": 0.6
         },
         "stabilization": {
@@ -464,7 +467,6 @@ def draw_pyvis(
       }
     }
     """)
-    nt.show_buttons()
     nt.show(op.join(pic_dir, pic_name))
 
 

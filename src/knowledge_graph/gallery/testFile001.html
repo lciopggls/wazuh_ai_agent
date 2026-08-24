@@ -1,0 +1,127 @@
+<html>
+    <head>
+        <meta charset="utf-8">
+        
+            <script src="lib/bindings/utils.js"></script>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js" integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+            
+        
+<center>
+<h1></h1>
+</center>
+
+<!-- <link rel="stylesheet" href="../node_modules/vis/dist/vis.min.css" type="text/css" />
+<script type="text/javascript" src="../node_modules/vis/dist/vis.js"> </script>-->
+        <link
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css"
+          rel="stylesheet"
+          integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6"
+          crossorigin="anonymous"
+        />
+        <script
+          src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf"
+          crossorigin="anonymous"
+        ></script>
+
+
+        <center>
+          <h1></h1>
+        </center>
+        <style type="text/css">
+
+             #mynetwork {
+                 width: 3200px;
+                 height: 1800px;
+                 background-color: #ffffff;
+                 border: 1px solid lightgray;
+                 position: relative;
+                 float: left;
+             }
+
+             
+
+             
+
+             
+        </style>
+    </head>
+
+
+    <body>
+        <div class="card" style="width: 100%">
+            
+            
+            <div id="mynetwork" class="card-body"></div>
+        </div>
+
+        
+        
+
+        <script type="text/javascript">
+
+              // initialize global variables.
+              var edges;
+              var nodes;
+              var allNodes;
+              var allEdges;
+              var nodeColors;
+              var originalNodes;
+              var network;
+              var container;
+              var options, data;
+              var filter = {
+                  item : '',
+                  property : '',
+                  value : []
+              };
+
+              
+
+              
+
+              // This method is responsible for drawing the graph, returns the drawn network
+              function drawGraph() {
+                  var container = document.getElementById('mynetwork');
+
+                  
+
+                  // parsing and collecting nodes and edges from the python
+                  nodes = new vis.DataSet([{"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "execute_0", "label": "execute", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Initial Access", "technique": "Initial Access-T1566-Phishing", "type": "event", "x": 0.0, "y": 0.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 15.5, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "malicious hta file", "label": "malicious hta file", "shape": "dot", "size": 14.0, "type": "entity", "x": -56.25, "y": 220.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "launch_1", "label": "launch", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Execution", "technique": "Execution-Others", "type": "event", "x": 225.0, "y": 0.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "user", "label": "user", "shape": "dot", "size": 14.0, "type": "entity", "x": 56.25, "y": 188.0}, {"color": "#287271", "depth": 2, "font": {"size": 12.5, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "advanced_fileless_c2_chain.hta", "label": "advanced_fileless_c2_chain.hta", "shape": "dot", "size": 14.0, "type": "entity", "x": 0.0, "y": 268.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 17.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "rundll32.exe", "label": "rundll32.exe", "shape": "dot", "size": 14.0, "type": "entity", "x": 525.0, "y": 268.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Initial Access", "label": "Initial Access", "shape": "box", "size": 14.0, "type": "tactic", "x": 0.0, "y": -248.0}, {"caption": "T1566", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Initial Access-T1566-Phishing", "label": "T1566", "shape": "box", "size": 14.0, "type": "technique", "x": 0.0, "y": -184.0}, {"color": "#287271", "depth": 2, "font": {"size": 16.25, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "url.dll,openurl", "label": "url.dll,openurl", "shape": "dot", "size": 14.0, "type": "entity", "x": 525.0, "y": 348.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "load_9", "label": "load", "sent_nums": [2], "shape": "triangle", "size": 14.0, "tactic": "Defense Evasion", "technique": "Defense Evasion-Others", "type": "event", "x": 1350.0, "y": 0.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 17.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "mshta.exe", "label": "mshta.exe", "shape": "dot", "size": 14.0, "type": "entity", "x": 495.0, "y": 188.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "launch_2", "label": "launch", "sent_nums": [3], "shape": "triangle", "size": 14.0, "tactic": "Execution", "technique": "Execution-Others", "type": "event", "x": 450.0, "y": 80.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "launch_3", "label": "launch", "sent_nums": [3], "shape": "triangle", "size": 14.0, "tactic": "Execution", "technique": "Execution-Others", "type": "event", "x": 450.0, "y": 0.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "launch_4", "label": "launch", "sent_nums": [3], "shape": "triangle", "size": 14.0, "tactic": "Execution", "technique": "Execution-Others", "type": "event", "x": 450.0, "y": -80.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "cmd.exe", "label": "cmd.exe", "shape": "dot", "size": 14.0, "type": "entity", "x": 810.0, "y": 268.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "create_7", "label": "create", "sent_nums": [2], "shape": "triangle", "size": 14.0, "tactic": "Persistence", "technique": "Persistence-Others", "type": "event", "x": 900.0, "y": 0.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Execution", "label": "Execution", "shape": "box", "size": 14.0, "type": "tactic", "x": 393.75, "y": -248.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Execution-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 393.75, "y": -184.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "launch_8", "label": "launch", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Defense Evasion", "technique": "Defense Evasion-Others", "type": "event", "x": 1125.0, "y": 0.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 16.5, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "powershell.exe", "label": "powershell.exe", "shape": "dot", "size": 14.0, "type": "entity", "x": 1260.0, "y": 188.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "use_5", "label": "use", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Persistence", "technique": "Persistence-Others", "type": "event", "x": 675.0, "y": 40.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "write_6", "label": "write", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Persistence", "technique": "Persistence-Others", "type": "event", "x": 675.0, "y": -40.0}, {"color": "#287271", "depth": 2, "font": {"size": 16.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "windows firewall", "label": "windows firewall", "shape": "dot", "size": 14.0, "type": "entity", "x": 1260.0, "y": 268.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "execute_11", "label": "execute", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Command and Control", "technique": "Command and Control-Others", "type": "event", "x": 1575.0, "y": 40.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "send_12", "label": "send", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Command and Control", "technique": "Command and Control-Others", "type": "event", "x": 1575.0, "y": -40.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 17.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "ipconfig.exe", "label": "ipconfig.exe", "shape": "dot", "size": 14.0, "type": "entity", "x": 450.0, "y": 188.0}, {"color": "#287271", "depth": 2, "font": {"size": 16.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "net_recon.txt", "label": "net_recon.txt", "shape": "dot", "size": 14.0, "type": "entity", "x": 450.0, "y": 268.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "reg.exe", "label": "reg.exe", "shape": "dot", "size": 14.0, "type": "entity", "x": 600.0, "y": 188.0}, {"color": "#287271", "depth": 1, "font": {"size": 17.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "systemupdate", "label": "systemupdate", "shape": "dot", "size": 14.0, "type": "entity", "x": 731.25, "y": 188.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Persistence", "label": "Persistence", "shape": "box", "size": 14.0, "type": "tactic", "x": 787.5, "y": -248.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Persistence-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 787.5, "y": -184.0}, {"color": "#287271", "depth": 1, "font": {"size": 15.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "base64 encoded value", "label": "base64 encoded value", "shape": "dot", "size": 14.0, "type": "entity", "x": 618.75, "y": 220.0}, {"color": "#287271", "depth": 1, "font": {"size": 17.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "schtasks.exe", "label": "schtasks.exe", "shape": "dot", "size": 14.0, "type": "entity", "x": 900.0, "y": 188.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Defense Evasion", "label": "Defense Evasion", "shape": "box", "size": 14.0, "type": "tactic", "x": 1181.25, "y": -248.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Defense Evasion-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 1181.25, "y": -184.0}, {"color": "#287271", "depth": 1, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "hta file", "label": "hta file", "shape": "dot", "size": 14.0, "type": "entity", "x": 1350.0, "y": 188.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "launch_10", "label": "launch", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Command and Control", "technique": "Command and Control-Others", "type": "event", "x": 1575.0, "y": 120.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "communicate with_13", "label": "communicate with", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Command and Control", "technique": "Command and Control-Others", "type": "event", "x": 1575.0, "y": -120.0}, {"color": "#B4B4D5", "depth": 3, "font": {"size": 12.5, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "network reconnaissance results", "label": "network reconnaissance results", "shape": "dot", "size": 14.0, "type": "entity", "x": 450.0, "y": 348.0}, {"color": "#287271", "depth": 4, "font": {"size": 13.5, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "network configuration data", "label": "network configuration data", "shape": "dot", "size": 14.0, "type": "entity", "x": 450.0, "y": 428.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "script", "label": "script", "shape": "dot", "size": 14.0, "type": "entity", "x": 1743.75, "y": 188.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Command and Control", "label": "Command and Control", "shape": "box", "size": 14.0, "type": "tactic", "x": 1575.0, "y": -248.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Command and Control-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 1575.0, "y": -184.0}, {"color": "#287271", "depth": 1, "font": {"size": 15.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "invoke webrequest", "label": "invoke webrequest", "shape": "dot", "size": 14.0, "type": "entity", "x": 1631.25, "y": 220.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 17.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "http request", "label": "http request", "shape": "dot", "size": 14.0, "type": "entity", "x": 1518.75, "y": 252.0}, {"color": "#287271", "depth": 1, "font": {"size": 15.5, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "203.0.113.100:8080", "label": "203.0.113.100:8080", "shape": "dot", "size": 14.0, "type": "entity", "x": 1406.25, "y": 268.0}]);
+                  edges = new vis.DataSet([{"arrows": "to", "from": "execute_0", "relation": "Object", "to": "malicious hta file", "width": 1}, {"arrows": "to", "from": "execute_0", "to": "launch_1", "width": 1}, {"arrows": "to", "from": "user", "relation": "Subject", "to": "execute_0", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "malicious hta file", "label": "located-at", "relation": "located-at", "to": "advanced_fileless_c2_chain.hta", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "malicious hta file", "label": "load-by", "relation": "load-by", "to": "rundll32.exe", "width": 1}, {"arrows": "to", "from": "Initial Access", "to": "Initial Access-T1566-Phishing", "width": 1}, {"arrows": "to", "from": "Initial Access-T1566-Phishing", "to": "execute_0", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "rundll32.exe", "label": "call", "relation": "call", "to": "url.dll,openurl", "width": 1}, {"arrows": "to", "from": "rundll32.exe", "relation": "Subject", "to": "launch_1", "width": 1}, {"arrows": "to", "from": "rundll32.exe", "relation": "Subject", "to": "load_9", "width": 1}, {"arrows": "to", "from": "launch_1", "relation": "Object", "to": "mshta.exe", "width": 1}, {"arrows": "to", "from": "launch_1", "to": "launch_2", "width": 1}, {"arrows": "to", "from": "launch_1", "to": "launch_3", "width": 1}, {"arrows": "to", "from": "launch_1", "to": "launch_4", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "mshta.exe", "label": "spawn", "relation": "spawn", "to": "cmd.exe", "width": 1}, {"arrows": "to", "from": "mshta.exe", "relation": "Subject", "to": "launch_2", "width": 1}, {"arrows": "to", "from": "mshta.exe", "relation": "Subject", "to": "launch_3", "width": 1}, {"arrows": "to", "from": "mshta.exe", "relation": "Subject", "to": "launch_4", "width": 1}, {"arrows": "to", "from": "mshta.exe", "relation": "Subject", "to": "create_7", "width": 1}, {"arrows": "to", "from": "Execution", "to": "Execution-Others", "width": 1}, {"arrows": "to", "from": "Execution-Others", "to": "launch_1", "width": 1}, {"arrows": "to", "from": "Execution-Others", "to": "launch_2", "width": 1}, {"arrows": "to", "from": "Execution-Others", "to": "launch_3", "width": 1}, {"arrows": "to", "from": "Execution-Others", "to": "launch_4", "width": 1}, {"arrows": "to", "from": "cmd.exe", "relation": "Subject", "to": "launch_8", "width": 1}, {"arrows": "to", "from": "launch_2", "relation": "Object", "to": "powershell.exe", "width": 1}, {"arrows": "to", "from": "launch_2", "to": "use_5", "width": 1}, {"arrows": "to", "from": "launch_2", "to": "write_6", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "powershell.exe", "label": "disable", "relation": "disable", "to": "windows firewall", "width": 1}, {"arrows": "to", "from": "powershell.exe", "relation": "Subject", "to": "execute_11", "width": 1}, {"arrows": "to", "from": "powershell.exe", "relation": "Subject", "to": "send_12", "width": 1}, {"arrows": "to", "from": "launch_3", "relation": "Object", "to": "ipconfig.exe", "width": 1}, {"arrows": "to", "from": "launch_3", "to": "use_5", "width": 1}, {"arrows": "to", "from": "launch_3", "to": "write_6", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "ipconfig.exe", "label": "redirect output to", "relation": "redirect output to", "to": "net_recon.txt", "width": 1}, {"arrows": "to", "from": "launch_4", "relation": "Object", "to": "reg.exe", "width": 1}, {"arrows": "to", "from": "launch_4", "to": "use_5", "width": 1}, {"arrows": "to", "from": "launch_4", "to": "write_6", "width": 1}, {"arrows": "to", "from": "reg.exe", "relation": "Subject", "to": "use_5", "width": 1}, {"arrows": "to", "from": "reg.exe", "relation": "Subject", "to": "write_6", "width": 1}, {"arrows": "to", "from": "use_5", "relation": "Object", "to": "systemupdate", "width": 1}, {"arrows": "to", "from": "use_5", "to": "create_7", "width": 1}, {"arrows": "to", "from": "Persistence", "to": "Persistence-Others", "width": 1}, {"arrows": "to", "from": "Persistence-Others", "to": "use_5", "width": 1}, {"arrows": "to", "from": "Persistence-Others", "to": "write_6", "width": 1}, {"arrows": "to", "from": "Persistence-Others", "to": "create_7", "width": 1}, {"arrows": "to", "from": "write_6", "relation": "Object", "to": "base64 encoded value", "width": 1}, {"arrows": "to", "from": "write_6", "to": "create_7", "width": 1}, {"arrows": "to", "from": "create_7", "relation": "Object", "to": "schtasks.exe", "width": 1}, {"arrows": "to", "from": "create_7", "to": "launch_8", "width": 1}, {"arrows": "to", "from": "launch_8", "relation": "Object", "to": "powershell.exe", "width": 1}, {"arrows": "to", "from": "launch_8", "to": "load_9", "width": 1}, {"arrows": "to", "from": "Defense Evasion", "to": "Defense Evasion-Others", "width": 1}, {"arrows": "to", "from": "Defense Evasion-Others", "to": "launch_8", "width": 1}, {"arrows": "to", "from": "Defense Evasion-Others", "to": "load_9", "width": 1}, {"arrows": "to", "from": "load_9", "relation": "Object", "to": "hta file", "width": 1}, {"arrows": "to", "from": "load_9", "to": "launch_10", "width": 1}, {"arrows": "to", "from": "load_9", "to": "execute_11", "width": 1}, {"arrows": "to", "from": "load_9", "to": "send_12", "width": 1}, {"arrows": "to", "from": "load_9", "to": "communicate with_13", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "network reconnaissance results", "label": "staged-at", "relation": "staged-at", "to": "net_recon.txt", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "network reconnaissance results", "label": "consist-of", "relation": "consist-of", "to": "network configuration data", "width": 1}, {"arrows": "to", "from": "launch_10", "relation": "Object", "to": "powershell.exe", "width": 1}, {"arrows": "to", "from": "script", "relation": "Subject", "to": "launch_10", "width": 1}, {"arrows": "to", "from": "Command and Control", "to": "Command and Control-Others", "width": 1}, {"arrows": "to", "from": "Command and Control-Others", "to": "launch_10", "width": 1}, {"arrows": "to", "from": "Command and Control-Others", "to": "execute_11", "width": 1}, {"arrows": "to", "from": "Command and Control-Others", "to": "send_12", "width": 1}, {"arrows": "to", "from": "Command and Control-Others", "to": "communicate with_13", "width": 1}, {"arrows": "to", "from": "execute_11", "relation": "Object", "to": "invoke webrequest", "width": 1}, {"arrows": "to", "from": "send_12", "relation": "Object", "to": "http request", "width": 1}, {"arrows": "to", "from": "http request", "relation": "Subject", "to": "communicate with_13", "width": 1}, {"arrows": "to", "from": "communicate with_13", "relation": "Object", "to": "203.0.113.100:8080", "width": 1}]);
+
+                  nodeColors = {};
+                  allNodes = nodes.get({ returnType: "Object" });
+                  for (nodeId in allNodes) {
+                    nodeColors[nodeId] = allNodes[nodeId].color;
+                  }
+                  allEdges = edges.get({ returnType: "Object" });
+                  // adding nodes and edges to the graph
+                  data = {nodes: nodes, edges: edges};
+
+                  var options = {"physics": {"enabled": true, "solver": "barnesHut", "barnesHut": {"gravitationalConstant": -8000, "centralGravity": 0.3, "springLength": 95, "springConstant": 0.04, "damping": 0.6}, "stabilization": {"enabled": true, "iterations": 300, "updateInterval": 25}}};
+
+                  
+
+
+                  
+
+                  network = new vis.Network(container, data, options);
+
+                  
+
+                  
+
+                  
+
+
+                  
+
+                  return network;
+
+              }
+              drawGraph();
+        </script>
+    </body>
+</html>

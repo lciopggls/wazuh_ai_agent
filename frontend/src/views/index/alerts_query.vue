@@ -199,6 +199,7 @@ const executeSearch = async () => {
     };
   }
 
+  const startTime = performance.now();
   try {
     const res = await axios.post('/wazuh-indexer/wazuh-alerts-*/_search', {
       size: pageSize,
@@ -215,6 +216,10 @@ const executeSearch = async () => {
     ElMessage.error("查询失败");
   } finally {
     historyLoading.value = false;
+    // 查询耗时统计：每次查询结束后在顶部弹出提示
+    const elapsed = performance.now() - startTime;
+    const duration = elapsed >= 1000 ? `${(elapsed / 1000).toFixed(2)} s` : `${Math.round(elapsed)} ms`;
+    ElMessage.info(`查询耗时 ${duration}`);
   }
 };
 

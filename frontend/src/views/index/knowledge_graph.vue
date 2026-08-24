@@ -70,6 +70,11 @@
             <span class="kg-file-icon">📄</span>
             <span class="kg-file-name">{{ file.name }}</span>
             <span class="kg-file-size">{{ (file.size / 1024).toFixed(1) }} KB</span>
+            <button
+              class="kg-btn-delete"
+              title="删除"
+              @click.stop="deleteGalleryFile(file)"
+            >✕</button>
           </div>
         </div>
       </div>
@@ -342,6 +347,31 @@ async function saveToGallery() {
   }
 }
 
+// ── 删除 Gallery 文件 ──
+async function deleteGalleryFile(file: any) {
+  if (!confirm(`确定要删除图谱「${file.name}」吗？此操作不可恢复。`)) return;
+
+  // 如果当前预览的正是这个文件，关闭预览
+  if (previewFile?.value?.name === file.name) {
+    closePreview();
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/knowledge-graph/gallery/${encodeURIComponent(file.name)}`, {
+      method: "DELETE",
+    });
+    const data = await res.json();
+    if (data.status === "ok") {
+      showStatus(`图谱 ${file.name} 已删除`, "success");
+      await loadGallery();
+    } else {
+      showStatus(`删除失败: ${data.detail || data.message}`, "error");
+    }
+  } catch (err: any) {
+    showStatus(`删除出错: ${err.message}`, "error");
+  }
+}
+
 // ── 关闭预览 ──
 function closePreview() {
   previewHtml.value = "";
@@ -591,6 +621,29 @@ function closePreview() {
     color: #7c3aed;
     font-weight: 600;
     flex-shrink: 0;
+  }
+
+  .kg-btn-delete {
+    display: none;
+    background: none;
+    border: none;
+    color: #ef4444;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: background 0.15s;
+
+    &:hover {
+      background: #fef2f2;
+    }
+  }
+
+  &:hover .kg-btn-delete {
+    display: inline-block;
   }
 }
 
