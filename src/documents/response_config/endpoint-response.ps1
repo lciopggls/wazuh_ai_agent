@@ -212,6 +212,7 @@ try {
             $reasonCode = "process_still_running"
             throw "Process $processId still exists after Stop-Process"
         }
+        $processClosedAtUtc = [DateTime]::UtcNow.ToString("o")
 
         Write-ResultEvent -Event @{
             request_id = $requestId
@@ -219,6 +220,7 @@ try {
             operation_status = "success"
             process_id = $processId
             process_name = $snapshot.ProcessName
+            process_closed_at_utc = $processClosedAtUtc
             exists = $false
             changed = $true
             reason_code = ""

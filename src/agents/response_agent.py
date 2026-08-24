@@ -1,10 +1,13 @@
 import ipaddress
 import json
 import logging
-from typing import Literal
+import time
+from datetime import datetime
+from typing import Literal, NotRequired
 
 from langchain.agents import create_agent
-from langchain.tools import tool
+from langchain.agents.middleware import AgentMiddleware, AgentState
+from langchain.tools import ToolRuntime, tool
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from agents.attack_attribution.utils import extract_agent_ip_mapping
@@ -24,6 +27,25 @@ from wazuh_api.server_api import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class ResponseAgentState(AgentState):
+    """State shared by response tools during one response-agent invocation."""
+
+    response_started_at_epoch: NotRequired[float]
+
+
+class ResponseTimingMiddleware(AgentMiddleware[ResponseAgentState]):
+    """Record when the response agent receives each delegated task."""
+
+    state_schema = ResponseAgentState
+
+    def before_agent(self, state, runtime):
+        return {"response_started_at_epoch": time.time()}
+
+    async def abefore_agent(self, state, runtime):
+        return {"response_started_at_epoch": time.time()}
+
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -391,6 +413,19 @@ def _format_endpoint_response(result: dict) -> str:
         f"- 最终状态：{result.get('display_status', 'unknown（状态未知）')}",
     ]
 
+    elapsed_seconds = result.get("process_action_elapsed_seconds")
+    if (
+        result.get("action") == "terminate_process"
+        and status == "success"
+        and isinstance(elapsed_seconds, (int, float))
+    ):
+        lines.extend(
+            [
+                f"- 进程处置耗时：{elapsed_seconds:.2f} 秒",
+                "- 计时范围：从响应智能体接收任务到 Agent 确认进程关闭",
+            ]
+        )
+
     if "process_id" in evidence:
         lines.append(f"- PID：{evidence['process_id']}")
     if evidence.get("process_name"):
@@ -425,14 +460,36 @@ def query_process(agent_id: str, pid: int) -> str:
 
 
 @tool
-def terminate_process(agent_id: str, pid: int) -> str:
+def terminate_process(agent_id: str, pid: int, runtime: ToolRuntime) -> str:
     """终止 Agent 001 上指定 PID 的 notepad.exe，并验证该 PID 已不存在。
 
     Args:
         agent_id: 必须是 "001"。
         pid: 用户明确提供的 notepad.exe 进程 ID；禁止仅凭进程名批量终止。
     """
+    started_at = runtime.state.get("response_started_at_epoch")
+    if not isinstance(started_at, (int, float)):
+        started_at = time.time()
+
     result = terminate_process_on_agent(agent_id=agent_id, process_id=pid)
+    if result.get("status") == "success":
+        closed_at = result.get("evidence", {}).get("process_closed_at_utc")
+        if isinstance(closed_at, str):
+            try:
+                closed_at_epoch = datetime.fromisoformat(
+                    closed_at.replace("Z", "+00:00")
+                ).timestamp()
+            except ValueError:
+                logger.warning("Invalid process_closed_at_utc value: %s", closed_at)
+            else:
+                elapsed_seconds = closed_at_epoch - started_at
+                if elapsed_seconds >= 0:
+                    result["process_action_elapsed_seconds"] = elapsed_seconds
+                else:
+                    logger.warning(
+                        "Agent clock precedes response backend clock by %.3f seconds",
+                        abs(elapsed_seconds),
+                    )
     logger.info("Tool terminate_process completed: %s", json.dumps(result, ensure_ascii=False))
     return _format_endpoint_response(result)
 
@@ -531,7 +588,7 @@ def block_ip_bulk(
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT_TEMPLATE = """
-你是事件响应智能体，负责执行封禁/解封 IP、查询封禁状态等自动化响应动作。
+你是事件响应智能体，负责执行 IP 与端口防火墙响应、进程处置和本地账户控制。
 
 ══════════════════════════════════════════════════════
 一、Agent → IP 映射表
@@ -553,6 +610,14 @@ SYSTEM_PROMPT_TEMPLATE = """
 - `unblock_ip`：解除指定 Agent 上对某个 IP 的入站和出站封禁规则。
 - `query_blocked_ips`：查询 Agent 上真实存在的 Wazuh AI Windows Firewall 封禁规则。
 - `block_ip_bulk`：在多个 Agent 上同时封禁同一 IP。
+- `block_port`：封禁 Agent 001 上固定的入站 TCP 54321 演示端口。
+- `unblock_port`：解除 Agent 001 上固定演示端口的封禁。
+- `query_blocked_port`：查询 Agent 001 上固定演示端口的真实防火墙状态。
+- `query_process`：查询 Agent 001 上指定 PID 的 notepad.exe 演示进程。
+- `terminate_process`：终止指定 PID 的 notepad.exe 并验证进程已经消失。
+- `query_local_account`：查询 Agent 001 上本地演示账户 demo_user 的状态。
+- `disable_local_account`：禁用 Agent 001 上的 demo_user 并验证状态。
+- `enable_local_account`：启用 Agent 001 上的 demo_user 并验证状态。
 
 ══════════════════════════════════════════════════════
 三、工具具体说明
@@ -571,14 +636,15 @@ SYSTEM_PROMPT_TEMPLATE = """
     - "both"  → 同时阻断入站和出站
 
   执行规则：
-    - 缺少 agent_id 或 IP 时，向用户询问缺失的信息。
+    - 缺少 agent_id、IP、方向或时长时，只询问缺失的信息，不得猜测。
+    - 参数完整时直接调用工具，不需要二次确认。
     - 封禁完成后，用中文向用户汇报执行结果。
 
 3.2 unblock_ip（解封 IP 地址）
   撤销之前通过 block_ip 添加的封禁规则。
   适用于误封恢复或威胁解除后的清理。
   执行规则：
-    - 解封前应向用户确认要解封的 IP 和 Agent。
+    - agent_id 和 IP 完整时直接调用工具，不需要二次确认。
     - 解封完成后，用中文向用户汇报执行结果。
 
 3.3 query_blocked_ips（查询或验证已封禁 IP）
@@ -594,11 +660,42 @@ SYSTEM_PROMPT_TEMPLATE = """
   执行规则：
     - 如果用户指定的 Agent 数量超过 10 个，先向用户确认。
     - 汇总所有 Agent 的执行结果，用中文汇报成功/失败数量。
+
+3.5 端口封禁、解封和查询
+  - 三个端口工具都必须显式传入用户给出的 agent_id 和 target_port，不得擅自改写。
+  - 后端只授权 Agent 001、入站 TCP 54321；其他 Agent 或端口仍将原始参数传给工具，
+    由工具返回无权限结果，不得绕过工具自行声称成功。
+  - block_port 的 duration_seconds 只支持 30、60、300；用户未指定时默认传入 30。
+  - 端口功能固定为入站 TCP，不询问方向或协议。
+  - 参数完整时直接调用工具，不需要二次确认。
+  - 端口状态只使用 blocked（已封禁）、unblocked（未封禁）、unknown（状态未知）。
+  - 必须展示真实防火墙证据；只有目标状态与操作一致时才能汇报成功。
+  - 手动解封后提醒用户等待原封禁时长结束再重新封禁。
+
+3.6 进程查询与终止
+  - 只允许 Agent 001，并且用户必须提供 PID；不得猜测 PID。
+  - 后端只允许 PID 对应 notepad.exe，不得改为按进程名批量查询或终止。
+  - 参数完整时直接调用 query_process 或 terminate_process，不需要二次确认。
+  - 必须展示 success、failed、unknown 状态码、中文解释和真实进程证据。
+  - 只有 success 可以汇报为已验证成功。
+  - terminate_process 成功时，必须原样保留工具返回的“进程处置耗时”和“计时范围”；
+    不得省略、改写或重新计算耗时。
+
+3.7 本地账户查询、禁用与启用
+  - 只允许 Agent 001 上固定的本地演示账户 demo_user。
+  - 参数完整时直接调用对应工具，不需要二次确认。
+  - 不得创建账户、修改密码、删除账户或强制注销会话。
+  - 必须展示 success、failed、unknown 状态码、中文解释和真实账户证据。
+  - 只有 success 可以汇报为已验证成功。
+
+3.8 通用结果规则
+  - 必须根据工具返回的真实结果汇报成功或失败，不得虚构 API 请求或执行结果。
+  - 工具返回 unknown 时只能汇报状态未知，不得解释为成功、失败或目标不存在。
 """
 
 
 def get_response_agent(model: BaseChatModel, checkpointer=None):
-    """创建事件响应智能体，用于执行封禁/解封 IP 等自动化响应动作。"""
+    """创建覆盖网络、进程和账户处置的事件响应智能体。"""
     agent_ip_mapping = extract_agent_ip_mapping()
     agent_ip_mapping_json = (
         json.dumps(agent_ip_mapping, ensure_ascii=False, indent=2) if agent_ip_mapping else "{}"
@@ -606,8 +703,22 @@ def get_response_agent(model: BaseChatModel, checkpointer=None):
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(agent_ip_mapping_json=agent_ip_mapping_json)
     return create_agent(
         model=model,
-        tools=[block_ip, unblock_ip, query_blocked_ips, block_ip_bulk],
+        tools=[
+            block_ip,
+            unblock_ip,
+            query_blocked_ips,
+            block_ip_bulk,
+            block_port,
+            unblock_port,
+            query_blocked_port,
+            query_process,
+            terminate_process,
+            query_local_account,
+            disable_local_account,
+            enable_local_account,
+        ],
         system_prompt=system_prompt,
+        middleware=[ResponseTimingMiddleware()],
         checkpointer=checkpointer,
     )
 

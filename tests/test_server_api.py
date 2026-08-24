@@ -646,6 +646,7 @@ def test_terminate_demo_process_dispatches_and_returns_verified_result(requests_
                             "action": "terminate_process",
                             "process_id": 4321,
                             "process_name": "notepad.exe",
+                            "process_closed_at_utc": "2025-01-01T00:00:04.870000Z",
                             "exists": False,
                             "changed": True,
                         }
@@ -668,6 +669,7 @@ def test_terminate_demo_process_dispatches_and_returns_verified_result(requests_
     assert result["evidence"] == {
         "process_id": 4321,
         "process_name": "notepad.exe",
+        "process_closed_at_utc": "2025-01-01T00:00:04.870000Z",
         "exists": False,
         "changed": True,
     }

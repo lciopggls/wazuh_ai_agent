@@ -255,8 +255,12 @@ Get-Content "C:\Program Files (x86)\ossec-agent\active-response\endpoint-respons
 成功事件应包含：
 
 ```json
-{"event_type":"wazuh_ai_endpoint_response_result","request_id":"...","action":"terminate_process","operation_status":"success"}
+{"event_type":"wazuh_ai_endpoint_response_result","request_id":"...","action":"terminate_process","operation_status":"success","process_closed_at_utc":"2026-08-24T08:30:04.8700000Z"}
 ```
+
+页面中的“进程处置耗时”使用响应智能体接收任务的时间与 `process_closed_at_utc` 计算，
+不包含结果日志进入 Manager 和 Indexer 的等待时间。为保证数值准确，运行后端的主机与
+Agent 001 必须保持系统时间同步。
 
 Manager 检查规则 100211 告警：
 

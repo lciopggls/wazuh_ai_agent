@@ -1549,6 +1549,8 @@ def _normalize_endpoint_evidence(data: dict) -> dict:
         evidence["account_sid"] = str(data.get("account_sid", ""))
     if "changed" in data:
         evidence["changed"] = _as_bool(data.get("changed"))
+    if "process_closed_at_utc" in data:
+        evidence["process_closed_at_utc"] = str(data.get("process_closed_at_utc", ""))
     return evidence
 
 

@@ -1,6 +1,7 @@
 import json
 import logging
-from typing import Any
+import re
+from typing import Any, Literal
 
 from langchain.agents import create_agent
 from langchain.tools import tool
@@ -90,21 +91,122 @@ def _is_high_risk_rule_task(task: str) -> bool:
     return any(keyword in task or keyword in lowered_task for keyword in high_risk_keywords)
 
 
-def _is_high_risk_response_task(task: str) -> bool:
-    """Check whether a response task involves high-risk network-level changes.
+ResponseOperation = Literal[
+    "block_ip",
+    "block_ip_bulk",
+    "unblock_ip",
+    "query_blocked_ips",
+    "block_port",
+    "unblock_port",
+    "query_blocked_port",
+    "query_process",
+    "terminate_process",
+    "query_local_account",
+    "disable_local_account",
+    "enable_local_account",
+]
 
-    Operations classified as high-risk: block_ip, block_ip_bulk.
-    Operations classified as low-risk: unblock_ip, query_blocked_ips.
-    """
-    high_risk_keywords = [
-        "封禁",
-        "block",
-        "阻断",
-        "ban",
-        "批量封禁",
-    ]
-    lowered_task = task.lower()
-    return any(keyword in task or keyword in lowered_task for keyword in high_risk_keywords)
+_HIGH_RISK_RESPONSE_OPERATIONS = {
+    "block_ip",
+    "block_ip_bulk",
+    "block_port",
+    "terminate_process",
+    "disable_local_account",
+}
+
+_RESPONSE_OPERATION_LABELS = {
+    "block_ip": "封禁 IP",
+    "block_ip_bulk": "批量封禁 IP",
+    "unblock_ip": "解封 IP",
+    "query_blocked_ips": "查询 IP 封禁状态",
+    "block_port": "封禁端口",
+    "unblock_port": "解封端口",
+    "query_blocked_port": "查询端口封禁状态",
+    "query_process": "查询进程",
+    "terminate_process": "终止进程",
+    "query_local_account": "查询本地账户",
+    "disable_local_account": "禁用本地账户",
+    "enable_local_account": "启用本地账户",
+}
+
+
+def _is_high_risk_response_operation(operation: ResponseOperation) -> bool:
+    return operation in _HIGH_RISK_RESPONSE_OPERATIONS
+
+
+def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
+    return any(marker in text for marker in markers)
+
+
+def _infer_response_operations(task: str) -> set[str]:
+    """Infer explicit response intents to catch operation/task mismatches."""
+    lowered = task.lower()
+    is_query = _contains_any(lowered, ("查询", "查看", "检查", "是否", "状态", "query", "check"))
+    is_process = _contains_any(lowered, ("进程", "pid", "process", "notepad"))
+    is_account = _contains_any(lowered, ("账户", "账号", "用户", "account", "demo_user"))
+    is_port = _contains_any(lowered, ("端口", "port", "tcp", "54321"))
+    is_ip = bool(re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", lowered)) or _contains_any(
+        lowered,
+        (" ip", "ip ", "ip地址", "ip 地址", "封禁规则"),
+    )
+    has_followup = _contains_any(lowered, ("然后", "随后", "再", "并且", "并执行", "接着"))
+    is_unblock = _contains_any(
+        lowered,
+        ("解封", "解除封禁", "撤销封禁", "移除封禁", "unblock", "remove block"),
+    ) or bool(re.search(r"(?:解除|撤销|移除).*?封禁", lowered))
+    is_block = _contains_any(lowered, ("封禁", "阻断", "block", "ban"))
+    is_terminate = _contains_any(lowered, ("终止", "结束进程", "kill", "terminate process"))
+    is_disable = _contains_any(lowered, ("禁用", "停用", "disable account"))
+    is_enable = _contains_any(
+        lowered,
+        ("启用", "恢复账户", "解禁账户", "enable account"),
+    )
+
+    operations: set[str] = set()
+    if is_query:
+        if is_process:
+            operations.add("query_process")
+        elif is_account:
+            operations.add("query_local_account")
+        elif is_port:
+            operations.add("query_blocked_port")
+        elif is_ip or is_block:
+            operations.add("query_blocked_ips")
+
+    allow_mutation = not is_query or has_followup
+    if is_unblock and allow_mutation:
+        operations.add("unblock_port" if is_port else "unblock_ip")
+    if is_enable and is_account and allow_mutation:
+        operations.add("enable_local_account")
+    if is_terminate and is_process and allow_mutation:
+        operations.add("terminate_process")
+    if is_disable and is_account and allow_mutation:
+        operations.add("disable_local_account")
+    if is_block and not is_unblock and allow_mutation:
+        if is_port:
+            operations.add("block_port")
+        elif is_ip:
+            bulk_markers = ("批量", "多个 agent", "多台", "agents", "bulk")
+            operation = "block_ip_bulk" if _contains_any(lowered, bulk_markers) else "block_ip"
+            operations.add(operation)
+    return operations
+
+
+def _response_operation_task_mismatch(operation: ResponseOperation, task: str) -> str | None:
+    inferred = _infer_response_operations(task)
+    if not inferred:
+        return "任务文本缺少足以识别响应动作的完整参数或动作描述。"
+
+    compatible = {operation}
+    if operation in {"block_ip", "block_ip_bulk"}:
+        compatible = {"block_ip", "block_ip_bulk"}
+    if not inferred & compatible:
+        inferred_text = "、".join(sorted(inferred))
+        return f"operation={operation} 与任务文本识别出的操作（{inferred_text}）不一致。"
+    if len(inferred) > 1:
+        inferred_text = "、".join(sorted(inferred))
+        return f"单次委派只能包含一个响应动作，当前识别到：{inferred_text}。"
+    return None
 
 
 def _has_explicit_user_authorization(task: str) -> bool:
@@ -332,39 +434,60 @@ def get_router_agent(
 
     @tool
     def delegate_response_agent(
+        operation: ResponseOperation,
         task: str,
         reset_context: bool = False,
     ) -> str:
         """将事件响应任务委派给 `response_agent`。
 
-        适用于以下场景：
-        - 封禁/批量封禁 IP（需要用户授权）
-        - 解封 IP（低风险，无需授权）
-        - 查询 Agent 上已封禁的 IP 列表
-
-        路由智能体在调用封禁类操作前会向用户确认目标 IP、Agent 和时长。
+        `operation` 必须是 response_agent 的一个明确工具名称，`task` 必须包含完整操作参数。
+        封禁 IP、批量封禁 IP、封禁端口、终止进程和禁用账户需要用户明确授权。
+        查询、解封 IP、解封端口和启用账户可以直接委派。
         当这是一个新的独立响应任务时，将 `reset_context` 设为 true。
         """
 
         logger.info(
-            "Delegating task to response_agent. reset_context=%s task=%s",
+            "Delegating task to response_agent. operation=%s reset_context=%s task=%s",
+            operation,
             reset_context,
             task,
         )
-        if _is_high_risk_response_task(task) and not _has_explicit_user_authorization(task):
+        mismatch_reason = _response_operation_task_mismatch(operation, task)
+        if mismatch_reason:
             return json.dumps(
                 {
                     "specialist": "response_agent",
                     "thread_id": _get_thread_id(),
+                    "operation": operation,
+                    "task": task,
+                    "error_code": "operation_task_mismatch",
+                    "approval_required": False,
+                    "reply": "操作类型与任务内容不一致，已拒绝委派。",
+                    "error_message": mismatch_reason,
+                    "required_user_action": (
+                        "请重新生成单一、明确的 operation，并在 task 中保留完整 Agent、目标和时长参数。"
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        if _is_high_risk_response_operation(operation) and not _has_explicit_user_authorization(
+            task
+        ):
+            operation_label = _RESPONSE_OPERATION_LABELS[operation]
+            return json.dumps(
+                {
+                    "specialist": "response_agent",
+                    "thread_id": _get_thread_id(),
+                    "operation": operation,
                     "task": task,
                     "approval_required": True,
                     "reply": (
-                        "当前子任务涉及高风险操作（封禁 IP），可能影响目标主机的网络连通性。"
+                        f"当前子任务涉及高风险响应操作（{operation_label}），可能改变目标主机状态。"
                         "在执行前必须先取得用户明确授权。"
                     ),
                     "required_user_action": (
-                        "请先向用户明确说明将要封禁的 IP、目标 Agent 和封禁时长，并询问是否继续。"
-                        '只有在用户明确同意后，后续工具调用才能执行，且任务文本中必须包含"已获用户明确授权"。'
+                        "请向用户完整说明目标 Agent、操作对象及相关参数并询问是否继续。"
+                        '用户确认后，task 必须包含"已获用户明确授权"和全部原始操作参数。'
                     ),
                 },
                 ensure_ascii=False,
@@ -402,7 +525,7 @@ Agent → IP 映射表
 - `delegate_rule_agent`：处理 Wazuh 规则创建、修改、解释、查询、列出、验证、删除；也处理规则文件、规则组、requirement 相关规则查询。
 - `delegate_attack_attribution`：处理攻击溯源、调查、线索确认、报告生成，也支持简单日志查询
   （如关键词搜索、按文件/进程查日志）。系统内部会自动判断任务类型并选择合适的处理路径。
-- `delegate_response_agent`：处理事件响应动作，如封禁 IP 地址。
+- `delegate_response_agent`：处理 IP、端口、进程和本地账户事件响应动作。
 
 ══════════════════════════════════════════════════════
 二、通用规则
@@ -496,35 +619,73 @@ Agent → IP 映射表
 五、委托事件响应 (delegate_response_agent)
 ══════════════════════════════════════════════════════
 【适用场景】
-  response_agent 提供四个工具：
-  - `block_ip`       — 在指定 Agent 上封禁 IP（支持 srcip/dstip/both 方向）。
-  - `block_ip_bulk`  — 在多个 Agent 上同时封禁同一 IP。
-  - `unblock_ip`     — 解除封禁规则（低风险，无需授权）。
-  - `query_blocked_ips` — 查询 Agent 上真实存在的封禁规则（低风险，无需授权）。
+  response_agent 提供以下操作；调用时 operation 必须使用对应名称：
+  - `block_ip` / `block_ip_bulk` / `unblock_ip` / `query_blocked_ips`
+  - `block_port` / `unblock_port` / `query_blocked_port`
+  - `query_process` / `terminate_process`
+  - `query_local_account` / `disable_local_account` / `enable_local_account`
 
-【封禁前你必须向用户确认】
-  - 封禁类操作（block_ip / block_ip_bulk）为高风险，必须先向用户明确说明
-    将要封禁的 IP、目标 Agent、封禁方向和封禁时长，获得用户明确同意后才能执行。
-  - 解封和查询类操作（unblock_ip / query_blocked_ips）为低风险，可直接执行。
-  - 用户同意后，task 中需包含"已获用户明确授权"标记。
+【授权分类】
+  以下高风险操作必须先向用户说明完整目标和参数，取得明确授权：
+  - block_ip、block_ip_bulk、block_port、terminate_process、disable_local_account
+
+  以下操作可以直接委派：
+  - unblock_ip、query_blocked_ips、unblock_port、query_blocked_port
+  - query_process、query_local_account、enable_local_account
+
+  用户确认后，task 必须同时包含：
+  1. 固定授权标记“已获用户明确授权”；
+  2. 原请求中的完整 Agent、IP/端口/PID/账户、方向和时长参数。
+  严禁只传“执行刚才操作”之类缺少参数的文本。
+
+【参数与操作一致性】
+  - operation 是明确的单一操作类型；task 一次只能包含一个响应动作。
+  - operation 必须与 task 中的真实意图一致，否则委派函数会返回
+    error_code=operation_task_mismatch，此时不得执行，必须重新生成正确调用。
+  - 不得修正、替换或猜测用户给出的 Agent、IP、端口、PID、账户或时长。
+  - 即使参数超出白名单，也要原样交给 response_agent，由后端权限校验返回拒绝结果。
 
 【参数说明】
-  - task: 用户的响应请求原话，加上授权标记后传入。
-  - reset_context: 新独立响应任务时设为 true；继续同一任务时设为 false。
+  - operation：上述一个明确的工具名称。
+  - task：完整的单一响应任务；高风险操作在用户确认后加授权标记。
+  - reset_context：新的、参数完整的任务设为 true；只有用户明确说“继续”“查询刚才”
+    “解封刚才”等依赖前文时才设为 false。高风险任务确认后第一次正式委派仍设为 true。
+
+【多步骤响应任务】
+  - 两个及以上动作必须先调用 write_task_plan。
+  - 将所有高风险动作及完整参数一次性列出并统一征求用户授权。
+  - 用户确认后，每个动作分别调用一次 delegate_response_agent。
+  - 每个高风险子任务都必须带授权标记和完整参数。
+  - 任一步失败后，停止依赖该结果的后续步骤，并汇报已执行、失败和未执行项目。
 
 【结果汇报】
-  - 收到 response_agent 返回的结果后，用中文向用户汇报执行结果。
+  - response_agent 返回的 reply 是权威执行结果。可以整理格式，但不得改变目标、状态码、
+    失败原因或验证证据。
+  - reply 中包含“进程处置耗时”或“计时范围”时，最终回复必须原样保留对应字段和值，
+    不得省略、改写或重新计算。
+  - 不得把 unknown 改写为成功或失败，不得把“命令已投递”改写为“已验证成功”。
+  - 多步骤任务必须分别展示每一步结果，不得笼统声称“全部完成”。
 
 【示例：封禁 IP】
   - 用户说"帮我在 agent 006 上封禁 192.168.109.114"
   你应先说明将要封禁的 IP、目标 Agent 和封禁时长（默认 10 分钟），询问用户是否继续。
-  - 用户确认后，调用 `delegate_response_agent(task="已获用户明确授权：在 agent 006 上封禁 192.168.109.114，封禁10分钟", reset_context=true)`，
+  - 用户确认后，调用
+    `delegate_response_agent(operation="block_ip", task="已获用户明确授权：在 agent 006 上双向封禁 192.168.109.114，持续10分钟", reset_context=true)`，
   然后向用户汇报结果。
 
 【示例：查询已封禁 IP】
   - 用户说"帮我查一下 agent 006 上有哪些 IP 被封了"
-  直接调用 `delegate_response_agent(task="查询 agent 006 上已封禁的 IP 列表", reset_context=true)`，
+  直接调用 `delegate_response_agent(operation="query_blocked_ips", task="查询 agent 006 上已封禁的 IP 列表", reset_context=true)`，
   无需用户授权。
+
+【示例：端口、进程和账户】
+  - 查询 Agent 001 的 54321 端口：operation=query_blocked_port，直接委派。
+  - 封禁 Agent 001 的 54321 端口：operation=block_port，先确认 Agent、端口和时长。
+  - 查询 Agent 001 的 PID：operation=query_process，直接委派。
+  - 终止 Agent 001 的 PID：operation=terminate_process，先确认 Agent 和 PID。
+  - 查询 demo_user：operation=query_local_account，直接委派。
+  - 禁用 demo_user：operation=disable_local_account，先确认 Agent 和账户。
+  - 启用 demo_user：operation=enable_local_account，直接委派。
 """
 
     system_prompt = system_prompt.replace("{agent_ip_mapping_json}", agent_ip_mapping_json)

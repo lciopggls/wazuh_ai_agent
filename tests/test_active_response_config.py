@@ -55,6 +55,8 @@ def test_endpoint_response_config_is_separate_and_restricted_for_demo_actions():
     assert '$allowedProcessName = "notepad.exe"' in powershell_script
     assert '$allowedAccountName = "demo_user"' in powershell_script
     assert "Stop-Process -Id $processId -Force" in powershell_script
+    assert '$processClosedAtUtc = [DateTime]::UtcNow.ToString("o")' in powershell_script
+    assert "process_closed_at_utc = $processClosedAtUtc" in powershell_script
     assert '"user" $allowedAccountName "/active:$ActiveValue"' in powershell_script
     assert 'event_type"] = "wazuh_ai_endpoint_response_result"' in powershell_script
 
