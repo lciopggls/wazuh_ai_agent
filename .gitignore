@@ -6,6 +6,7 @@
 .pytest_cache
 .uv-cache/
 .venv
+frontend/.venv/
 .vscode
 .ruff_cache
 __pycache__/
@@ -15,4 +16,5 @@ __pycache__/
 node_modules/
 package-lock.json
 ossec.conf.block-ip-ready
+src/documents/response_config/legacy-notepad-*-results.csv
 .claude/
