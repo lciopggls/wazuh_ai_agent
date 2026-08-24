@@ -4,11 +4,12 @@
 .git-empty-backup/
 .langgraph_api
 .pytest_cache
+.ruff_cache
 .uv-cache/
 .venv
 frontend/.venv/
+.pnpm-store/
 .vscode
-.ruff_cache
 __pycache__/
 *.pyc
 *.orig
@@ -18,3 +19,21 @@ package-lock.json
 ossec.conf.block-ip-ready
 src/documents/response_config/legacy-notepad-*-results.csv
 .claude/
+
+# Knowledge Graph
+src/knowledge_graph/data/1_rewrite/
+src/knowledge_graph/data/2_extract/
+src/knowledge_graph/data/3_label/
+src/knowledge_graph/data/4_sort/
+src/knowledge_graph/data/vis_cache/
+src/knowledge_graph/input/*.txt
+src/knowledge_graph/input/*.pdf
+src/knowledge_graph/output/*.html
+
+# Report scoring runtime data (catalog and placeholders remain versioned)
+report_scoring_data/runtime/reports/*
+!report_scoring_data/runtime/reports/.gitkeep
+report_scoring_data/runtime/scoring_attempts/*
+!report_scoring_data/runtime/scoring_attempts/.gitkeep
+report_scoring_data/studio_inbox/*
+!report_scoring_data/studio_inbox/.gitkeep

@@ -1,0 +1,167 @@
+<html>
+    <head>
+        <meta charset="utf-8">
+        
+            <script src="lib/bindings/utils.js"></script>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js" integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+            
+        
+<center>
+<h1></h1>
+</center>
+
+<!-- <link rel="stylesheet" href="../node_modules/vis/dist/vis.min.css" type="text/css" />
+<script type="text/javascript" src="../node_modules/vis/dist/vis.js"> </script>-->
+        <link
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css"
+          rel="stylesheet"
+          integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6"
+          crossorigin="anonymous"
+        />
+        <script
+          src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf"
+          crossorigin="anonymous"
+        ></script>
+
+
+        <center>
+          <h1></h1>
+        </center>
+        <style type="text/css">
+
+             #mynetwork {
+                 width: 1800px;
+                 height: 1200px;
+                 background-color: #ffffff;
+                 border: 1px solid lightgray;
+                 position: relative;
+                 float: left;
+             }
+
+             
+
+             
+             #config {
+                 float: left;
+                 width: 400px;
+                 height: 600px;
+             }
+             
+
+             
+        </style>
+    </head>
+
+
+    <body>
+        <div class="card" style="width: 100%">
+            
+            
+            <div id="mynetwork" class="card-body"></div>
+        </div>
+
+        
+        
+            <div id="config"></div>
+        
+
+        <script type="text/javascript">
+
+              // initialize global variables.
+              var edges;
+              var nodes;
+              var allNodes;
+              var allEdges;
+              var nodeColors;
+              var originalNodes;
+              var network;
+              var container;
+              var options, data;
+              var filter = {
+                  item : '',
+                  property : '',
+                  value : []
+              };
+
+              
+
+              
+
+              // This method is responsible for drawing the graph, returns the drawn network
+              function drawGraph() {
+                  var container = document.getElementById('mynetwork');
+
+                  
+
+                  // parsing and collecting nodes and edges from the python
+                  nodes = new vis.DataSet([{"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "exploit_0", "label": "exploit", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Initial Access", "technique": "Initial Access-Others", "type": "event", "x": 0.0, "y": 0.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "cve 2022 30190", "label": "cve 2022 30190", "shape": "dot", "size": 14.0, "type": "entity", "x": 0.0, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "deliver_1", "label": "deliver", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Initial Access", "technique": "Initial Access-Others", "type": "event", "x": 94.73684210526316, "y": 0.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "ta570", "label": "ta570", "shape": "dot", "size": 14.0, "type": "entity", "x": 118.42105263157896, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "download_2", "label": "download", "sent_nums": [4], "shape": "triangle", "size": 14.0, "tactic": "Initial Access", "technique": "Initial Access-Others", "type": "event", "x": 189.47368421052633, "y": 0.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Initial Access", "label": "Initial Access", "shape": "box", "size": 14.0, "type": "tactic", "x": 0.0, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Initial Access-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 0.0, "y": -144.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "doc532.docx", "label": "doc532.docx", "shape": "dot", "size": 14.0, "type": "entity", "x": 71.05263157894737, "y": 180.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "qbot", "label": "qbot", "shape": "dot", "size": 14.0, "type": "entity", "x": 930.6501547987617, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_3", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Execution", "technique": "Execution-Others", "type": "event", "x": 284.2105263157895, "y": 0.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "explorer.exe", "label": "explorer.exe", "shape": "dot", "size": 14.0, "type": "entity", "x": 824.7678018575853, "y": 260.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_4", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Persistence", "technique": "Persistence-Others", "type": "event", "x": 378.94736842105266, "y": 0.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_5", "label": "use", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Persistence", "technique": "Persistence-Others", "type": "event", "x": 473.68421052631584, "y": 0.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_6", "label": "use", "sent_nums": [2], "shape": "triangle", "size": 14.0, "tactic": "Persistence", "technique": "Persistence-Others", "type": "event", "x": 568.421052631579, "y": 0.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_7", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Defense Evasion", "technique": "Defense Evasion-Others", "type": "event", "x": 663.1578947368422, "y": 0.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_8", "label": "use", "sent_nums": [3], "shape": "triangle", "size": 14.0, "tactic": "Defense Evasion", "technique": "Defense Evasion-Others", "type": "event", "x": 757.8947368421053, "y": 0.0}, {"color": "#287271", "depth": 2, "font": {"size": 20.0}, "id": "windows defender", "label": "windows defender", "shape": "dot", "size": 14.0, "type": "entity", "x": 954.3343653250776, "y": 260.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_9", "label": "use", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Credential Access", "technique": "Credential Access-Others", "type": "event", "x": 852.6315789473684, "y": 40.0}, {"color": "#287271", "depth": 2, "font": {"size": 20.0}, "id": "windows credential manager", "label": "windows credential manager", "shape": "dot", "size": 14.0, "type": "entity", "x": 906.9659442724459, "y": 260.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_11", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Discovery", "technique": "Discovery-Others", "type": "event", "x": 947.3684210526317, "y": 40.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_12", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Discovery", "technique": "Discovery-Others", "type": "event", "x": 947.3684210526317, "y": -40.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_15", "label": "use", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Lateral Movement", "technique": "Lateral Movement-T1072-Software Deployment Tools", "type": "event", "x": 1231.578947368421, "y": 0.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_17", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Collection", "technique": "Collection-T1114-Email Collection", "type": "event", "x": 1421.0526315789475, "y": 80.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_18", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Collection", "technique": "Collection-T1005-Data from Local System", "type": "event", "x": 1421.0526315789475, "y": 0.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_19", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Collection", "technique": "Collection-T1039-Data from Network Shared Drive", "type": "event", "x": 1421.0526315789475, "y": -80.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_20", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Command and Control", "technique": "Command and Control-Others", "type": "event", "x": 1515.7894736842106, "y": 0.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_21", "label": "use", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Command and Control", "technique": "Command and Control-Others", "type": "event", "x": 1610.5263157894738, "y": 0.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "regsvr32.exe", "label": "regsvr32.exe", "shape": "dot", "size": 14.0, "type": "entity", "x": 757.8947368421053, "y": 180.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Execution", "label": "Execution", "shape": "box", "size": 14.0, "type": "tactic", "x": 142.10526315789474, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Execution-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 142.10526315789474, "y": -144.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "compromise_10", "label": "compromise", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Credential Access", "technique": "Credential Access-Others", "type": "event", "x": 852.6315789473684, "y": -40.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "schtasks.exe", "label": "schtasks.exe", "shape": "dot", "size": 14.0, "type": "entity", "x": 378.94736842105266, "y": 180.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Persistence", "label": "Persistence", "shape": "box", "size": 14.0, "type": "tactic", "x": 284.2105263157895, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Persistence-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 284.2105263157895, "y": -144.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "powershell.exe", "label": "powershell.exe", "shape": "dot", "size": 14.0, "type": "entity", "x": 473.68421052631584, "y": 180.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "benfouqcgq", "label": "benfouqcgq", "shape": "dot", "size": 14.0, "type": "entity", "x": 568.421052631579, "y": 180.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Defense Evasion", "label": "Defense Evasion", "shape": "box", "size": 14.0, "type": "tactic", "x": 426.3157894736842, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Defense Evasion-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 426.3157894736842, "y": -144.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Credential Access", "label": "Credential Access", "shape": "box", "size": 14.0, "type": "tactic", "x": 568.421052631579, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Credential Access-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 568.421052631579, "y": -144.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "lsass", "label": "lsass", "shape": "dot", "size": 14.0, "type": "entity", "x": 852.6315789473684, "y": 180.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "whoami", "label": "whoami", "shape": "dot", "size": 14.0, "type": "entity", "x": 971.0526315789475, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_13", "label": "use", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Discovery", "technique": "Discovery-Others", "type": "event", "x": 1042.1052631578948, "y": 0.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Discovery", "label": "Discovery", "shape": "box", "size": 14.0, "type": "tactic", "x": 710.5263157894738, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Discovery-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 710.5263157894738, "y": -144.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "net view", "label": "net view", "shape": "dot", "size": 14.0, "type": "entity", "x": 923.6842105263158, "y": 180.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "net group", "label": "net group", "shape": "dot", "size": 14.0, "type": "entity", "x": 1042.1052631578948, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_14", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Lateral Movement", "technique": "Lateral Movement-T1072-Software Deployment Tools", "type": "event", "x": 1136.842105263158, "y": 0.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "cobalt strike", "label": "cobalt strike", "shape": "dot", "size": 14.0, "type": "entity", "x": 1373.6842105263158, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_22", "label": "use", "sent_nums": [8], "shape": "triangle", "size": 14.0, "tactic": "Command and Control", "technique": "Command and Control-Others", "type": "event", "x": 1705.2631578947369, "y": 0.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 20.0}, "id": "attacker", "label": "attacker", "shape": "dot", "size": 14.0, "type": "entity", "x": 1231.5789473684213, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "font": {"size": 20.0}, "id": "use_16", "label": "use", "sent_nums": [2], "shape": "triangle", "size": 14.0, "tactic": "Lateral Movement", "technique": "Lateral Movement-T1072-Software Deployment Tools", "type": "event", "x": 1326.3157894736844, "y": 0.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Lateral Movement", "label": "Lateral Movement", "shape": "box", "size": 14.0, "type": "tactic", "x": 994.7368421052631, "y": -208.0}, {"caption": "T1570", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Lateral Movement-T1570-Lateral Tool Transfer", "label": "T1570", "shape": "box", "size": 14.0, "type": "technique", "x": 1136.842105263158, "y": -144.0}, {"caption": "T1570", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Lateral Movement-T1021-Remote Services", "label": "T1570", "shape": "box", "size": 14.0, "type": "technique", "x": 852.6315789473684, "y": -144.0}, {"caption": "T1570", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Lateral Movement-T1072-Software Deployment Tools", "label": "T1570", "shape": "box", "size": 14.0, "type": "technique", "x": 994.7368421052631, "y": -144.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "rdp", "label": "rdp", "shape": "dot", "size": 14.0, "type": "entity", "x": 1326.3157894736844, "y": 180.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "outlook", "label": "outlook", "shape": "dot", "size": 14.0, "type": "entity", "x": 1468.4210526315792, "y": 180.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Collection", "label": "Collection", "shape": "box", "size": 14.0, "type": "tactic", "x": 1421.0526315789475, "y": -208.0}, {"caption": "T1114", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Collection-T1114-Email Collection", "label": "T1114", "shape": "box", "size": 14.0, "type": "technique", "x": 1563.157894736842, "y": -144.0}, {"caption": "T1005", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Collection-T1005-Data from Local System", "label": "T1005", "shape": "box", "size": 14.0, "type": "technique", "x": 1278.9473684210527, "y": -144.0}, {"caption": "T1039", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Collection-T1039-Data from Network Shared Drive", "label": "T1039", "shape": "box", "size": 14.0, "type": "technique", "x": 1421.0526315789475, "y": -144.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "esentutl.exe", "label": "esentutl.exe", "shape": "dot", "size": 14.0, "type": "entity", "x": 1421.0526315789475, "y": 180.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "internet explorer", "label": "internet explorer", "shape": "dot", "size": 14.0, "type": "entity", "x": 1373.6842105263158, "y": 180.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "144.202.3[.]39", "label": "144.202.3[.]39", "shape": "dot", "size": 14.0, "type": "entity", "x": 1515.7894736842106, "y": 180.0}, {"color": "#FF6347", "depth": 2, "font": {"size": 20.0}, "id": "Command and Control", "label": "Command and Control", "shape": "box", "size": 14.0, "type": "tactic", "x": 1705.2631578947369, "y": -208.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "font": {"size": 20.0}, "id": "Command and Control-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "x": 1705.2631578947369, "y": -144.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "pesqfbmfk.us", "label": "pesqfbmfk.us", "shape": "dot", "size": 14.0, "type": "entity", "x": 1610.5263157894738, "y": 180.0}, {"color": "#287271", "depth": 1, "font": {"size": 20.0}, "id": "190.123.44[.]126", "label": "190.123.44[.]126", "shape": "dot", "size": 14.0, "type": "entity", "x": 1705.2631578947369, "y": 180.0}]);
+                  edges = new vis.DataSet([{"arrows": "to", "from": "exploit_0", "relation": "Object", "to": "cve 2022 30190", "width": 1}, {"arrows": "to", "from": "exploit_0", "to": "deliver_1", "width": 1}, {"arrows": "to", "from": "ta570", "relation": "Subject", "to": "exploit_0", "width": 1}, {"arrows": "to", "from": "ta570", "relation": "Subject", "to": "deliver_1", "width": 1}, {"arrows": "to", "from": "ta570", "relation": "Subject", "to": "download_2", "width": 1}, {"arrows": "to", "from": "Initial Access", "to": "Initial Access-Others", "width": 1}, {"arrows": "to", "from": "Initial Access-Others", "to": "exploit_0", "width": 1}, {"arrows": "to", "from": "Initial Access-Others", "to": "deliver_1", "width": 1}, {"arrows": "to", "from": "Initial Access-Others", "to": "download_2", "width": 1}, {"arrows": "to", "from": "deliver_1", "relation": "Object", "to": "doc532.docx", "width": 1}, {"arrows": "to", "from": "deliver_1", "to": "download_2", "width": 1}, {"arrows": "to", "from": "download_2", "relation": "Object", "to": "qbot", "width": 1}, {"arrows": "to", "from": "download_2", "to": "use_3", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_3", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "qbot", "label": "inject", "relation": "inject", "to": "explorer.exe", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_4", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_5", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_6", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_7", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_8", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "qbot", "label": "Evade", "relation": "Evade", "to": "windows defender", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_9", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "qbot", "label": "target", "relation": "target", "to": "windows credential manager", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_11", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_12", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_15", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_17", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_18", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_19", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_20", "width": 1}, {"arrows": "to", "from": "qbot", "relation": "Subject", "to": "use_21", "width": 1}, {"arrows": "to", "from": "use_3", "relation": "Object", "to": "regsvr32.exe", "width": 1}, {"arrows": "to", "from": "use_3", "to": "use_4", "width": 1}, {"arrows": "to", "from": "Execution", "to": "Execution-Others", "width": 1}, {"arrows": "to", "from": "Execution-Others", "to": "use_3", "width": 1}, {"arrows": "to", "from": "explorer.exe", "relation": "Subject", "to": "compromise_10", "width": 1}, {"arrows": "to", "from": "use_4", "relation": "Object", "to": "schtasks.exe", "width": 1}, {"arrows": "to", "from": "use_4", "to": "use_5", "width": 1}, {"arrows": "to", "from": "Persistence", "to": "Persistence-Others", "width": 1}, {"arrows": "to", "from": "Persistence-Others", "to": "use_4", "width": 1}, {"arrows": "to", "from": "Persistence-Others", "to": "use_5", "width": 1}, {"arrows": "to", "from": "Persistence-Others", "to": "use_6", "width": 1}, {"arrows": "to", "from": "use_5", "relation": "Object", "to": "powershell.exe", "width": 1}, {"arrows": "to", "from": "use_5", "to": "use_6", "width": 1}, {"arrows": "to", "from": "use_6", "relation": "Object", "to": "benfouqcgq", "width": 1}, {"arrows": "to", "from": "use_6", "to": "use_7", "width": 1}, {"arrows": "to", "from": "use_7", "relation": "Object", "to": "explorer.exe", "width": 1}, {"arrows": "to", "from": "use_7", "to": "use_8", "width": 1}, {"arrows": "to", "from": "Defense Evasion", "to": "Defense Evasion-Others", "width": 1}, {"arrows": "to", "from": "Defense Evasion-Others", "to": "use_7", "width": 1}, {"arrows": "to", "from": "Defense Evasion-Others", "to": "use_8", "width": 1}, {"arrows": "to", "from": "use_8", "relation": "Object", "to": "regsvr32.exe", "width": 1}, {"arrows": "to", "from": "use_8", "to": "use_9", "width": 1}, {"arrows": "to", "from": "use_8", "to": "compromise_10", "width": 1}, {"arrows": "to", "from": "use_9", "relation": "Object", "to": "explorer.exe", "width": 1}, {"arrows": "to", "from": "use_9", "to": "use_11", "width": 1}, {"arrows": "to", "from": "use_9", "to": "use_12", "width": 1}, {"arrows": "to", "from": "Credential Access", "to": "Credential Access-Others", "width": 1}, {"arrows": "to", "from": "Credential Access-Others", "to": "use_9", "width": 1}, {"arrows": "to", "from": "Credential Access-Others", "to": "compromise_10", "width": 1}, {"arrows": "to", "from": "compromise_10", "relation": "Object", "to": "lsass", "width": 1}, {"arrows": "to", "from": "compromise_10", "to": "use_11", "width": 1}, {"arrows": "to", "from": "compromise_10", "to": "use_12", "width": 1}, {"arrows": "to", "from": "use_11", "relation": "Object", "to": "whoami", "width": 1}, {"arrows": "to", "from": "use_11", "to": "use_13", "width": 1}, {"arrows": "to", "from": "Discovery", "to": "Discovery-Others", "width": 1}, {"arrows": "to", "from": "Discovery-Others", "to": "use_11", "width": 1}, {"arrows": "to", "from": "Discovery-Others", "to": "use_12", "width": 1}, {"arrows": "to", "from": "Discovery-Others", "to": "use_13", "width": 1}, {"arrows": "to", "from": "use_12", "relation": "Object", "to": "net view", "width": 1}, {"arrows": "to", "from": "use_12", "to": "use_13", "width": 1}, {"arrows": "to", "from": "use_13", "relation": "Object", "to": "net group", "width": 1}, {"arrows": "to", "from": "use_13", "to": "use_14", "width": 1}, {"arrows": "to", "from": "cobalt strike", "relation": "Subject", "to": "use_13", "width": 1}, {"arrows": "to", "from": "cobalt strike", "relation": "Subject", "to": "use_22", "width": 1}, {"arrows": "to", "from": "use_14", "relation": "Object", "to": "qbot", "width": 1}, {"arrows": "to", "from": "use_14", "to": "use_15", "width": 1}, {"arrows": "to", "from": "attacker", "relation": "Subject", "to": "use_14", "width": 1}, {"arrows": "to", "from": "attacker", "relation": "Subject", "to": "use_16", "width": 1}, {"arrows": "to", "from": "Lateral Movement", "to": "Lateral Movement-T1570-Lateral Tool Transfer", "width": 1}, {"arrows": "to", "from": "Lateral Movement", "to": "Lateral Movement-T1021-Remote Services", "width": 1}, {"arrows": "to", "from": "Lateral Movement", "to": "Lateral Movement-T1072-Software Deployment Tools", "width": 1}, {"arrows": "to", "from": "Lateral Movement-T1570-Lateral Tool Transfer", "to": "use_14", "width": 1}, {"arrows": "to", "from": "Lateral Movement-T1570-Lateral Tool Transfer", "to": "use_15", "width": 1}, {"arrows": "to", "from": "Lateral Movement-T1570-Lateral Tool Transfer", "to": "use_16", "width": 1}, {"arrows": "to", "from": "Lateral Movement-T1021-Remote Services", "to": "use_14", "width": 1}, {"arrows": "to", "from": "Lateral Movement-T1021-Remote Services", "to": "use_15", "width": 1}, {"arrows": "to", "from": "Lateral Movement-T1021-Remote Services", "to": "use_16", "width": 1}, {"arrows": "to", "from": "Lateral Movement-T1072-Software Deployment Tools", "to": "use_14", "width": 1}, {"arrows": "to", "from": "Lateral Movement-T1072-Software Deployment Tools", "to": "use_15", "width": 1}, {"arrows": "to", "from": "Lateral Movement-T1072-Software Deployment Tools", "to": "use_16", "width": 1}, {"arrows": "to", "from": "use_15", "relation": "Object", "to": "regsvr32.exe", "width": 1}, {"arrows": "to", "from": "use_15", "to": "use_16", "width": 1}, {"arrows": "to", "from": "use_16", "relation": "Object", "to": "rdp", "width": 1}, {"arrows": "to", "from": "use_16", "to": "use_17", "width": 1}, {"arrows": "to", "from": "use_16", "to": "use_18", "width": 1}, {"arrows": "to", "from": "use_16", "to": "use_19", "width": 1}, {"arrows": "to", "from": "use_17", "relation": "Object", "to": "outlook", "width": 1}, {"arrows": "to", "from": "use_17", "to": "use_20", "width": 1}, {"arrows": "to", "from": "Collection", "to": "Collection-T1114-Email Collection", "width": 1}, {"arrows": "to", "from": "Collection", "to": "Collection-T1005-Data from Local System", "width": 1}, {"arrows": "to", "from": "Collection", "to": "Collection-T1039-Data from Network Shared Drive", "width": 1}, {"arrows": "to", "from": "Collection-T1114-Email Collection", "to": "use_17", "width": 1}, {"arrows": "to", "from": "use_18", "relation": "Object", "to": "esentutl.exe", "width": 1}, {"arrows": "to", "from": "use_18", "to": "use_20", "width": 1}, {"arrows": "to", "from": "Collection-T1005-Data from Local System", "to": "use_18", "width": 1}, {"arrows": "to", "from": "use_19", "relation": "Object", "to": "internet explorer", "width": 1}, {"arrows": "to", "from": "use_19", "to": "use_20", "width": 1}, {"arrows": "to", "from": "Collection-T1039-Data from Network Shared Drive", "to": "use_19", "width": 1}, {"arrows": "to", "from": "use_20", "relation": "Object", "to": "144.202.3[.]39", "width": 1}, {"arrows": "to", "from": "use_20", "to": "use_21", "width": 1}, {"arrows": "to", "from": "Command and Control", "to": "Command and Control-Others", "width": 1}, {"arrows": "to", "from": "Command and Control-Others", "to": "use_20", "width": 1}, {"arrows": "to", "from": "Command and Control-Others", "to": "use_21", "width": 1}, {"arrows": "to", "from": "Command and Control-Others", "to": "use_22", "width": 1}, {"arrows": "to", "from": "use_21", "relation": "Object", "to": "pesqfbmfk.us", "width": 1}, {"arrows": "to", "from": "use_21", "to": "use_22", "width": 1}, {"arrows": "to", "from": "use_22", "relation": "Object", "to": "190.123.44[.]126", "width": 1}]);
+
+                  nodeColors = {};
+                  allNodes = nodes.get({ returnType: "Object" });
+                  for (nodeId in allNodes) {
+                    nodeColors[nodeId] = allNodes[nodeId].color;
+                  }
+                  allEdges = edges.get({ returnType: "Object" });
+                  // adding nodes and edges to the graph
+                  data = {nodes: nodes, edges: edges};
+
+                  var options = {
+    "configure": {
+        "enabled": true
+    },
+    "edges": {
+        "color": {
+            "inherit": true
+        },
+        "smooth": {
+            "enabled": true,
+            "type": "dynamic"
+        }
+    },
+    "interaction": {
+        "dragNodes": true,
+        "hideEdgesOnDrag": false,
+        "hideNodesOnDrag": false
+    },
+    "physics": {
+        "enabled": false,
+        "stabilization": {
+            "enabled": true,
+            "fit": true,
+            "iterations": 1000,
+            "onlyDynamicEdges": false,
+            "updateInterval": 50
+        }
+    }
+};
+
+                  
+
+
+                  
+                  // if this network requires displaying the configure window,
+                  // put it in its div
+                  options.configure["container"] = document.getElementById("config");
+                  
+
+                  network = new vis.Network(container, data, options);
+
+                  
+
+                  
+
+                  
+
+
+                  
+
+                  return network;
+
+              }
+              drawGraph();
+        </script>
+    </body>
+</html>

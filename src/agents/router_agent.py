@@ -9,7 +9,10 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.config import get_config
 
 from agents.attack_attribution.attack_attributor import get_attack_attribution_agent
-from agents.attack_attribution.utils import extract_agent_ip_mapping
+from agents.attack_attribution.utils import (
+    extract_agent_ip_mapping,
+    format_attribution_report_message,
+)
 from agents.response_agent import get_response_agent
 from agents.rule_agent.rule_agent import get_rule_agent
 
@@ -27,6 +30,20 @@ def _get_thread_id() -> str:
     if isinstance(configurable, dict) and configurable.get("thread_id"):
         return str(configurable["thread_id"])
     return "default"
+
+
+def _get_visualization_requested() -> bool:
+    """Read the frontend preference from run config without involving the router model."""
+    try:
+        config = get_config()
+    except RuntimeError:
+        return False
+    if not isinstance(config, dict):
+        return False
+    configurable = config.get("configurable", {})
+    if not isinstance(configurable, dict):
+        return False
+    return bool(configurable.get("visualization_requested", False))
 
 
 def _get_thread_session(
@@ -267,6 +284,9 @@ def _invoke_specialist(
     next_state = dict(current_state or {})
     existing_messages = list(next_state.get("messages", []))
 
+    if specialist_name == "attack_attribution":
+        next_state["visualization_requested"] = _get_visualization_requested()
+
     plan_summary = session.get("latest_plan_summary")
     plan_steps = session.get("latest_plan_steps") or []
     if plan_summary:
@@ -301,13 +321,31 @@ def _invoke_specialist(
         state_summary = "{}"
 
     artifacts = None
+    analysis_elapsed_seconds = (
+        result.get("analysis_elapsed_seconds") if specialist_name == "attack_attribution" else None
+    )
     if specialist_name == "attack_attribution" and result.get("is_full_attribution_complete"):
-        reply = result.get("final_report") or "报告生成失败。"
-        artifacts = {
-            "svg_chart": result.get("svg_chart"),
-            "attack_abstract": result.get("attack_abstract"),
-            "attack_graph": result.get("attack_graph"),
-        }
+        final_report = result.get("final_report")
+        if not final_report:
+            raise RuntimeError("Completed attack attribution state is missing final_report")
+        if analysis_elapsed_seconds is None:
+            raise RuntimeError(
+                "Completed attack attribution state is missing analysis_elapsed_seconds"
+            )
+        reply = format_attribution_report_message(final_report, analysis_elapsed_seconds)
+        visualization_enabled = result.get("visualization_enabled_for_investigation")
+        if visualization_enabled is None:
+            # 兼容升级前已存在、尚未写入锁定字段的调查状态。
+            visualization_enabled = any(
+                result.get(key) is not None
+                for key in ("svg_chart", "attack_abstract", "attack_graph")
+            )
+        if visualization_enabled:
+            artifacts = {
+                "svg_chart": result.get("svg_chart"),
+                "attack_abstract": result.get("attack_abstract"),
+                "attack_graph": result.get("attack_graph"),
+            }
 
     return json.dumps(
         {

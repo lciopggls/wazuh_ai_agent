@@ -1,19 +1,35 @@
 import json
+import logging
+import os
+import shutil
+import subprocess
+import sys
+import uuid
 from collections.abc import AsyncGenerator
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 # LangChain / LangGraph 导入
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from agents.attack_attribution.attack_attributor import get_attack_attribution_agent
-from agents.router_agent import get_router_agent
 from core.config import settings
+from service.report_scoring.api_models import ScoringRegistration
+from service.report_scoring.bootstrap import create_report_scoring_runtime
+from service.report_scoring.errors import ReportScoringError
+from service.report_scoring.router import (
+    create_report_scoring_router,
+    create_unavailable_report_scoring_router,
+)
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Wazuh SOC Multi-Agent Streaming API")
 app.add_middleware(
@@ -34,33 +50,65 @@ llm = ChatOpenAI(
 
 # 初始化智能体注册表
 def initialize_agents():
-    # 实际开发中，这里可以针对不同 agent_id 加载不同的 graph
+    # 延迟导入，避免报告保存/评分等独立接口在模块导入时连接 Wazuh。
+    from agents.agent import (
+        get_attack_attribution_agent,
+        get_baseline_agent_plus,
+        get_baseline_agent_simple,
+        get_router_agent,
+    )
+
     return {
         "router_agent": get_router_agent(llm, llm, llm, checkpointer=memory),
         "attack_attribution": get_attack_attribution_agent(llm, checkpointer=memory),
+        "baseline_agent_simple": get_baseline_agent_simple(llm, checkpointer=memory),
+        "baseline_agent_plus": get_baseline_agent_plus(llm, checkpointer=memory),
     }
 
 
-agents_registry = initialize_agents()
+agents_registry = None
+
+
+def get_agents_registry():
+    global agents_registry
+    if agents_registry is None:
+        agents_registry = initialize_agents()
+    return agents_registry
 
 
 class ChatInput(BaseModel):
     message: str
     thread_id: str
     agent_id: str = "rule_generator"
+    visualization_requested: bool = False
+
+
+class SaveReportInput(BaseModel):
+    content: str
+    filename: str | None = None  # 可选，不传则自动生成
+    # Keep the optional registration raw until the core report has been saved.
+    # Otherwise FastAPI would reject the whole request before save_report runs.
+    scoring_registration: Any | None = None
 
 
 async def event_generator(data: ChatInput) -> AsyncGenerator[str, None]:
     """
     流式生成器：捕获 LangGraph 每个节点的完整输出，动态封装并推送至前端
     """
-    agent_executor = agents_registry.get(data.agent_id)
+    agent_executor = get_agents_registry().get(data.agent_id)
     if not agent_executor:
         yield f"data: {json.dumps({'error': 'Agent not found'})}\n\n"
         return
 
-    config = {"configurable": {"thread_id": data.thread_id}}
+    config = {
+        "configurable": {
+            "thread_id": data.thread_id,
+            "visualization_requested": data.visualization_requested,
+        }
+    }
     input_state = {"messages": [{"role": "user", "content": data.message}]}
+    if data.agent_id == "attack_attribution":
+        input_state["visualization_requested"] = data.visualization_requested
 
     try:
         # 使用 stream_mode="updates" 模式
@@ -102,6 +150,353 @@ async def chat_stream(data: ChatInput):
     流式对话接口
     """
     return StreamingResponse(event_generator(data), media_type="text/event-stream")
+
+
+# ── 报告保存配置 ──
+# 输出目录：攻击溯源报告的保存路径
+REPORT_OUTPUT_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "knowledge_graph",
+    "input",
+)
+
+# ── 知识图谱路径配置 ──
+_KG_ROOT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "knowledge_graph",
+)
+KG_INPUT_DIR = os.path.join(_KG_ROOT, "input")
+KG_OUTPUT_DIR = os.path.join(_KG_ROOT, "output")
+KG_GALLERY_DIR = os.path.join(_KG_ROOT, "gallery")
+ALLOWED_EXTENSIONS = {".txt", ".pdf", ".md"}
+
+
+@app.post("/api/report/save")
+async def save_report(data: SaveReportInput):
+    """
+    保存攻击溯源报告到本地 knowledge_graph/input 目录
+    """
+    try:
+        os.makedirs(REPORT_OUTPUT_DIR, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = (
+            Path(data.filename).name if data.filename else f"attack_trace_report_{timestamp}.md"
+        )
+        # 确保扩展名是 .md
+        if not filename.endswith(".md"):
+            filename += ".md"
+        filepath = os.path.join(REPORT_OUTPUT_DIR, filename)
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(data.content)
+
+        response = {
+            "status": "ok",
+            "filepath": filepath,
+            "filename": filename,
+            "message": f"报告已保存: {filename}",
+        }
+        if data.scoring_registration is not None:
+            try:
+                registration = ScoringRegistration.model_validate(data.scoring_registration)
+            except ValidationError as exc:
+                invalid = ReportScoringError(
+                    "INVALID_REPORT_REGISTRATION",
+                    "评分登记字段无效，原报告已按核心流程保存",
+                    status_code=422,
+                    details={
+                        "errors": [
+                            {
+                                "field": ".".join(str(part) for part in error["loc"]),
+                                "message": error["msg"],
+                            }
+                            for error in exc.errors()
+                        ]
+                    },
+                )
+                response["scoring_registration"] = {
+                    "status": "error",
+                    "error": invalid.as_dict(),
+                }
+            else:
+                if report_repository is None:
+                    unavailable = ReportScoringError(
+                        "SCORING_UNAVAILABLE",
+                        "报告评分服务当前不可用，报告已按原流程保存",
+                        status_code=503,
+                    )
+                    response["scoring_registration"] = {
+                        "status": "error",
+                        "error": unavailable.as_dict(),
+                    }
+                else:
+                    try:
+                        record = report_repository.create_report(
+                            content=data.content.encode("utf-8"),
+                            filename=filename,
+                            test_case_id=registration.test_case_id,
+                            agent_id=registration.agent_id,
+                            source_type="ai_chat",
+                            thread_id=registration.thread_id,
+                            run_id=registration.run_id,
+                            note=registration.note,
+                        )
+                        response["scoring_registration"] = {
+                            "status": "ok",
+                            "report": record.model_dump(mode="json"),
+                        }
+                    except ReportScoringError as exc:
+                        partial_failure = ReportScoringError(
+                            exc.code,
+                            f"原报告已保存；评分登记失败：{exc.message}",
+                            status_code=exc.status_code,
+                            field=exc.field,
+                            details=exc.details,
+                        )
+                        response["scoring_registration"] = {
+                            "status": "error",
+                            "error": partial_failure.as_dict(),
+                        }
+                    except Exception:
+                        logger.exception("评分登记失败；核心报告已保存")
+                        failed = ReportScoringError(
+                            "SCORING_REGISTRATION_ERROR",
+                            "评分登记失败，原报告已按核心流程保存",
+                            status_code=500,
+                        )
+                        response["scoring_registration"] = {
+                            "status": "error",
+                            "error": failed.as_dict(),
+                        }
+        return response
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ── 开发期报告评分 API ──
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_SCORING_DATA_ROOT = _PROJECT_ROOT / "report_scoring_data"
+report_scoring_runtime = None
+case_registry = None
+report_repository = None
+score_repository = None
+scoring_service = None
+try:
+    report_scoring_runtime = create_report_scoring_runtime(_SCORING_DATA_ROOT, llm)
+    case_registry = report_scoring_runtime.case_registry
+    report_repository = report_scoring_runtime.report_repository
+    score_repository = report_scoring_runtime.score_repository
+    scoring_service = report_scoring_runtime.scoring_service
+except Exception as exc:  # optional subsystem must not block core application startup
+    logger.warning("Report scoring subsystem is unavailable: %s", type(exc).__name__)
+
+
+@app.exception_handler(ReportScoringError)
+async def report_scoring_error_handler(_request, exc: ReportScoringError):
+    return JSONResponse(status_code=exc.status_code, content=exc.as_dict())
+
+
+if report_scoring_runtime is None:
+    app.include_router(create_unavailable_report_scoring_router())
+else:
+    app.include_router(
+        create_report_scoring_router(case_registry, report_repository, scoring_service)
+    )
+
+
+# ──────────────────────────────────────────────
+# 知识图谱 API
+# ──────────────────────────────────────────────
+
+
+@app.get("/api/knowledge-graph/gallery")
+async def kg_list_gallery():
+    """列出 gallery 目录下所有 HTML 图谱文件"""
+    try:
+        os.makedirs(KG_GALLERY_DIR, exist_ok=True)
+        files = []
+        for f in sorted(os.listdir(KG_GALLERY_DIR)):
+            if f.endswith(".html"):
+                fpath = os.path.join(KG_GALLERY_DIR, f)
+                files.append(
+                    {
+                        "name": f,
+                        "size": os.path.getsize(fpath),
+                        "mtime": os.path.getmtime(fpath),
+                    }
+                )
+        return {"status": "ok", "files": files}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/knowledge-graph/gallery/{filename:path}")
+async def kg_get_gallery_file(filename: str):
+    """返回 gallery 中指定 HTML 文件的内容"""
+    safe_name = Path(filename).name
+    fpath = os.path.join(KG_GALLERY_DIR, safe_name)
+    if not os.path.isfile(fpath):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    with open(fpath, encoding="utf-8") as f:
+        content = f.read()
+    return {"status": "ok", "name": safe_name, "content": content}
+
+
+@app.delete("/api/knowledge-graph/gallery/{filename:path}")
+async def kg_delete_gallery_file(filename: str):
+    """删除 gallery 中指定的图谱文件"""
+    safe_name = Path(filename).name
+    fpath = os.path.join(KG_GALLERY_DIR, safe_name)
+    if not os.path.isfile(fpath):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    try:
+        os.remove(fpath)
+        return {"status": "ok", "message": f"文件 {safe_name} 已删除"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/knowledge-graph/output")
+async def kg_list_output():
+    """列出 output 目录下所有生成的 HTML 图谱文件"""
+    try:
+        os.makedirs(KG_OUTPUT_DIR, exist_ok=True)
+        files = []
+        for f in sorted(os.listdir(KG_OUTPUT_DIR)):
+            if f.endswith(".html"):
+                fpath = os.path.join(KG_OUTPUT_DIR, f)
+                files.append(
+                    {
+                        "name": f,
+                        "size": os.path.getsize(fpath),
+                        "mtime": os.path.getmtime(fpath),
+                    }
+                )
+        return {"status": "ok", "files": files}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.get("/api/knowledge-graph/output/{filename:path}")
+async def kg_get_output_file(filename: str):
+    """返回 output 中指定 HTML 文件的内容"""
+    safe_name = Path(filename).name
+    fpath = os.path.join(KG_OUTPUT_DIR, safe_name)
+    if not os.path.isfile(fpath):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    with open(fpath, encoding="utf-8") as f:
+        content = f.read()
+    return {"status": "ok", "name": safe_name, "content": content}
+
+
+@app.post("/api/knowledge-graph/upload")
+async def kg_upload_file(file: UploadFile = File(...)):
+    """上传文件到 input 目录，仅支持 txt / pdf / md"""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件格式 '{ext}'，仅支持 txt、pdf、md",
+        )
+    try:
+        os.makedirs(KG_INPUT_DIR, exist_ok=True)
+        # 避免重名覆盖
+        dest = os.path.join(KG_INPUT_DIR, file.filename or f"upload_{uuid.uuid4().hex}{ext}")
+        if os.path.exists(dest):
+            name_stem = os.path.splitext(file.filename or "file")[0]
+            dest = os.path.join(KG_INPUT_DIR, f"{name_stem}_{uuid.uuid4().hex}{ext}")
+
+        content = await file.read()
+        with open(dest, "wb") as f:
+            f.write(content)
+
+        return {
+            "status": "ok",
+            "filename": os.path.basename(dest),
+            "filepath": dest,
+            "message": f"文件 {file.filename} 上传成功",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/api/knowledge-graph/generate")
+async def kg_generate():
+    """运行 AttacKG 知识图谱生成流水线"""
+    try:
+        os.makedirs(KG_INPUT_DIR, exist_ok=True)
+        os.makedirs(KG_OUTPUT_DIR, exist_ok=True)
+
+        script_path = os.path.join(_KG_ROOT, "AttacKG_Run.py")
+        if not os.path.isfile(script_path):
+            raise HTTPException(status_code=500, detail=f"脚本不存在: {script_path}")
+
+        # 检查 input 目录是否有支持的文件
+        input_files = [f for f in os.listdir(KG_INPUT_DIR) if f.endswith((".txt", ".md", ".pdf"))]
+        if not input_files:
+            raise HTTPException(
+                status_code=400, detail="input 目录中没有可处理的文件（仅支持 txt / pdf / md）"
+            )
+
+        result = subprocess.run(
+            [sys.executable, "-B", script_path],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=_KG_ROOT,
+        )
+
+        if result.returncode != 0:
+            return {
+                "status": "error",
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "message": "图谱生成失败",
+            }
+
+        # 收集 output 文件列表
+        output_files = [f for f in sorted(os.listdir(KG_OUTPUT_DIR)) if f.endswith(".html")]
+
+        return {
+            "status": "ok",
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "output_files": output_files,
+            "message": f"图谱生成完成，共 {len(output_files)} 个文件",
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="图谱生成超时（300秒）") from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/api/knowledge-graph/save-to-gallery")
+async def kg_save_to_gallery(data: dict):
+    """将 output 中的指定图谱文件复制到 gallery 目录"""
+    filename = data.get("filename", "")
+    if not filename:
+        raise HTTPException(status_code=400, detail="缺少 filename 参数")
+
+    safe_name = Path(filename).name
+    src = os.path.join(KG_OUTPUT_DIR, safe_name)
+    if not os.path.isfile(src):
+        raise HTTPException(status_code=404, detail=f"output 中不存在文件: {safe_name}")
+
+    try:
+        os.makedirs(KG_GALLERY_DIR, exist_ok=True)
+        dst = os.path.join(KG_GALLERY_DIR, safe_name)
+        shutil.copy2(src, dst)
+        return {
+            "status": "ok",
+            "filename": safe_name,
+            "filepath": dst,
+            "message": f"图谱 {safe_name} 已存入 gallery",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 if __name__ == "__main__":

@@ -2,6 +2,8 @@ import httpx
 from langchain_openai import ChatOpenAI
 
 from agents.attack_attribution.attack_attributor import get_attack_attribution_agent
+from agents.baseline.baseline_agent_plus import get_baseline_agent_plus
+from agents.baseline.baseline_agent_simple import get_baseline_agent_simple
 from agents.demo_agent import get_demo_agent
 from agents.indexer_agent import get_indexer_agent
 from agents.response_agent import get_response_agent
@@ -44,5 +46,12 @@ demo_agent = get_demo_agent(model)
 indexer_agent = get_indexer_agent(model)
 rule_agent = get_rule_agent(model)
 attack_attributor = get_attack_attribution_agent(model_attribution)
-router_agent = get_router_agent(model, rule_model=model, attack_model=model_attribution, response_model=model)
+baseline_agent_plus = get_baseline_agent_plus(model)
+baseline_agent_simple = get_baseline_agent_simple(model)
+router_agent = get_router_agent(
+    model,
+    rule_model=model,
+    attack_model=model_attribution,
+    response_model=model,
+)
 response_agent = get_response_agent(model)

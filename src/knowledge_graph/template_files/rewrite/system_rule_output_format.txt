@@ -1,0 +1,9 @@
+The output format is as follows, the description in the "{}" is the help for you to understand the format. Do not consider these content as formats and ignore them when give your response:
+Reconnaissance: {tactic name or label : Others}
+APT40  used  MURKYSHELL  at  a  compromised  victim  organization  to  port  scan  IP  addresses  and  conduct  network  enumeration.  APT40  frequently  uses  native  Windows  commands,  such  as  net.exe,  to  conduct  internal  reconnaissance  of  a  victim’s  environment.  Web  shells  are  heavily  relied  on  for  nearly  all  stages  of  the  attack  lifecycle. Internal  web  servers  are  often  not  configured  with  the  same  security  controls  as  public-facing  counterparts,  making  them  more  vulnerable  to  exploitation  by  APT40  and  similarly  sophisticated  groups.  {Key Information rewriting/summarization}
+
+Triples: {Triples Extracted from the summary above}
+APT40(Organization) ; Use ; MURKYSHELL(Malware)
+APT40(Organization) ; Use ; net.exe(Filename)
+
+{Repeat the format above to rewrite and extract other tactic in the input text}

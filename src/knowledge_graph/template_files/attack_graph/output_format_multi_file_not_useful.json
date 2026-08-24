@@ -1,0 +1,58 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "multi_file_attack_graph_extractor",
+      "description": "Cyber Threat Intelligence (CTI) reports typically provide a description of the progress of a cyber attack. The input of the text is some paragraphs of the CTI report. The function is used to extract the subject(SubjectType); relation; object(ObjectType); SentenceNums triplets. The SentenceNums format will be like [1, 2]",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "multi_file_triplets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "triplets": {
+                  "type": "array",
+                  "description": "The extracted triplets of the article x",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "Subject": {
+                        "type": "string",
+                        "description": "Subject in the triplets"
+                      },
+                      "SubjectType": {
+                        "type": "string",
+                        "description": "The type of the subject"
+                      },
+                      "Relation": {
+                        "type": "string",
+                        "description": "Relation in the triplets"
+                      },
+                      "Object": {
+                        "type": "string",
+                        "description": "Object in the triplets"
+                      },
+                      "ObjectType": {
+                        "type": "string",
+                        "description": "The type of the object"
+                      }
+                    }
+                  }
+                },
+                "file_id": {
+                  "type": "number",
+                  "description": "The file id of the article. Usually, it is the number x in the string: 'article x:'"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "multi_file_triplets"
+        ]
+      }
+    }
+  }
+]

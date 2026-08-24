@@ -1,0 +1,1 @@
+If the extracted "relation" contains a verb, please replace non-infinitive verb forms, such as third-person singular, past tense, or perfect tense, with the infinitive form of the verb. For example, if the extracted result is "A; delivers; B," it should be replaced with "A; deliver; B."

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "test_case_id": "SIM-205",
+  "display_name": "SIM-205 Registry Base64 Storage",
+  "enabled": true,
+  "scoring_standard_version": "v3.0",
+  "scoring_standard_path": "standards/scoring_v3_0.md",
+  "input_path": "input_message.txt",
+  "anchor_path": "anchor.json",
+  "ground_truth_path": "ground_truth.json",
+  "telemetry_boundary_paths": [
+    "archives_evidence.md",
+    "degraded_telemetry_boundary.md"
+  ],
+  "expected_report_path": "expected_report.md",
+  "input_sha256": "4d933342c59597d511436ea44456021753ac3aa75eda7a8d17102ac25a4c3eee",
+  "standard_sha256": "fca4a6e0083f6de9413489b68f482350c698297a252e16ffd54f0e73fc3bce69"
+}

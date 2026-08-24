@@ -19,6 +19,7 @@ from .prompt import attribution_investigation_prompt_long
 from .schemas import (
     AttackAbstractModel,
     InitialClueAnalysis,
+    InvestigationFindings,
     QueryIntent,
     SynthesizedFindings,
 )
@@ -27,13 +28,12 @@ from .utils import (
     _fix_svg_viewbox_height,
     eids_to_investigation,
     extract_beijing_time_from_logs,
+    format_attribution_report_message,
     fp_target,
     get_agents_identity,
     load_mitre,
     load_skill,
 )
-
-# from .utils import extract_agent_ip_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,97 @@ MITRE_KB_FILE_PATH = (
     / "attribution_skills"
     / "mitre_knowledgebase.md"
 )
+
+REPORTER_MAX_RETRIES = 1
+REPORTER_RETRY_DELAY_SECONDS = 2
+
+GRAPH_EXTRACTION_INSTRUCTIONS = """### GRAPH ENTITY & RELATION EXTRACTION (CRITICAL)
+
+In addition to the narrative findings, you MUST populate `graph_entities` and `graph_relations` with structured data for the attack graph.
+
+**Entity ID Convention (STRICT):**
+- Process: `proc_<pid>` (e.g., `proc_5324`)
+- File: `file_<N>` where N is sequential starting from 1 (e.g., `file_1`, `file_2`)
+- IP: `ip_<address>` (e.g., `ip_192.168.1.100`)
+- Registry: `reg_<N>` where N is sequential starting from 1 (e.g., `reg_1`)
+- User account: `user_<name>` (e.g., `user_Administrator`)
+- Other: `other_<N>` where N is sequential starting from 1
+
+**Properties per entity type:**
+- process: {"pid": <int>, "image": "<exe path>", "command_line": "<cmdline or null>"}
+- file: {"path": "<full file path>"}
+- ip: {"address": "<ip>", "port": <int or null>}
+- registry: {"key_path": "<registry key>", "value_name": "<value or null>"}
+- user_account: {"username": "<name>", "domain": "<domain or null>"}
+- other: {} (empty dict)
+
+**Relation types (STRICT — choose exactly one):**
+- `create` — spawned child process OR created/wrote a file (creating new entities)
+- `modify` — modified a file OR modified a registry key (tampering with existing state)
+- `execute` — loaded a DLL OR injected into another process (in-memory payload operations, process→process only)
+- `instantiate` — static file was instantiated by the system loader into a running process (file→process only)
+- `communicate` — connected to network address OR DNS resolved to IP (network channel establishment)
+- `authenticate` — process ran under a user account (credential use / privilege verification)
+- `access` — process read/loaded/accessed a file as input data (e.g., encode/decode source, config file, data dump)
+
+**Entity type constraints per relation (CRITICAL — DO NOT violate):**
+Use the source entity's `type` and the target entity's `type` to choose the correct relation.
+| Source type | Relation | Target type | Description |
+|-------------|----------|-------------|-------------|
+| process | create | process | spawned a child process |
+| process | create | file | created/wrote a file |
+| process | modify | file | modified a file |
+| process | modify | registry | modified a registry key |
+| process | execute | process | injected into / loaded DLL into another process |
+| file | instantiate | process | file was instantiated by the system loader into a running process |
+| process | communicate | ip | connected to remote address |
+| ip | communicate | ip | DNS resolved to IP |
+| process | authenticate | user_account | ran under a user account |
+| process | access | file | read/loaded/accessed a file as input data |
+
+If the (source_type, target_type) pair does NOT match any row in the above table, DO NOT create a relation between those two entities. For example, process → file with `communicate` is INVALID — use `create` or `modify` instead.
+
+**Rules:**
+1. Every entity mentioned in `detailed_findings` MUST appear in `graph_entities`, UNLESS it is obvious system noise (see rule 6).
+2. Every observable behavior between entities (process→file, process→IP, process→process, etc.) MUST appear in `graph_relations`.
+3. Use the EXACT timestamps from the raw logs. Do not hallucinate timestamps.
+4. If no timestamp is available for an entity or relation, set it to `null`.
+5. Each entity's `name` should be a human-readable label like `powershell.exe (PID: 5324)` or `cmd.exe (PID: 5508)`. For file entities, use only the filename (e.g., `payload.exe`), full path goes in `properties.path`. For IP entities, use only the address (e.g., `192.168.1.100`), port goes in `properties.port`.
+6. **Noise filter (CRITICAL):** Do NOT include entities or relations that are clearly system background noise (e.g., `svchost.exe` routine activity, `RuntimeBroker.exe` launching normal windows, internal-only IPs with no malicious context). If uncertain whether an entity is attack-related or noise, keep it — better to include a borderline entity than drop a real IOC.
+"""
+
+
+def _start_analysis_timer(state: AttributionState) -> dict[str, int]:
+    """Start the attribution timer once, immediately before entering the planner."""
+    if state.get("analysis_started_at_ns") is not None:
+        return {}
+    return {"analysis_started_at_ns": time.perf_counter_ns()}
+
+
+def _lock_visualization_preference(state: AttributionState) -> dict[str, bool]:
+    """Snapshot the frontend preference once when an investigation starts."""
+    if state.get("visualization_enabled_for_investigation") is not None:
+        return {}
+
+    enabled = bool(state.get("visualization_requested", False))
+    logger.info("Visualization preference locked for investigation: %s", enabled)
+    return {"visualization_enabled_for_investigation": enabled}
+
+
+def _finish_analysis_timer(state: AttributionState) -> float:
+    """Finish the attribution timer once and return elapsed wall-clock seconds."""
+    elapsed_seconds = state.get("analysis_elapsed_seconds")
+    if elapsed_seconds is not None:
+        return elapsed_seconds
+
+    started_at_ns = state.get("analysis_started_at_ns")
+    if started_at_ns is None:
+        raise RuntimeError(
+            "Reporter_Node requires analysis_started_at_ns to be set before execution"
+        )
+
+    elapsed_ns = max(0, time.perf_counter_ns() - started_at_ns)
+    return elapsed_ns / 1_000_000_000
 
 
 """
@@ -79,6 +170,7 @@ def planner_node(state: AttributionState, config: RunnableConfig, model: BaseCha
     if state.get("investigation_clue") or state.get("pending_question_type"):
         logger.info("Ongoing attribution session detected. Routing to Attribution_Decision_Node.")
         return {
+            **_lock_visualization_preference(state),
             "next_action_fromPlannerNode": {
                 "target": "Attribution_Decision_Node",
                 "instruction": "",
@@ -93,6 +185,7 @@ def planner_node(state: AttributionState, config: RunnableConfig, model: BaseCha
     if not is_human or not user_text:
         logger.info("No valid user input. Defaulting to attack attribution.")
         return {
+            **_lock_visualization_preference(state),
             "next_action_fromPlannerNode": {
                 "target": "Attribution_Decision_Node",
                 "instruction": user_text,
@@ -142,6 +235,7 @@ def planner_node(state: AttributionState, config: RunnableConfig, model: BaseCha
 
     logger.info("Detected attack attribution request. Routing to Attribution_Decision_Node.")
     return {
+        **_lock_visualization_preference(state),
         "next_action_fromPlannerNode": {
             "target": "Attribution_Decision_Node",
             "instruction": user_text,
@@ -160,21 +254,6 @@ def attribution_decision_node(
     investigation_clue = state.get("investigation_clue")
     pending_type = state.get("pending_question_type")
     messages = state.get("messages", [])
-
-    # 多主机场景相关逻辑已按需求暂时注释/禁用
-    multi_host_updates = {}
-    # is_multi_host = state.get("is_multi_host")
-    # agent_ip_mapping = state.get("agent_ip_mapping") or {}
-    # if is_multi_host is None:
-    #     agent_ip_mapping = extract_agent_ip_mapping()
-    #     is_multi_host = len(agent_ip_mapping) > 1
-    # if is_multi_host and not agent_ip_mapping:
-    #     agent_ip_mapping = extract_agent_ip_mapping()
-    #
-    # multi_host_updates = {
-    #     "is_multi_host": is_multi_host,
-    #     "agent_ip_mapping": agent_ip_mapping,
-    # }
 
     last_message = messages[-1] if messages else None
     is_human = last_message.type == "human" if last_message else False
@@ -260,7 +339,6 @@ def attribution_decision_node(
 
             # 统一要求用户确认，不依赖 LLM 自主判断是否跳过确认
             return {
-                **multi_host_updates,
                 "investigation_clue": analysis.refined_clue,
                 "default_agent_id": analysis.agent_id,
                 "default_start_time": derived_start,
@@ -301,7 +379,6 @@ def attribution_decision_node(
 
                 if intent.upper() == "AGREE":
                     return {
-                        **multi_host_updates,
                         "is_clue_confirmed": True,
                         "pending_question_type": None,
                         "next_action_fromDecisionNode": {"target": "Attribution_Decision_Node"},
@@ -338,7 +415,6 @@ def attribution_decision_node(
                         analysis = parser.parse(getattr(repaired, "content", str(repaired)))
 
                     return {
-                        **multi_host_updates,
                         "investigation_clue": intent,
                         "default_agent_id": analysis.agent_id,
                         "default_start_time": analysis.start_time_utc8,
@@ -353,7 +429,7 @@ def attribution_decision_node(
 
     if is_clue_confirmed and requires_mitre_kb is None:
         return {
-            **multi_host_updates,
+            **_start_analysis_timer(state),
             "requires_mitre_kb": True,
             "pending_question_type": None,
             "messages": [AIMessage(content="开启 MITRE 专家知识库辅助攻击溯源调查...")],
@@ -363,7 +439,7 @@ def attribution_decision_node(
 
     logger.info("Initialization complete. Routing to Attribution Planner Node.")
     return {
-        **multi_host_updates,
+        **_start_analysis_timer(state),
         "next_action_fromDecisionNode": {"target": "Attribution_Planner_Node"},
         "next_action_fromAttributionPlannerNode": None,
     }
@@ -383,12 +459,6 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
     executed_queries = state.get("executed_queries") or []
     default_start = state.get("default_start_time", "")
     default_end = state.get("default_end_time", "")
-    # 多主机场景相关逻辑已按需求暂时注释/禁用
-    # is_multi_host = state.get("is_multi_host")
-    # agent_ip_mapping = state.get("agent_ip_mapping") or {}
-    # agent_ip_mapping_str = (
-    #     json.dumps(agent_ip_mapping, ensure_ascii=False, indent=2) if agent_ip_mapping else "{}"
-    # )
 
     attribution_investigation_prompt: str = attribution_investigation_prompt_long
 
@@ -433,20 +503,6 @@ def attribution_planner_node(state: AttributionState, config: RunnableConfig, mo
   - **Rule 3 (Deduplication & State Awareness - ABSOLUTE MANDATORY)**: Before routing to this node, you MUST check the **MITRE Knowledge Base** section in the CURRENT CASE CONTEXT section. If the TID you intend to query is ALREADY listed there, you are STRICTLY FORBIDDEN from calling this node for that exact TID again.
 """
 
-    multi_host_instructions = ""
-    # if is_multi_host:
-    #     multi_host_instructions = f"""
-    #
-    # ### MULTI-HOST MODE
-    # Agent ID -> IP Mapping (JSON):
-    # {agent_ip_mapping_str}
-    #
-    # Rules:
-    # 1. If you need to pivot by an IP address and that IP exists in the mapping, you MUST translate it into the corresponding Agent ID and query that Agent ID.
-    # 2. If you see evidence that "Agent A" interacted with "IP B" and IP B maps to "Agent B", you MUST pivot and query Agent B in a subsequent step (do NOT stop after only querying Agent A).
-    # 3. You MUST NOT create dead loops. At most one cross-host pivot per planning turn.
-    # """
-
     system_prompt = (
         """\
 You are an elite Cybersecurity Chief Attribution Planner.
@@ -476,7 +532,6 @@ specific tasks to specialized subordinate nodes.
     professional forensic report template. Prescribing a conflicting format will corrupt
     the final report.
 {mitre_instructions}\
-{multi_host_instructions}\
 
 """
         + """\
@@ -536,7 +591,6 @@ intended query against this table before routing to Log_Retrieval_Node.
                 {
                     "messages": messages,
                     "mitre_instructions": mitre_instructions,
-                    "multi_host_instructions": multi_host_instructions,
                     "query_history": query_history,
                     "kb_str": kb_str,
                     "default_start": default_start,
@@ -812,9 +866,6 @@ def information_synthesizer_node(
     raw_logs = state.get("current_raw_logs")
     next_action = state.get("next_action_fromAttributionPlannerNode")
     mitre_kb = state.get("mitre_knowledge_base", {})
-    # 多主机场景相关逻辑已按需求暂时注释/禁用
-    # is_multi_host = state.get("is_multi_host")
-    # agent_ip_mapping = state.get("agent_ip_mapping") or {}
 
     instruction = (
         next_action.get("instruction", "未命名调查任务") if next_action else "未命名调查任务"
@@ -849,21 +900,11 @@ def information_synthesizer_node(
         logs_str = str(raw_logs[:20])
         kb_str = str(mitre_kb)
 
-    parser = PydanticOutputParser(pydantic_object=SynthesizedFindings)
+    visualization_enabled = bool(state.get("visualization_enabled_for_investigation", False))
+    findings_model = SynthesizedFindings if visualization_enabled else InvestigationFindings
+    parser = PydanticOutputParser(pydantic_object=findings_model)
     format_instructions = parser.get_format_instructions()
-
-    multi_host_instructions = ""
-    # if is_multi_host:
-    #     agent_ip_mapping_str = json.dumps(agent_ip_mapping, ensure_ascii=False, indent=2)
-    #     multi_host_instructions = f"""
-    #
-    # ### MULTI-HOST MODE (CRITICAL)
-    # You MUST use the Agent ID -> IP mapping to translate IP addresses into Agent IDs when describing cross-host activity. If an IP appears in the logs and exists in the mapping, you MUST explicitly mention the mapped Agent ID.
-    #
-    # ### MULTI-HOST CONTEXT
-    # - **Agent ID -> IP Mapping (JSON)**:
-    # {agent_ip_mapping_str}
-    # """
+    graph_extraction_instructions = GRAPH_EXTRACTION_INSTRUCTIONS if visualization_enabled else ""
 
     system_prompt = """You are an elite Cybersecurity Information Synthesizer.
 Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, extract exact Indicators of Compromise (IOCs), and write a definitive tactical summary for the Chief Planner.
@@ -881,7 +922,7 @@ Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, 
    - **Complete Artifacts:** EVERY single file created or modified, including intermediate/temp files, with full absolute paths.
    - **Raw Execution:** Unredacted, complete command-line arguments and payloads. Do not truncate.
    - **Entity Identifiers:** Exact numerical PIDs, ProcessGuids, or IP addresses for all involved actors and victims.
-   - Call Trace & Memory Anomalies: You MUST actively inspect `callTrace` fields (especially in EventID 10). Explicitly extract and highlight any frames originating from unbacked memory, specifically looking for `UNKNOWN` or unmapped memory regions. This is critical for identifying memory injection and shellcode execution.
+   - Call Trace & Memory Anomalies: You MUST actively inspect `callTrace` fields (especially in EventID 10) and preserve the exact `UNKNOWN` or unmapped frames as unresolved telemetry. An `UNKNOWN` or unmapped frame alone MUST NOT be described as unbacked memory, shellcode, process injection, or a malicious IOC without independent corroborating evidence.
    *NEVER generalize into vague actions like "accessed a process", "modified the registry", or "dropped files".*
 4. **CONFIDENT EXPERT TONE**: When your investigation confirms an attack's execution, state the success affirmatively without using hedging language (e.g., avoid "possibly", "might have").
 5. **LANGUAGE**: The `summary` field MUST be written in Chinese".
@@ -892,74 +933,21 @@ Your task is to exhaustively analyze raw JSON logs retrieved by the Data Agent, 
 3. **REPORTING**: Present event times in Beijing Time (UTC+8). Do not comment on whether a log fits the requested time boundaries; focus entirely on its security implications and relationship to the attack trace.
 
 ### Lineage & Access Mask Audit (CRITICAL)
-Do not automatically classify parent-to-child high-privilege access (e.g., 0x1fffff) as benign. You MUST differentiate based on the execution context:
+Do not automatically classify parent-to-child high-privilege access (e.g., 0x1fffff) as benign or malicious. You MUST differentiate based on the execution context:
 - **BENIGN (Filter Noise)**: The Source process has a clean, disk-backed `callTrace` (originating from known/signed modules) AND the Target process executes routine, expected commands.
-- **MALICIOUS (Extract IOC)**: Classify as malicious if the Source's `callTrace` originates from unmapped or unbacked memory (e.g., `UNKNOWN` frames), OR if the Target child process executes anomalous, high-risk behavior (e.g., system discovery, evasion, credential access), regardless of their parent-child relationship.
+- **EVIDENCE BOUNDARY**: An `UNKNOWN` or unmapped frame is an investigation lead, not proof of unbacked memory or malicious execution. Anomalous, high-risk behavior by the Target process may make the overall chain suspicious or malicious, but does not prove that the access event was process injection. Preserve the objective evidence and assign an injection technique only when independent evidence corroborates the injection mechanism.
 
 ### ANTI-HALLUCINATION: OS BACKGROUND NOISE & COM EXECUTIONS (CRITICAL)
 Modern Windows architectures (e.g., Start Menu, UWP apps, Windows Terminal) routinely use system broker processes to proxy-launch interactive shells.
 - **RuntimeBroker.exe / sihost.exe / svchost.exe**: When you observe these processes launching `powershell.exe`, `cmd.exe`, or `wt.exe` (often with `-Embedding` parameters or via COM calls), DO NOT blindly classify this as malicious "Initial Access" or "COM Hijacking".
 - **The Exemption Rule**: Treat `RuntimeBroker.exe -> powershell.exe` as NORMAL user interaction (e.g., the user manually opening a terminal) UNLESS you observe explicit injected memory indicators in the broker, or the spawned shell immediately executes an encoded/malicious payload (e.g., `powershell -enc ...`).
 
-### GRAPH ENTITY & RELATION EXTRACTION (CRITICAL)
-
-In addition to the narrative findings, you MUST populate `graph_entities` and `graph_relations` with structured data for the attack graph.
-
-**Entity ID Convention (STRICT):**
-- Process: `proc_<pid>` (e.g., `proc_5324`)
-- File: `file_<N>` where N is sequential starting from 1 (e.g., `file_1`, `file_2`)
-- IP: `ip_<address>` (e.g., `ip_192.168.1.100`)
-- Registry: `reg_<N>` where N is sequential starting from 1 (e.g., `reg_1`)
-- User account: `user_<name>` (e.g., `user_Administrator`)
-- Other: `other_<N>` where N is sequential starting from 1
-
-**Properties per entity type:**
-- process: `{{"pid": <int>, "image": "<exe path>", "command_line": "<cmdline or null>"}}`
-- file: `{{"path": "<full file path>"}}`
-- ip: `{{"address": "<ip>", "port": <int or null>}}`
-- registry: `{{"key_path": "<registry key>", "value_name": "<value or null>"}}`
-- user_account: `{{"username": "<name>", "domain": "<domain or null>"}}`
-- other: `{{}}` (empty dict)
-
-**Relation types (STRICT — choose exactly one):**
-- `create` — spawned child process OR created/wrote a file (creating new entities)
-- `modify` — modified a file OR modified a registry key (tampering with existing state)
-- `execute` — loaded a DLL OR injected into another process (in-memory payload operations, process→process only)
-- `instantiate` — static file was instantiated by the system loader into a running process (file→process only)
-- `communicate` — connected to network address OR DNS resolved to IP (network channel establishment)
-- `authenticate` — process ran under a user account (credential use / privilege verification)
-- `access` — process read/loaded/accessed a file as input data (e.g., encode/decode source, config file, data dump)
-
-**Entity type constraints per relation (CRITICAL — DO NOT violate):**
-Use the source entity's `type` and the target entity's `type` to choose the correct relation.
-| Source type | Relation | Target type | Description |
-|-------------|----------|-------------|-------------|
-| process | create | process | spawned a child process |
-| process | create | file | created/wrote a file |
-| process | modify | file | modified a file |
-| process | modify | registry | modified a registry key |
-| process | execute | process | injected into / loaded DLL into another process |
-| file | instantiate | process | file was instantiated by the system loader into a running process |
-| process | communicate | ip | connected to remote address |
-| ip | communicate | ip | DNS resolved to IP |
-| process | authenticate | user_account | ran under a user account |
-| process | access | file | read/loaded/accessed a file as input data |
-
-If the (source_type, target_type) pair does NOT match any row in the above table, DO NOT create a relation between those two entities. For example, process → file with `communicate` is INVALID — use `create` or `modify` instead.
-
-**Rules:**
-1. Every entity mentioned in `detailed_findings` MUST appear in `graph_entities`, UNLESS it is obvious system noise (see rule 6).
-2. Every observable behavior between entities (process→file, process→IP, process→process, etc.) MUST appear in `graph_relations`.
-3. Use the EXACT timestamps from the raw logs. Do not hallucinate timestamps.
-4. If no timestamp is available for an entity or relation, set it to `null`.
-5. Each entity's `name` should be a human-readable label like `powershell.exe (PID: 5324)` or `cmd.exe (PID: 5508)`. For file entities, use only the filename (e.g., `payload.exe`), full path goes in `properties.path`. For IP entities, use only the address (e.g., `192.168.1.100`), port goes in `properties.port`.
-6. **Noise filter (CRITICAL):** Do NOT include entities or relations that are clearly system background noise (e.g., `svchost.exe` routine activity, `RuntimeBroker.exe` launching normal windows, internal-only IPs with no malicious context). If uncertain whether an entity is attack-related or noise, keep it — better to include a borderline entity than drop a real IOC.
+{graph_extraction_instructions}
 
 ### CONTEXT
 - **Original Instruction**: {instruction}
 - **MITRE Knowledge**:
 {kb_str}
-{multi_host_instructions}
 
 {format_instructions}
 
@@ -1003,7 +991,7 @@ You MUST structure the `detailed_findings` field using the following generalized
             {
                 "instruction": instruction,
                 "kb_str": kb_str,
-                "multi_host_instructions": multi_host_instructions,
+                "graph_extraction_instructions": graph_extraction_instructions,
                 "logs_str": logs_str,
                 "format_instructions": format_instructions,
             }
@@ -1037,8 +1025,8 @@ You MUST structure the `detailed_findings` field using the following generalized
 
         task_desc = getattr(result, "task_description", "未提取到指令")
         findings = getattr(result, "detailed_findings", "解析完成，未发现异常。")
-        graph_entities = getattr(result, "graph_entities", [])
-        graph_relations = getattr(result, "graph_relations", [])
+        graph_entities = getattr(result, "graph_entities", []) if visualization_enabled else []
+        graph_relations = getattr(result, "graph_relations", []) if visualization_enabled else []
 
         summary = f"【执行指令描述】\n{task_desc}\n\n【调查总结与IOC清单】\n{findings}"
 
@@ -1151,9 +1139,6 @@ def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseCh
     mitre_kb = state.get("mitre_knowledge_base", {})
     messages = state.get("messages", [])
     initial_clue = state.get("investigation_clue", "未记录初始线索。")
-    # 多主机场景相关逻辑已按需求暂时注释/禁用
-    # is_multi_host = state.get("is_multi_host")
-    # agent_ip_mapping = state.get("agent_ip_mapping") or {}
 
     draft_instruction = (
         next_action.get(
@@ -1179,19 +1164,6 @@ def reporter_node(state: AttributionState, config: RunnableConfig, model: BaseCh
         skill_data.get("content")
         or "Please generate a structured and professional forensic report."
     )
-
-    multi_host_instructions = ""
-    multi_host_section = ""
-    # if is_multi_host:
-    #     agent_ip_mapping_str = json.dumps(agent_ip_mapping, ensure_ascii=False, indent=2)
-    #     multi_host_instructions = f"""
-    #
-    # **CRITICAL RULE 6 (MULTI-HOST MAPPING)**: You MUST use the provided Agent ID -> IP mapping to translate any referenced IP addresses into the corresponding Agent IDs in your narrative (e.g., "10.0.0.2 (Agent 002)"). Do NOT invent mappings.
-    # """
-    #     multi_host_section = (
-    #         "### MULTI-HOST MODE\n"
-    #         f"Agent ID -> IP Mapping (JSON):\n{agent_ip_mapping_str}\n\n"
-    #     )
 
     reporter_system_prompt = """You are a highly professional Cyber Security Technical Writer.
 Your task is to take the raw investigation findings provided by the Forensic Detective and format them into a strict, highly polished Attack Attribution Investigation Report (攻击溯源调查报告).
@@ -1241,7 +1213,6 @@ excluded by this rule, it MUST NOT appear anywhere in the report.
 
 ### RESPONSE FORMAT (攻击溯源调查报告)
 {format_rules}
-{multi_host_instructions}
 """
 
     try:
@@ -1259,7 +1230,6 @@ excluded by this rule, it MUST NOT appear anywhere in the report.
     human_prompt = (
         "### INITIAL TRIGGER (THE STARTING POINT)\n"
         "{initial_clue}\n\n"
-        "{multi_host_section}"
         "### CHIEF PLANNER's DRAFT & NARRATIVE FOCUS\n"
         "{draft_instruction}\n\n"
         "### INVESTIGATION NOTES (THE HARD FACTS - DO NOT LOSE ANY DETAILS)\n"
@@ -1276,29 +1246,79 @@ excluded by this rule, it MUST NOT appear anywhere in the report.
     logger.info("Generating final report...")
     try:
         reporter_chain = prompt_template | model
-        final_report_msg = reporter_chain.invoke(
-            {
-                "format_rules": format_rules,
-                "initial_clue": initial_clue,
-                "multi_host_instructions": multi_host_instructions,
-                "multi_host_section": multi_host_section,
-                "draft_instruction": draft_instruction,
-                "investigation_notes": investigation_notes,
-                "kb_str": kb_str,
-            }
-        )
+        reporter_input = {
+            "format_rules": format_rules,
+            "initial_clue": initial_clue,
+            "draft_instruction": draft_instruction,
+            "investigation_notes": investigation_notes,
+            "kb_str": kb_str,
+        }
 
+        final_report_msg = None
+        for attempt in range(REPORTER_MAX_RETRIES + 1):
+            try:
+                final_report_msg = reporter_chain.invoke(reporter_input)
+                break
+            except httpx.RemoteProtocolError as e:
+                if attempt >= REPORTER_MAX_RETRIES:
+                    raise
+
+                remaining_retries = REPORTER_MAX_RETRIES - attempt
+                logger.warning(
+                    "Reporter model call failed with RemoteProtocolError on attempt "
+                    "%d/%d; retrying in %ds (%d retry remaining): %s",
+                    attempt + 1,
+                    REPORTER_MAX_RETRIES + 1,
+                    REPORTER_RETRY_DELAY_SECONDS,
+                    remaining_retries,
+                    e,
+                )
+                time.sleep(REPORTER_RETRY_DELAY_SECONDS)
+
+        if final_report_msg is None:
+            raise RuntimeError("Reporter model call completed without a response")
+
+        elapsed_seconds = _finish_analysis_timer(state)
         logger.info("Final report generated successfully.")
 
         return {
             "final_report": final_report_msg.content,
+            "analysis_elapsed_seconds": elapsed_seconds,
             "is_full_attribution_complete": True,
             "next_action_fromAttributionPlannerNode": None,
-            "messages": [AIMessage(content=f"报告已生成完毕。\n\n{final_report_msg.content}")],
+            "messages": [
+                AIMessage(
+                    content=format_attribution_report_message(
+                        final_report_msg.content,
+                        elapsed_seconds,
+                    )
+                )
+            ],
+        }
+    except httpx.RemoteProtocolError as e:
+        elapsed_seconds = _finish_analysis_timer(state)
+        logger.error(
+            "Error generating final report after %d retry: %s",
+            REPORTER_MAX_RETRIES,
+            e,
+        )
+        return {
+            "analysis_elapsed_seconds": elapsed_seconds,
+            "next_action_fromAttributionPlannerNode": None,
+            "messages": [
+                AIMessage(
+                    content=(
+                        "报告生成失败：模型连接异常，已重试 "
+                        f"{REPORTER_MAX_RETRIES} 次仍未成功。\n错误详情：{e}"
+                    )
+                )
+            ],
         }
     except Exception as e:
+        elapsed_seconds = _finish_analysis_timer(state)
         logger.error("Error generating final report: %s", e)
         return {
+            "analysis_elapsed_seconds": elapsed_seconds,
             "next_action_fromAttributionPlannerNode": None,
             "messages": [AIMessage(content=f"报告生成失败，发生异常: {e}")],
         }
@@ -1916,7 +1936,11 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     if not entities:
         return {
             "attack_graph": None,
-            "messages": [AIMessage(content="[Attack Graph] 所有实体均为孤立节点，无法生成攻击实体关系网状图。")],
+            "messages": [
+                AIMessage(
+                    content="[Attack Graph] 所有实体均为孤立节点，无法生成攻击实体关系网状图。"
+                )
+            ],
         }
 
     # --- build lookup & adjacency ---
@@ -1970,13 +1994,17 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
                     if tgt in remaining:
                         residual_indeg[tgt] = residual_indeg.get(tgt, 0) + 1
         current_layer = base_layer
-        while remaining:
+        max_iterations = len(remaining)
+        iteration_count = 0
+        while remaining and iteration_count < max_iterations:
+            iteration_count += 1
+            previous_remaining_count = len(remaining)
             batch = {eid for eid in remaining if residual_indeg.get(eid, 0) == 0}
             if not batch:
                 # true cycle — pick only the node(s) with minimum indeg to
                 # break the cycle one step at a time, preventing all remaining
                 # nodes from collapsing into a single layer
-                min_indeg = min(residual_indeg.values())
+                min_indeg = min(residual_indeg[eid] for eid in remaining)
                 batch = {eid for eid in remaining if residual_indeg[eid] == min_indeg}
             for eid in batch:
                 layers[eid] = current_layer
@@ -1986,6 +2014,25 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
                             residual_indeg[tgt] = max(0, residual_indeg[tgt] - 1)
             remaining -= batch
             current_layer += 1
+
+            if len(remaining) >= previous_remaining_count:
+                logger.warning(
+                    "Attack graph layout made no progress with %d entities remaining; "
+                    "using a fallback layer.",
+                    len(remaining),
+                )
+                break
+
+        if remaining:
+            logger.warning(
+                "Attack graph layout exceeded its safe iteration limit; placing %d "
+                "remaining entities in fallback layer %d: %s",
+                len(remaining),
+                current_layer,
+                sorted(remaining),
+            )
+            for eid in sorted(remaining):
+                layers[eid] = current_layer
 
     # --- group by layer ---
     layer_groups: dict[int, list[str]] = {}
@@ -2037,7 +2084,7 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     NODE_WIDTH = 230
     NODE_HEIGHT = 62
     LAYER_GAP_X = 400
-    GAP_CLOSE = 24   # standard gap between unrelated nodes in the same column
+    GAP_CLOSE = 24  # standard gap between unrelated nodes in the same column
     GAP_LINKED = 70  # larger gap when an edge exists between the two nodes
     MARGIN = 40
     TITLE_H = 36
@@ -2147,8 +2194,6 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
         "access": ("2", "2,6", "#14b8a6", "arrow-access"),  # medium dot-dash teal
     }
 
-
-
     # --- build SVG ---
     lines: list[str] = []
 
@@ -2193,12 +2238,12 @@ def attack_graph_node(state: AttributionState, config: RunnableConfig, model):
     # edges — separate same-layer from cross-layer
     REL_PRIORITY = {
         "instantiate": 7,  # 实例化 (生命周期 - 最高)
-        "create": 6,       # 创建 (生命周期)
-        "execute": 5,      # 执行 (控制流)
-        "modify": 4,       # 修改 (状态改变)
-        "authenticate": 3, # 认证
+        "create": 6,  # 创建 (生命周期)
+        "execute": 5,  # 执行 (控制流)
+        "modify": 4,  # 修改 (状态改变)
+        "authenticate": 3,  # 认证
         "communicate": 2,  # 通信
-        "access": 1,       # 访问 (被动读取 - 最低)
+        "access": 1,  # 访问 (被动读取 - 最低)
     }
 
     same_layer_pairs: dict[tuple[str, str], tuple[str, str | None]] = {}

@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -7,6 +8,17 @@ from pathlib import Path
 from wazuh_api.server_api import list_agents
 
 logger = logging.getLogger(__name__)
+
+
+def format_attribution_report_message(final_report: str, elapsed_seconds: float) -> str:
+    """Format the user-facing report message with a duration truncated to 0.1 seconds."""
+    if elapsed_seconds < 0:
+        raise ValueError("elapsed_seconds must be non-negative")
+
+    elapsed_tenths = math.floor(elapsed_seconds * 10)
+    minutes, remaining_tenths = divmod(elapsed_tenths, 600)
+    seconds = remaining_tenths / 10
+    return f"攻击溯源调查耗时{minutes}分钟{seconds:.1f}秒。调查报告如下：\n\n" f"{final_report}"
 
 
 def load_skill(filepath: str | Path) -> dict:

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "agents": [
+    {
+      "agent_id": "attack_attribution_agent",
+      "display_name": "攻击溯源智能体",
+      "aliases": ["attack_attributor", "attack_attribution"]
+    },
+    {
+      "agent_id": "baseline_agent_simple",
+      "display_name": "基线智能体 Simple",
+      "aliases": []
+    },
+    {
+      "agent_id": "baseline_agent_plus",
+      "display_name": "基线智能体 Plus",
+      "aliases": []
+    }
+  ]
+}
