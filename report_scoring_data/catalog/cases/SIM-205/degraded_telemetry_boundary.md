@@ -24,7 +24,7 @@
 
 ## v3.0 计分应用
 
-1. 证据召回：分母排除不可见的 RUN 专属 Event ID 13；仍评价 alert、`reg add`、
+1. 关键证据检索与覆盖度：分母排除不可见的 RUN 专属 Event ID 13；仍评价 alert、`reg add`、
    `reg query`、父子进程链及其他实际可访问关键证据的召回与引用准确性。
 2. 时间线：不因没有写出 Event ID 13 而扣分；仍评价 add/query 的先后顺序、主体和
    时间关联。

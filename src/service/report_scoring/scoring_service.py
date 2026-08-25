@@ -3,6 +3,7 @@ import threading
 import uuid
 from datetime import UTC, datetime
 
+from agents.report_scoring.dimensions import SCORING_DIMENSION_FIELDS
 from agents.report_scoring.graph import get_report_scoring_graph
 from agents.report_scoring.prompt import (
     PROMPT_VERSION,
@@ -239,14 +240,6 @@ class ScoringService:
                 "INVALID_SCORING_STANDARD", "第一版只支持 v3.0", field="standard_version"
             )
         reports, _ = self.report_repository.list_reports(test_case_id=test_case_id, limit=1_000_000)
-        dimensions = (
-            "anchor_accuracy",
-            "evidence_recall",
-            "timeline",
-            "process_chain",
-            "mitre_mapping",
-            "negative_findings",
-        )
         agents = []
         for agent in self.case_registry.list_agents():
             agent_reports = [report for report in reports if report.agent_id == agent.agent_id]
@@ -267,7 +260,7 @@ class ScoringService:
                     if latest
                     else None
                 )
-                for dimension in dimensions
+                for dimension in SCORING_DIMENSION_FIELDS
             }
             agents.append(
                 {

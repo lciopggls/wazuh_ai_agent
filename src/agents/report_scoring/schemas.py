@@ -2,6 +2,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from .dimensions import SCORING_DIMENSION_LABELS, SCORING_DIMENSION_MAXIMUMS
+
 Reason = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 BehaviorId = Annotated[
     str,
@@ -123,12 +125,42 @@ class RootCauseImpact(BaseModel):
 class ScoreCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    anchor_accuracy: AnchorScore
-    evidence_recall: EvidenceRecallScore
-    timeline: TimelineScore
-    process_chain: ProcessChainScore
-    mitre_mapping: MitreScore
-    negative_findings: NegativeFindingsScore
+    anchor_accuracy: AnchorScore = Field(
+        description=(
+            f"{SCORING_DIMENSION_LABELS['anchor_accuracy']}，"
+            f"满分 {SCORING_DIMENSION_MAXIMUMS['anchor_accuracy']} 分"
+        )
+    )
+    evidence_recall: EvidenceRecallScore = Field(
+        description=(
+            f"{SCORING_DIMENSION_LABELS['evidence_recall']}，"
+            f"满分 {SCORING_DIMENSION_MAXIMUMS['evidence_recall']} 分"
+        )
+    )
+    timeline: TimelineScore = Field(
+        description=(
+            f"{SCORING_DIMENSION_LABELS['timeline']}，"
+            f"满分 {SCORING_DIMENSION_MAXIMUMS['timeline']} 分"
+        )
+    )
+    process_chain: ProcessChainScore = Field(
+        description=(
+            f"{SCORING_DIMENSION_LABELS['process_chain']}，"
+            f"满分 {SCORING_DIMENSION_MAXIMUMS['process_chain']} 分"
+        )
+    )
+    mitre_mapping: MitreScore = Field(
+        description=(
+            f"{SCORING_DIMENSION_LABELS['mitre_mapping']}，"
+            f"满分 {SCORING_DIMENSION_MAXIMUMS['mitre_mapping']} 分"
+        )
+    )
+    negative_findings: NegativeFindingsScore = Field(
+        description=(
+            f"{SCORING_DIMENSION_LABELS['negative_findings']}，"
+            f"满分 {SCORING_DIMENSION_MAXIMUMS['negative_findings']} 分"
+        )
+    )
     root_causes: list[RootCauseImpact]
     strengths: list[Reason]
     major_issues: list[Reason]

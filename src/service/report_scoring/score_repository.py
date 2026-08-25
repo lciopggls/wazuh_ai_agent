@@ -6,6 +6,8 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from agents.report_scoring.dimensions import SCORING_DIMENSIONS
+
 from .api_models import ScoreHistoryItem, ScoreResult, ScoringAttempt
 from .errors import ReportScoringError
 from .report_repository import atomic_write
@@ -248,12 +250,7 @@ class ScoreRepository:
     def _render_markdown(result: ScoreResult) -> str:
         score = result.score.model_dump(mode="json")
         rows = [
-            ("锚点准确性", score["anchor_accuracy"]["score"]),
-            ("证据召回", score["evidence_recall"]["score"]),
-            ("时间线顺序与一致性", score["timeline"]["score"]),
-            ("进程链与因果关系", score["process_chain"]["score"]),
-            ("MITRE 映射", score["mitre_mapping"]["score"]),
-            ("负面结论", score["negative_findings"]["score"]),
+            (dimension.label, score[dimension.field]["score"]) for dimension in SCORING_DIMENSIONS
         ]
         body = "\n".join(f"| {name} | {value:.1f} |" for name, value in rows)
         return (

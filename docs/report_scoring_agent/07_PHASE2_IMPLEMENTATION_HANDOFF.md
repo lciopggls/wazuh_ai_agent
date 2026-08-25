@@ -1,8 +1,8 @@
 # 报告评分智能体：实现与审查交接
 
-> 更新日期：2026-08-20  
-> 交接基线：`b89f4ae`  
-> 交付状态：代码已提交并推送，等待独立审查
+> 更新日期：2026-08-25
+> 交接基线：当前开发分支基于 `551c652`；远端 `master` 最新为 `97d3ad2`，尚未集成
+> 交付状态：测试工作台已提交并合并；六维度名称同步修改已完成验证并提交到当前开发分支，等待独立审查
 
 ## 1. 实现概览
 
@@ -21,6 +21,7 @@ Studio 可直接运行 `report_scoring_agent`；完整项目则通过 `/api/repo
 - `src/agents/report_scoring/entry.py`：Studio/服务入口。
 - `src/agents/report_scoring/graph.py`：评分图和节点连接。
 - `src/agents/report_scoring/nodes.py`：上下文准备、模型调用、结果生成。
+- `src/agents/report_scoring/dimensions.py`：稳定字段、正式中文名称和权重的统一映射。
 - `src/agents/report_scoring/prompt.py`：评分提示词。
 - `src/agents/report_scoring/schemas.py`、`state.py`：结构化契约和图状态。
 - `src/agents/report_scoring/validation.py`、`negative_behaviors.py`：字段校验、总分重算和负向行为规则。
@@ -73,25 +74,30 @@ Studio 可直接运行 `report_scoring_agent`；完整项目则通过 `/api/repo
 
 因此，前端不解析 AIMessage 文本。AIMessage 主要用于 Studio 可读反馈，项目页面使用经过验证的结构化 API 数据。
 
+六个稳定结构化字段继续是 `anchor_accuracy`、`evidence_recall`、`timeline`、`process_chain`、`mitre_mapping` 和 `negative_findings`。当前正式中文名称依次为初始事件识别准确性、关键证据检索与覆盖度、事件时间线准确性、攻击链重建与因果分析、MITRE ATT&CK 映射质量和未发生行为核验。名称变化不改变权重或评分算法。
+
 ## 4. 验证结果
 
-- Python 静态检查通过。
-- 完整 pytest 记录：145 passed，2 warnings。
-- 前端测试、类型检查和生产构建通过。
+- Ruff formatter 和 scoped check/fix 通过；当前 `.venv` 中 Black 持续无输出挂起，未完成。
+- 六维度同步相关后端测试：102 passed，1 skipped，1 warning。
+- 完整 pytest 回归：145 passed，1 skipped，2 warnings。
+- 前端名称映射测试：5 passed；类型检查和生产构建通过。
 - Studio 手工运行成功，示例分数 83.0。
 - 完整前后端手工运行成功，SIM-204 / `baseline_agent_simple` 得分 48.0；详情、历史和对比均正常。
 - 页面刷新未产生重复 attempt；未评分报告的 latest 404 符合约定。
 - 用户已确认测试模块手动测试通过；测试模块关闭后导航后续分组自动补位。
 
-本次手动验收后仅更新项目文档，没有重新运行自动化测试。
+六维度名称同步后已重新运行上述自动化验证；没有恢复批量模型评分或人工校准。
 
 ## 5. 提交记录
 
-- `b016003`：增加 multipart 表单解析依赖。
-- `cbb76cd`：加入报告评分智能体、后端、前端和用例目录。
-- `b89f4ae`：修复评分工作流集成、持久化及相关兼容问题。
+- `9364dc8`：增加 multipart 表单解析依赖。
+- `a4e75ca`：加入报告评分智能体、后端、前端和用例目录。
+- `ba6f2a7`：修复评分工作流集成、持久化及相关兼容问题。
+- `e4cc94e`：加入可隐藏的开发测试工作台。
+- `551c652`：解决与当时 `master` 的冲突并完成合并。
 
-三个提交均已推送到 `origin/codex/report-scoring-agent-planning`。
+上述提交已进入 `origin/codex/report-scoring-agent-latest` 和远端 `master`。本次六维度名称同步提交建立在 `551c652` 上，尚未集成远端 `master` 后续的 5 个提交。
 
 ## 6. 审查注意事项
 

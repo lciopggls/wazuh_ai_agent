@@ -4,6 +4,7 @@ import re
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.output_parsers import PydanticOutputParser
 
+from .dimensions import SCORING_DIMENSIONS
 from .prompt import CONTEXT_TEMPLATE, REPAIR_TEMPLATE, SYSTEM_PROMPT
 from .schemas import ScoreCandidate
 from .state import ScoringState
@@ -193,16 +194,9 @@ def repair_score_node(state: ScoringState, model) -> dict:
 
 def finalize_score_node(state: ScoringState) -> dict:
     candidate = state["candidate"]
-    dimensions = (
-        ("锚点准确性", "anchor_accuracy"),
-        ("证据召回", "evidence_recall"),
-        ("时间线", "timeline"),
-        ("进程链", "process_chain"),
-        ("MITRE 映射", "mitre_mapping"),
-        ("负面结论", "negative_findings"),
-    )
     dimension_text = "\n".join(
-        f"- {label}: {candidate[key]['score']:.1f}" for label, key in dimensions
+        f"- {dimension.label}: {candidate[dimension.field]['score']:.1f}"
+        for dimension in SCORING_DIMENSIONS
     )
     strengths = "；".join(candidate.get("strengths") or ["无"])
     issues = "；".join(candidate.get("major_issues") or ["无"])
