@@ -40,6 +40,17 @@ export interface DimensionScore {
   [key: string]: unknown;
 }
 
+export const REPORT_SCORE_DIMENSIONS = [
+  { key: "anchor_accuracy", label: "初始事件识别准确性", maximum: 10 },
+  { key: "evidence_recall", label: "关键证据检索与覆盖度", maximum: 20 },
+  { key: "timeline", label: "事件时间线准确性", maximum: 5 },
+  { key: "process_chain", label: "攻击链重建与因果分析", maximum: 20 },
+  { key: "mitre_mapping", label: "MITRE ATT&CK 映射质量", maximum: 30 },
+  { key: "negative_findings", label: "未发生行为核验", maximum: 15 },
+] as const;
+
+export type ReportScoreDimensionKey = (typeof REPORT_SCORE_DIMENSIONS)[number]["key"];
+
 export interface ScoreCandidate {
   anchor_accuracy: DimensionScore;
   evidence_recall: DimensionScore;
@@ -98,7 +109,7 @@ export interface ComparisonAgent {
   average_total: number | null;
   minimum_total: number | null;
   maximum_total: number | null;
-  dimension_averages: Record<string, number | null>;
+  dimension_averages: Record<ReportScoreDimensionKey, number | null>;
 }
 
 export interface ComparisonResponse {

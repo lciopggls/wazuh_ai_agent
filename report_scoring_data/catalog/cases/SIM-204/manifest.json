@@ -11,5 +11,5 @@
   "telemetry_boundary_paths": ["archives_evidence.md"],
   "expected_report_path": "expected_report.md",
   "input_sha256": "a2700aea4270539f36f1812f0cdc47ce68ea08f55448a70bcbb4f1fabee1c6cf",
-  "standard_sha256": "fca4a6e0083f6de9413489b68f482350c698297a252e16ffd54f0e73fc3bce69"
+  "standard_sha256": "55484bd1528841dfd3d6f21798b50b19a9ccff938110db9b856a3f938889bff9"
 }

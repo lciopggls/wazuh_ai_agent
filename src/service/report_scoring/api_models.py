@@ -4,6 +4,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from agents.report_scoring.dimensions import (
+    SCORING_DIMENSION_LABELS,
+)
 from agents.report_scoring.schemas import ScoreCandidate
 
 RelativePath = Annotated[str, StringConstraints(min_length=1, max_length=240)]
@@ -173,3 +176,46 @@ class ScoreInvocationResponse(BaseModel):
 class ScoreHistoryItem(BaseModel):
     attempt: ScoringAttempt
     result: ScoreResult | None = None
+
+
+class DimensionAverages(BaseModel):
+    anchor_accuracy: float | None = Field(
+        description=f"{SCORING_DIMENSION_LABELS['anchor_accuracy']}平均分"
+    )
+    evidence_recall: float | None = Field(
+        description=f"{SCORING_DIMENSION_LABELS['evidence_recall']}平均分"
+    )
+    timeline: float | None = Field(description=f"{SCORING_DIMENSION_LABELS['timeline']}平均分")
+    process_chain: float | None = Field(
+        description=f"{SCORING_DIMENSION_LABELS['process_chain']}平均分"
+    )
+    mitre_mapping: float | None = Field(
+        description=f"{SCORING_DIMENSION_LABELS['mitre_mapping']}平均分"
+    )
+    negative_findings: float | None = Field(
+        description=f"{SCORING_DIMENSION_LABELS['negative_findings']}平均分"
+    )
+
+
+class ComparisonReportScore(BaseModel):
+    report_id: str
+    score_id: str
+    total_score: float = Field(ge=0, le=100)
+
+
+class ComparisonAgent(BaseModel):
+    agent_id: str
+    display_name: str
+    registered_report_count: int = Field(ge=0)
+    successfully_scored_report_count: int = Field(ge=0)
+    report_scores: list[ComparisonReportScore]
+    average_total: float | None = Field(default=None, ge=0, le=100)
+    minimum_total: float | None = Field(default=None, ge=0, le=100)
+    maximum_total: float | None = Field(default=None, ge=0, le=100)
+    dimension_averages: DimensionAverages
+
+
+class ComparisonResponse(BaseModel):
+    test_case_id: TestCaseId
+    scoring_standard_version: Literal["v3.0"]
+    agents: list[ComparisonAgent]

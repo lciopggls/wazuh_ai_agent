@@ -4,6 +4,7 @@ from fastapi import APIRouter, File, Form, Query, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from .api_models import (
+    ComparisonResponse,
     ReportListItem,
     ReportListResponse,
     ReportRecord,
@@ -144,7 +145,7 @@ def create_report_scoring_router(
         def get_score(score_id: str):
             return scoring_service.score_repository.get_score(score_id)
 
-        @router.get("/comparisons")
+        @router.get("/comparisons", response_model=ComparisonResponse)
         def comparison(test_case_id: str, standard_version: str = "v3.0"):
             return scoring_service.comparison(test_case_id, standard_version)
 

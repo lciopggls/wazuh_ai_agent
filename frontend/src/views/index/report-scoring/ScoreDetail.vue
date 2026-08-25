@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { ReportRecord, ScoreHistoryItem, ScoreResult } from "@/api/report_scoring";
+import {
+  REPORT_SCORE_DIMENSIONS,
+  type ReportRecord,
+  type ScoreHistoryItem,
+  type ScoreResult,
+} from "@/api/report_scoring";
 
 const props = defineProps<{
   report: ReportRecord | null;
@@ -11,14 +16,11 @@ const props = defineProps<{
 const dimensions = computed(() => {
   if (!props.result) return [];
   const score = props.result.score;
-  return [
-    ["锚点准确性", score.anchor_accuracy, 10],
-    ["证据召回", score.evidence_recall, 20],
-    ["时间线顺序与一致性", score.timeline, 5],
-    ["进程链与因果关系", score.process_chain, 20],
-    ["MITRE 映射", score.mitre_mapping, 30],
-    ["负面结论", score.negative_findings, 15],
-  ] as const;
+  return REPORT_SCORE_DIMENSIONS.map(({ key, label, maximum }) => [
+    label,
+    score[key],
+    maximum,
+  ] as const);
 });
 </script>
 
