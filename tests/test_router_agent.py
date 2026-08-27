@@ -802,3 +802,4 @@ def test_router_prompt_documents_all_response_operations(monkeypatch):
     assert "reply 是权威执行结果" in prompt
     assert "进程处置耗时" in prompt
     assert "不得省略、改写或重新计算" in prompt
+    assert "支持任意有效的数字 Agent ID" in prompt

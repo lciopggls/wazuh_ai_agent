@@ -94,7 +94,9 @@ def test_response_agent_prompt_matches_demo_execution_and_scope_rules(monkeypatc
     prompt = captured["system_prompt"]
 
     assert "参数完整时直接调用工具，不需要二次确认" in prompt
-    assert "Agent 001、入站 TCP 54321" in prompt
+    assert "支持任意有效的数字 Agent ID" in prompt
+    assert "只允许 Agent 001" not in prompt
+    assert "只授权 Agent 001" not in prompt
     assert "30、60、300" in prompt
     assert "notepad.exe" in prompt
     assert "demo_user" in prompt

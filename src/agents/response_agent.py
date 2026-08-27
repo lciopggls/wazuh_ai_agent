@@ -304,7 +304,7 @@ def _format_port_response(action: str, result: dict) -> str:
     lines = [
         heading,
         f"- 操作：{action_labels[action]}",
-        f"- Agent：{result.get('agent_id', '001')}",
+        f"- Agent：{result.get('agent_id', '未知')}",
         f"- 端口：TCP {result.get('target_port', 54321)}",
         "- 方向：入站",
     ]
@@ -333,16 +333,16 @@ def _format_port_rejection(error: ValueError) -> str:
     return (
         "❌ 端口操作被拒绝\n"
         f"- 原因：{error}\n"
-        "- 允许范围：Agent 001、入站 TCP 54321、封禁时长 30/60/300 秒"
+        "- 允许范围：已部署脚本的有效 Agent、入站 TCP 54321、封禁时长 30/60/300 秒"
     )
 
 
 @tool
 def block_port(agent_id: str, target_port: int, duration_seconds: int = 30) -> str:
-    """封禁演示端口；只授权 Agent 001 的入站 TCP 54321，支持 30/60/300 秒。
+    """在指定 Agent 封禁入站 TCP 54321 演示端口，支持 30/60/300 秒。
 
     Args:
-        agent_id: 必须明确提供；当前只授权 "001"。
+        agent_id: 必须明确提供有效的数字 Agent ID。
         target_port: 必须明确提供；当前只授权 54321。
         duration_seconds: 封禁秒数，支持 30、60、300，默认 30。
     """
@@ -360,7 +360,7 @@ def block_port(agent_id: str, target_port: int, duration_seconds: int = 30) -> s
 
 @tool
 def unblock_port(agent_id: str, target_port: int) -> str:
-    """解封演示端口；只授权 Agent 001 的入站 TCP 54321。"""
+    """解除指定 Agent 上入站 TCP 54321 演示端口的封禁。"""
     try:
         result = unblock_port_and_verify_on_agent(
             agent_id=agent_id,
@@ -374,7 +374,7 @@ def unblock_port(agent_id: str, target_port: int) -> str:
 
 @tool
 def query_blocked_port(agent_id: str, target_port: int) -> str:
-    """查询演示端口的真实防火墙状态；只授权 Agent 001 的入站 TCP 54321。"""
+    """查询指定 Agent 上入站 TCP 54321 演示端口的真实防火墙状态。"""
     try:
         result = query_blocked_port_on_agent(
             agent_id=agent_id,
@@ -407,7 +407,7 @@ def _format_endpoint_response(result: dict) -> str:
     evidence = result.get("evidence", {})
     lines = [
         heading,
-        f"- Agent：{result.get('agent_id', '001')}",
+        f"- Agent：{result.get('agent_id', '未知')}",
         f"- 执行动作：{_ENDPOINT_ACTION_LABELS.get(result.get('action'), result.get('action'))}",
         f"- 命令投递：{'成功' if result.get('dispatch_success') else '失败'}",
         f"- 最终状态：{result.get('display_status', 'unknown（状态未知）')}",
@@ -448,10 +448,10 @@ def _format_endpoint_response(result: dict) -> str:
 
 @tool
 def query_process(agent_id: str, pid: int) -> str:
-    """查询 Agent 001 上指定 PID；第一版只允许查询 notepad.exe 演示进程。
+    """查询指定 Agent 上的 PID；只允许查询 notepad.exe 演示进程。
 
     Args:
-        agent_id: 必须是 "001"。
+        agent_id: 必须是有效的数字 Agent ID。
         pid: 大于 0 的进程 ID。
     """
     result = query_process_on_agent(agent_id=agent_id, process_id=pid)
@@ -461,10 +461,10 @@ def query_process(agent_id: str, pid: int) -> str:
 
 @tool
 def terminate_process(agent_id: str, pid: int, runtime: ToolRuntime) -> str:
-    """终止 Agent 001 上指定 PID 的 notepad.exe，并验证该 PID 已不存在。
+    """终止指定 Agent 上指定 PID 的 notepad.exe，并验证该 PID 已不存在。
 
     Args:
-        agent_id: 必须是 "001"。
+        agent_id: 必须是有效的数字 Agent ID。
         pid: 用户明确提供的 notepad.exe 进程 ID；禁止仅凭进程名批量终止。
     """
     started_at = runtime.state.get("response_started_at_epoch")
@@ -496,7 +496,7 @@ def terminate_process(agent_id: str, pid: int, runtime: ToolRuntime) -> str:
 
 @tool
 def query_local_account(agent_id: str, account_name: str) -> str:
-    """查询 Agent 001 上固定本地演示账户 demo_user 的实际启用状态。"""
+    """查询指定 Agent 上固定本地演示账户 demo_user 的实际启用状态。"""
     result = query_local_account_on_agent(agent_id=agent_id, account_name=account_name)
     logger.info("Tool query_local_account completed: %s", json.dumps(result, ensure_ascii=False))
     return _format_endpoint_response(result)
@@ -504,7 +504,7 @@ def query_local_account(agent_id: str, account_name: str) -> str:
 
 @tool
 def disable_local_account(agent_id: str, account_name: str) -> str:
-    """禁用 Agent 001 上固定本地账户 demo_user，并验证实际状态；不会强制注销会话。"""
+    """禁用指定 Agent 上的 demo_user 并验证实际状态；不会强制注销会话。"""
     result = disable_local_account_on_agent(agent_id=agent_id, account_name=account_name)
     logger.info("Tool disable_local_account completed: %s", json.dumps(result, ensure_ascii=False))
     return _format_endpoint_response(result)
@@ -512,7 +512,7 @@ def disable_local_account(agent_id: str, account_name: str) -> str:
 
 @tool
 def enable_local_account(agent_id: str, account_name: str) -> str:
-    """启用 Agent 001 上固定本地账户 demo_user，并验证实际状态。"""
+    """启用指定 Agent 上固定本地账户 demo_user，并验证实际状态。"""
     result = enable_local_account_on_agent(agent_id=agent_id, account_name=account_name)
     logger.info("Tool enable_local_account completed: %s", json.dumps(result, ensure_ascii=False))
     return _format_endpoint_response(result)
@@ -610,14 +610,14 @@ SYSTEM_PROMPT_TEMPLATE = """
 - `unblock_ip`：解除指定 Agent 上对某个 IP 的入站和出站封禁规则。
 - `query_blocked_ips`：查询 Agent 上真实存在的 Wazuh AI Windows Firewall 封禁规则。
 - `block_ip_bulk`：在多个 Agent 上同时封禁同一 IP。
-- `block_port`：封禁 Agent 001 上固定的入站 TCP 54321 演示端口。
-- `unblock_port`：解除 Agent 001 上固定演示端口的封禁。
-- `query_blocked_port`：查询 Agent 001 上固定演示端口的真实防火墙状态。
-- `query_process`：查询 Agent 001 上指定 PID 的 notepad.exe 演示进程。
+- `block_port`：封禁指定 Agent 上固定的入站 TCP 54321 演示端口。
+- `unblock_port`：解除指定 Agent 上固定演示端口的封禁。
+- `query_blocked_port`：查询指定 Agent 上固定演示端口的真实防火墙状态。
+- `query_process`：查询指定 Agent 上指定 PID 的 notepad.exe 演示进程。
 - `terminate_process`：终止指定 PID 的 notepad.exe 并验证进程已经消失。
-- `query_local_account`：查询 Agent 001 上本地演示账户 demo_user 的状态。
-- `disable_local_account`：禁用 Agent 001 上的 demo_user 并验证状态。
-- `enable_local_account`：启用 Agent 001 上的 demo_user 并验证状态。
+- `query_local_account`：查询指定 Agent 上本地演示账户 demo_user 的状态。
+- `disable_local_account`：禁用指定 Agent 上的 demo_user 并验证状态。
+- `enable_local_account`：启用指定 Agent 上的 demo_user 并验证状态。
 
 ══════════════════════════════════════════════════════
 三、工具具体说明
@@ -663,8 +663,9 @@ SYSTEM_PROMPT_TEMPLATE = """
 
 3.5 端口封禁、解封和查询
   - 三个端口工具都必须显式传入用户给出的 agent_id 和 target_port，不得擅自改写。
-  - 后端只授权 Agent 001、入站 TCP 54321；其他 Agent 或端口仍将原始参数传给工具，
-    由工具返回无权限结果，不得绕过工具自行声称成功。
+  - 支持任意有效的数字 Agent ID，但目标 Agent 必须已部署端口脚本和结果日志采集配置。
+  - 后端只授权入站 TCP 54321；其他端口仍将原始参数传给工具，由工具返回无权限结果，
+    不得绕过工具自行声称成功。
   - block_port 的 duration_seconds 只支持 30、60、300；用户未指定时默认传入 30。
   - 端口功能固定为入站 TCP，不询问方向或协议。
   - 参数完整时直接调用工具，不需要二次确认。
@@ -673,7 +674,8 @@ SYSTEM_PROMPT_TEMPLATE = """
   - 手动解封后提醒用户等待原封禁时长结束再重新封禁。
 
 3.6 进程查询与终止
-  - 只允许 Agent 001，并且用户必须提供 PID；不得猜测 PID。
+  - 支持任意有效的数字 Agent ID，并且用户必须提供 PID；不得猜测 PID。
+  - 目标 Agent 必须已部署端点响应脚本和结果日志采集配置。
   - 后端只允许 PID 对应 notepad.exe，不得改为按进程名批量查询或终止。
   - 参数完整时直接调用 query_process 或 terminate_process，不需要二次确认。
   - 必须展示 success、failed、unknown 状态码、中文解释和真实进程证据。
@@ -682,7 +684,8 @@ SYSTEM_PROMPT_TEMPLATE = """
     不得省略、改写或重新计算耗时。
 
 3.7 本地账户查询、禁用与启用
-  - 只允许 Agent 001 上固定的本地演示账户 demo_user。
+  - 支持任意有效的数字 Agent ID，但只允许固定的本地演示账户 demo_user。
+  - 目标 Agent 必须已部署端点响应脚本和结果日志采集配置，并存在 demo_user。
   - 参数完整时直接调用对应工具，不需要二次确认。
   - 不得创建账户、修改密码、删除账户或强制注销会话。
   - 必须展示 success、failed、unknown 状态码、中文解释和真实账户证据。

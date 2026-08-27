@@ -1,8 +1,8 @@
-# Agent 001 入站 TCP 54321 封禁部署与验证
+# Windows Agent 入站 TCP 54321 封禁部署与验证
 
 该功能只用于展示，固定限制如下：
 
-- 目标只能是 Agent 001。
+- 支持任意有效的数字 Agent ID，但每个目标 Agent 都必须部署脚本和日志采集配置。
 - 只能操作入站 TCP 54321。
 - 封禁时长只能是 30、60、300 秒，默认 30 秒。
 - 支持封禁、手动解封和查询真实 Windows 防火墙状态。
@@ -11,7 +11,7 @@
 
 现有 IP 封禁脚本无需修改。
 
-## 1. 向 Windows Agent 001 部署脚本
+## 1. 向目标 Windows Agent 部署脚本
 
 把以下文件复制到：
 
@@ -136,7 +136,7 @@ sudo systemctl status wazuh-manager --no-pager
 
 ## 5. 准备可连接的测试服务
 
-在 Windows Agent 001 的管理员 PowerShell 中创建临时允许规则：
+在目标 Windows Agent 的管理员 PowerShell 中创建临时允许规则：
 
 ```powershell
 New-NetFirewallRule `
@@ -159,7 +159,7 @@ python -m http.server 54321 --bind 0.0.0.0
 curl --connect-timeout 3 http://192.168.28.129:54321
 ```
 
-预期返回目录页面。如果失败，先确认 Agent 001 的实际 IP、虚拟机网络模式、Python 服务和
+预期返回目录页面。如果失败，先确认目标 Agent 的实际 IP、虚拟机网络模式、Python 服务和
 临时允许规则，不要进入页面封禁测试。
 
 ## 6. 启动后端
@@ -178,7 +178,7 @@ uv run langgraph dev
 先查询：
 
 ```text
-查询 Agent 001 的 54321 端口是否被封禁
+查询 Agent AGENT_ID 的 54321 端口是否被封禁
 ```
 
 预期为 `unblocked（未封禁）`。
@@ -186,7 +186,7 @@ uv run langgraph dev
 封禁 30 秒：
 
 ```text
-在 Agent 001 上封禁 54321 端口
+在 Agent AGENT_ID 上封禁 54321 端口
 ```
 
 未指定时长时默认 30 秒。预期为 `blocked（已封禁）`，并显示入站 TCP 54321 的真实规则
@@ -203,14 +203,14 @@ curl --connect-timeout 3 http://192.168.28.129:54321
 验证其他允许时长：
 
 ```text
-在 Agent 001 上封禁 54321 端口 60 秒
-在 Agent 001 上封禁 54321 端口 300 秒
+在 Agent AGENT_ID 上封禁 54321 端口 60 秒
+在 Agent AGENT_ID 上封禁 54321 端口 300 秒
 ```
 
 验证手动解封：
 
 ```text
-解除 Agent 001 上 54321 端口的封禁
+解除 Agent AGENT_ID 上 54321 端口的封禁
 ```
 
 预期为 `unblocked（未封禁）`。手动解封后应等待原封禁时长结束，再进行下一次封禁测试。
@@ -218,12 +218,12 @@ curl --connect-timeout 3 http://192.168.28.129:54321
 验证越权拒绝：
 
 ```text
-在 Agent 001 上封禁 54322 端口 30 秒
-在 Agent 002 上封禁 54321 端口 30 秒
-在 Agent 001 上封禁 54321 端口 45 秒
+在 Agent AGENT_ID 上封禁 54322 端口 30 秒
+在 Agent AGENT_ID 上封禁 54321 端口 45 秒
 ```
 
-三次都应返回拒绝原因和允许范围，且不会向 Agent 发送执行命令。
+两次都应返回拒绝原因和允许范围，且不会向 Agent 发送执行命令。使用其他有效 Agent ID
+不再属于越权请求，但该 Agent 必须已部署本功能。
 
 ## 8. 排错与清理
 

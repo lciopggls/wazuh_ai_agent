@@ -1,16 +1,19 @@
-# Agent 001 进程终止与账户控制部署验证
+# Windows Agent 进程终止与账户控制部署验证
 
 本文部署两个仅供演示的 Windows Active Response 功能：
 
-- 查询或终止 Agent 001 上指定 PID 的 `notepad.exe`。
-- 查询、禁用或启用 Agent 001 上固定的本地账户 `demo_user`。
+- 查询或终止指定 Agent 上指定 PID 的 `notepad.exe`。
+- 查询、禁用或启用指定 Agent 上固定的本地账户 `demo_user`。
 
 两个功能只返回 `success`、`failed`、`unknown` 三种状态，并通过 Agent 查询真实状态、
 Manager 规则、Indexer 告警和唯一 `request_id` 完成验证。现有 `block-ip` 文件和配置无需修改。
 
-## 1. 在 Agent 001 创建演示账户
+支持任意有效的数字 Agent ID，但以下脚本、日志采集配置和演示账户必须在每个目标 Agent
+上分别部署。
 
-在 Agent 001 打开“计算机管理 → 本地用户和组 → 用户”，手动创建：
+## 1. 在目标 Agent 创建演示账户
+
+在目标 Agent 打开“计算机管理 → 本地用户和组 → 用户”，手动创建：
 
 ```text
 demo_user
@@ -29,9 +32,9 @@ Select-Object Name, Disabled, SID
 
 必须能看到一条本地账户记录。
 
-## 2. 更新 Agent 001 脚本
+## 2. 更新目标 Agent 脚本
 
-把项目中的以下两个文件复制到 Agent 001：
+把项目中的以下两个文件复制到目标 Agent：
 
 ```text
 endpoint-response.bat
@@ -53,9 +56,9 @@ Get-Item "$bin\endpoint-response.bat", "$bin\endpoint-response.ps1"
 
 脚本包含双重限制：只允许 `notepad.exe`，账户名称必须严格等于 `demo_user`。
 
-## 3. 配置 Agent 001 采集结果日志
+## 3. 配置目标 Agent 采集结果日志
 
-打开 Agent 001 的：
+打开目标 Agent 的：
 
 ```text
 C:\Program Files (x86)\ossec-agent\ossec.conf
@@ -153,7 +156,7 @@ uv run langgraph dev
 
 ## 7. 验证进程查询与终止
 
-在 Agent 001 打开一个记事本，然后在管理员 PowerShell 查询 PID：
+在目标 Agent 打开一个记事本，然后在管理员 PowerShell 查询 PID：
 
 ```powershell
 Get-Process -Name notepad | Select-Object Id, ProcessName
@@ -162,7 +165,7 @@ Get-Process -Name notepad | Select-Object Id, ProcessName
 假设 PID 为 `4321`，在 `demo_agent` 输入：
 
 ```text
-查询 Agent 001 上 PID 4321 的进程
+查询 Agent AGENT_ID 上 PID 4321 的进程
 ```
 
 预期：
@@ -176,7 +179,7 @@ success（已验证成功）
 然后输入：
 
 ```text
-终止 Agent 001 上 PID 4321 的可疑进程
+终止 Agent AGENT_ID 上 PID 4321 的可疑进程
 ```
 
 记事本窗口应该关闭，页面预期：
@@ -201,7 +204,7 @@ Get-Process -Id 4321 -ErrorAction SilentlyContinue
 先输入：
 
 ```text
-查询 Agent 001 上 demo_user 的状态
+查询 Agent AGENT_ID 上 demo_user 的状态
 ```
 
 预期返回 `success`，并展示当前为启用或禁用。
@@ -209,7 +212,7 @@ Get-Process -Id 4321 -ErrorAction SilentlyContinue
 禁用账户：
 
 ```text
-禁用 Agent 001 上的 demo_user
+禁用 Agent AGENT_ID 上的 demo_user
 ```
 
 预期：
@@ -219,7 +222,7 @@ success（已验证成功）
 账户当前状态：禁用
 ```
 
-Agent 001 交叉验证：
+目标 Agent 交叉验证：
 
 ```powershell
 Get-CimInstance -ClassName Win32_UserAccount `
@@ -232,7 +235,7 @@ Select-Object Name, Disabled, SID
 重新启用：
 
 ```text
-启用 Agent 001 上的 demo_user
+启用 Agent AGENT_ID 上的 demo_user
 ```
 
 预期返回 `success`，本机查询的 `Disabled` 应恢复为 `False`。演示结束时务必让
@@ -240,13 +243,13 @@ Select-Object Name, Disabled, SID
 
 ## 9. 检查完整回传链路
 
-Agent 001 的动作日志：
+目标 Agent 的动作日志：
 
 ```powershell
 Get-Content "C:\Program Files (x86)\ossec-agent\active-response\active-responses.log" -Tail 50
 ```
 
-Agent 001 的结构化结果日志：
+目标 Agent 的结构化结果日志：
 
 ```powershell
 Get-Content "C:\Program Files (x86)\ossec-agent\active-response\endpoint-response-query.log" -Tail 20
@@ -260,7 +263,7 @@ Get-Content "C:\Program Files (x86)\ossec-agent\active-response\endpoint-respons
 
 页面中的“进程处置耗时”使用响应智能体接收任务的时间与 `process_closed_at_utc` 计算，
 不包含结果日志进入 Manager 和 Indexer 的等待时间。为保证数值准确，运行后端的主机与
-Agent 001 必须保持系统时间同步。
+目标 Agent 必须保持系统时间同步。
 
 Manager 检查规则 100211 告警：
 

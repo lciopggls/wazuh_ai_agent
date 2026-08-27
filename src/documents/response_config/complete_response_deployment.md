@@ -7,7 +7,7 @@
 3. 指定 PID 的 `notepad.exe` 查询和终止；
 4. 本地账户 `demo_user` 查询、禁用和启用。
 
-部署目标固定为 Windows Agent 001。端口、进程和账户功能均有后端及脚本双重白名单，
+部署目标可以是任意有效的 Windows Agent。端口、进程和账户功能仍保留脚本白名单，
 不应把本文直接当作任意端口、进程或账户的通用处置方案。
 
 ## 1. 环境变量表
@@ -16,7 +16,7 @@
 
 | 变量 | 当前演示值/说明 |
 |---|---|
-| `<AGENT_ID>` | `001`；当前代码只允许 001 |
+| `<AGENT_ID>` | 目标 Agent 的数字 ID，例如 `005` |
 | `<AGENT_IP>` | 当前示例为 `192.168.28.129`，以新 Windows VM 地址为准 |
 | `<MANAGER_IP>` | Ubuntu Manager 的实际地址 |
 | `<UBUNTU_USER>` | 可通过 SSH 登录 Ubuntu 的用户 |
@@ -34,7 +34,7 @@ C:\Program Files (x86)\ossec-agent
 ## 2. 前置条件
 
 - Ubuntu VM 已安装并启动 Wazuh Manager、Indexer 和 API。
-- Windows VM 已安装 Wazuh Agent，并以 ID `001` 注册到该 Manager。
+- Windows VM 已安装 Wazuh Agent，并以有效数字 ID 注册到该 Manager。
 - 宿主机已克隆本仓库并安装 `uv`、Git 和 SSH 客户端。
 - 三台机器时间已同步；进程终止耗时展示依赖时间同步。
 - Windows 上使用管理员 PowerShell，Ubuntu 上使用具备 `sudo` 权限的终端。
@@ -45,9 +45,12 @@ C:\Program Files (x86)\ossec-agent
 sudo /var/ossec/bin/agent_control -lc
 ```
 
-必须能看到 Agent `001` 为 Active，之后再继续配置。
+必须能看到目标 Agent 为 Active，之后再继续配置。
 
-## 3. Windows Agent 001 配置
+## 3. 配置每个目标 Windows Agent
+
+以下脚本、结果日志和 `ossec.conf` 采集项必须在每台需要执行响应动作的 Agent 上分别部署；
+只在一台 Agent 上部署不会自动同步到其他 Agent。
 
 ### 3.1 备份配置并确认 Manager 地址
 
@@ -336,7 +339,7 @@ sudo systemctl status wazuh-manager --no-pager
 sudo /var/ossec/bin/agent_control -lc
 ```
 
-必须满足：配置检查无错误、Manager 为 `active (running)`、Agent 001 为 Active。
+必须满足：配置检查无错误、Manager 为 `active (running)`、目标 Agent 为 Active。
 
 ## 5. 宿主机后端连接
 
@@ -392,6 +395,7 @@ uv run langgraph dev
 
 在 LangGraph 页面选择 `router_agent` 并创建新对话。下面所有请求都直接输入总控页面，
 不需要手动切换到 `response_agent` 或 `demo_agent`。
+执行示例前，将文本中的 `AGENT_ID` 替换为目标 Agent 的实际数字 ID，例如 `005`。
 
 `router_agent` 应识别事件响应意图，将任务委派给 `response_agent`，再在当前对话中返回
 执行结果和真实状态证据。只要下面四组测试都通过，就同时验证了总控路由、响应智能体、
@@ -402,10 +406,10 @@ uv run langgraph dev
 使用文档保留地址 `203.0.113.10`，避免误操作真实业务地址：
 
 ```text
-查询 Agent 001 是否封禁了 203.0.113.10
-在 Agent 001 上双向封禁 203.0.113.10，持续 10 分钟
-查询 Agent 001 是否封禁了 203.0.113.10
-在 Agent 001 上解除对 203.0.113.10 的封禁
+查询 Agent AGENT_ID 是否封禁了 203.0.113.10
+在 Agent AGENT_ID 上双向封禁 203.0.113.10，持续 10 分钟
+查询 Agent AGENT_ID 是否封禁了 203.0.113.10
+在 Agent AGENT_ID 上解除对 203.0.113.10 的封禁
 ```
 
 预期依次看到未封禁、已封禁且包含入站和出站证据、已封禁、已解除。
@@ -438,18 +442,17 @@ curl --connect-timeout 3 http://AGENT_IP:54321
 然后在页面输入：
 
 ```text
-查询 Agent 001 的 54321 端口是否被封禁
-在 Agent 001 上封禁 54321 端口
-解除 Agent 001 上 54321 端口的封禁
+查询 Agent AGENT_ID 的 54321 端口是否被封禁
+在 Agent AGENT_ID 上封禁 54321 端口
+解除 Agent AGENT_ID 上 54321 端口的封禁
 ```
 
 未指定时长默认 30 秒；也只接受 60 秒和 300 秒。封禁后 Ubuntu 的 `curl` 应失败，
 解封或超时后应恢复。以下请求必须被拒绝且不能产生防火墙规则：
 
 ```text
-在 Agent 001 上封禁 54322 端口 30 秒
-在 Agent 002 上封禁 54321 端口 30 秒
-在 Agent 001 上封禁 54321 端口 45 秒
+在 Agent AGENT_ID 上封禁 54322 端口 30 秒
+在 Agent AGENT_ID 上封禁 54321 端口 45 秒
 ```
 
 ### 6.3 进程查询和终止
@@ -463,8 +466,8 @@ Get-Process -Name notepad | Select-Object Id, ProcessName
 将 `PID_NUMBER` 替换为刚查到的数值，在页面输入：
 
 ```text
-查询 Agent 001 上 PID PID_NUMBER 的进程
-终止 Agent 001 上 PID PID_NUMBER 的可疑进程
+查询 Agent AGENT_ID 上 PID PID_NUMBER 的进程
+终止 Agent AGENT_ID 上 PID PID_NUMBER 的可疑进程
 ```
 
 预期只允许 `notepad.exe`，终止后窗口关闭。交叉检查应无输出：
@@ -476,9 +479,9 @@ Get-Process -Id PID_NUMBER -ErrorAction SilentlyContinue
 ### 6.4 账户查询、禁用和启用
 
 ```text
-查询 Agent 001 上 demo_user 的状态
-禁用 Agent 001 上的 demo_user
-启用 Agent 001 上的 demo_user
+查询 Agent AGENT_ID 上 demo_user 的状态
+禁用 Agent AGENT_ID 上的 demo_user
+启用 Agent AGENT_ID 上的 demo_user
 ```
 
 Windows 交叉检查：
