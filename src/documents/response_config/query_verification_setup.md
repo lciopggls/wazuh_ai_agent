@@ -1,12 +1,12 @@
-# Agent 001 IP 封禁查询验证部署
+# Windows Agent IP 封禁查询验证部署
 
 查询验证链路使用 Wazuh 原生通信：AI 发送 Active Response 查询请求，Windows Agent
 查询真实防火墙规则并写出专用 JSON 日志，Manager 将日志转换为告警，AI 再按唯一
 `request_id` 从 Indexer 取回结果。
 
-## 1. 更新 Agent 001 脚本
+## 1. 更新目标 Agent 脚本
 
-在 Agent 001 的管理员 PowerShell 中，把项目中的新版 `block-ip.ps1` 复制到：
+在目标 Agent 的管理员 PowerShell 中，把项目中的新版 `block-ip.ps1` 复制到：
 
 ```text
 C:\Program Files (x86)\ossec-agent\active-response\bin\block-ip.ps1
@@ -15,7 +15,7 @@ C:\Program Files (x86)\ossec-agent\active-response\bin\block-ip.ps1
 `block-ip.bat` 保持不变。新版 PowerShell 脚本只查询名称以
 `Wazuh_AI_Block_` 开头的规则。
 
-## 2. 配置 Agent 001 收集查询日志
+## 2. 配置目标 Agent 收集查询日志
 
 打开：
 
@@ -103,13 +103,13 @@ uv run langgraph dev
 先查询一个未封禁 IP：
 
 ```text
-查询 Agent 001 是否封禁了 203.0.113.10
+查询 Agent AGENT_ID 是否封禁了 203.0.113.10
 ```
 
 预期为 `verified_unblocked`。然后执行：
 
 ```text
-在 Agent 001 上双向封禁 203.0.113.10，持续10分钟
+在 Agent AGENT_ID 上双向封禁 203.0.113.10，持续10分钟
 ```
 
 封禁工具会自动查询并验证，预期为 `verified_blocked`，且证据中同时出现入站和出站规则。
@@ -117,13 +117,13 @@ uv run langgraph dev
 再次主动查询：
 
 ```text
-查询 Agent 001 当前所有由 Wazuh AI 管理的 IP 封禁规则
+查询 Agent AGENT_ID 当前所有由 Wazuh AI 管理的 IP 封禁规则
 ```
 
 最后手动解封：
 
 ```text
-在 Agent 001 上解除对 203.0.113.10 的封禁
+在 Agent AGENT_ID 上解除对 203.0.113.10 的封禁
 ```
 
 预期为 `verified_unblocked`。

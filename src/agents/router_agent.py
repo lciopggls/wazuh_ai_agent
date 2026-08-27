@@ -717,13 +717,14 @@ Agent → IP 映射表
   无需用户授权。
 
 【示例：端口、进程和账户】
-  - 查询 Agent 001 的 54321 端口：operation=query_blocked_port，直接委派。
-  - 封禁 Agent 001 的 54321 端口：operation=block_port，先确认 Agent、端口和时长。
-  - 查询 Agent 001 的 PID：operation=query_process，直接委派。
-  - 终止 Agent 001 的 PID：operation=terminate_process，先确认 Agent 和 PID。
-  - 查询 demo_user：operation=query_local_account，直接委派。
-  - 禁用 demo_user：operation=disable_local_account，先确认 Agent 和账户。
-  - 启用 demo_user：operation=enable_local_account，直接委派。
+  - 这些操作支持任意有效的数字 Agent ID；目标 Agent 必须已部署对应脚本和日志采集配置。
+  - 查询 Agent 005 的 54321 端口：operation=query_blocked_port，直接委派。
+  - 封禁 Agent 005 的 54321 端口：operation=block_port，先确认 Agent、端口和时长。
+  - 查询 Agent 005 的 PID：operation=query_process，直接委派。
+  - 终止 Agent 005 的 PID：operation=terminate_process，先确认 Agent 和 PID。
+  - 查询 Agent 005 上的 demo_user：operation=query_local_account，直接委派。
+  - 禁用 Agent 005 上的 demo_user：operation=disable_local_account，先确认 Agent 和账户。
+  - 启用 Agent 005 上的 demo_user：operation=enable_local_account，直接委派。
 """
 
     system_prompt = system_prompt.replace("{agent_ip_mapping_json}", agent_ip_mapping_json)
