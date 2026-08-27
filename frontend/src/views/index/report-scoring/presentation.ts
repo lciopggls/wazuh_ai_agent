@@ -34,3 +34,20 @@ export function formatReportScoringError(error: unknown): string {
   }
   return `REQUEST_FAILED: ${String(error)}`;
 }
+
+export function formatLocalReportSaved(filepath: string): string {
+  return `报告已保存到：${filepath}`;
+}
+
+export function formatReportRegistrationSaved(filepath: string, reportId: string): string {
+  return `报告已保存到：${filepath}；评分报告已登记：${reportId}`;
+}
+
+export function formatReportRegistrationPartialFailure(
+  filepath: string,
+  error: { code?: string; message?: string },
+): string {
+  const code = error.code || "SCORING_REGISTRATION_ERROR";
+  const message = error.message || "评分登记失败";
+  return `报告已保存到：${filepath}；评分登记失败（${code}）：${message}`;
+}

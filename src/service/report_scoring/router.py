@@ -8,12 +8,11 @@ from .api_models import (
     ReportListItem,
     ReportListResponse,
     ReportRecord,
-    ReportSource,
     ScoreHistoryItem,
     ScoreInvocationResponse,
     ScoreRequest,
     ScoreResult,
-    StudioImportRequest,
+    StoredReportSource,
 )
 from .case_registry import CaseRegistry
 from .errors import ReportScoringError
@@ -70,15 +69,11 @@ def create_report_scoring_router(
             note=note,
         )
 
-    @router.post("/reports/studio-import", response_model=ReportRecord, status_code=201)
-    def import_studio_report(request: StudioImportRequest):
-        return report_repository.import_studio_report(**request.model_dump())
-
     @router.get("/reports", response_model=ReportListResponse)
     def list_reports(
         test_case_id: str | None = None,
         agent_id: str | None = None,
-        source_type: ReportSource | None = None,
+        source_type: StoredReportSource | None = None,
         scoring_status: Literal["not_scored", "running", "succeeded", "failed"] | None = None,
         offset: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,

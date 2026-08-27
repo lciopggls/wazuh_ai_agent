@@ -103,5 +103,5 @@ def create_default_scoring_context_loader() -> ScoringContextLoader:
     project_root = Path(__file__).resolve().parents[3]
     data_root = project_root / "report_scoring_data"
     registry = CaseRegistry(data_root / "catalog")
-    repository = ReportRepository(data_root / "runtime", data_root / "studio_inbox", registry)
+    repository = ReportRepository(data_root / "runtime", registry)
     return ScoringContextLoader(registry, repository)

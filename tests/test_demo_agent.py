@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import re
 import sys
 from unittest.mock import MagicMock, patch
@@ -177,15 +178,18 @@ def _load_demo_agent_for_test():
         "wazuh_api.server_api": fake_server_api,
     }
     original_modules = {name: sys.modules.get(name, _MISSING) for name in mocked_modules}
+    original_demo_module = sys.modules.pop("agents.demo_agent", _MISSING)
     sys.modules.update(mocked_modules)
     try:
-        from agents import demo_agent as demo_agent_module
+        demo_agent_module = importlib.import_module("agents.demo_agent")
     finally:
         for name, original_module in original_modules.items():
             if original_module is _MISSING:
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = original_module
+        if original_demo_module is not _MISSING:
+            sys.modules["agents.demo_agent"] = original_demo_module
     return demo_agent_module
 
 

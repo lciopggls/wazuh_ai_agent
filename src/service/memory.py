@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -24,6 +25,7 @@ from core.config import settings
 from service.report_scoring.api_models import ScoringRegistration
 from service.report_scoring.bootstrap import create_report_scoring_runtime
 from service.report_scoring.errors import ReportScoringError
+from service.report_scoring.report_repository import MAX_REPORT_BYTES
 from service.report_scoring.router import (
     create_report_scoring_router,
     create_unavailable_report_scoring_router,
@@ -160,6 +162,64 @@ REPORT_OUTPUT_DIR = os.path.join(
     "input",
 )
 
+
+def _save_report_to_output(content: str, requested_filename: str | None) -> Path:
+    """Persist one local Markdown report without overwriting different content."""
+
+    if not content.strip():
+        raise ReportScoringError("EMPTY_REPORT", "报告内容不能为空")
+    encoded = content.encode("utf-8")
+    if len(encoded) > MAX_REPORT_BYTES:
+        raise ReportScoringError("FILE_TOO_LARGE", "报告文件不能超过 1 MiB")
+
+    output_root = Path(REPORT_OUTPUT_DIR)
+    output_root.mkdir(parents=True, exist_ok=True)
+    resolved_root = output_root.resolve()
+
+    if requested_filename:
+        filename = Path(requested_filename.strip()).name
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        digest = hashlib.sha256(encoded).hexdigest()[:10]
+        filename = f"attack_trace_report_{timestamp}_{digest}.md"
+    if not filename or filename in {".", ".."}:
+        raise ReportScoringError("INVALID_REPORT_FILENAME", "报告文件名无效", field="filename")
+    if not filename.lower().endswith(".md"):
+        filename += ".md"
+    if len(filename) > 255:
+        raise ReportScoringError(
+            "INVALID_REPORT_FILENAME", "报告文件名不能超过 255 个字符", field="filename"
+        )
+
+    base = Path(filename)
+    for sequence in range(1, 1001):
+        candidate_name = base.name if sequence == 1 else f"{base.stem}-{sequence}{base.suffix}"
+        candidate = output_root / candidate_name
+        if candidate.resolve().parent != resolved_root:
+            raise ReportScoringError(
+                "INVALID_REPORT_FILENAME", "报告文件路径超出允许目录", field="filename"
+            )
+        try:
+            with candidate.open("xb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            return candidate
+        except FileExistsError:
+            try:
+                if candidate.is_file() and candidate.read_bytes() == encoded:
+                    return candidate
+            except OSError:
+                pass
+            continue
+        except OSError:
+            raise ReportScoringError(
+                "REPORT_SAVE_FAILED", "报告无法写入本地输出目录", status_code=500
+            ) from None
+
+    raise ReportScoringError("REPORT_SAVE_FAILED", "无法为报告分配唯一文件名", status_code=500)
+
+
 # ── 知识图谱路径配置 ──
 _KG_ROOT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -177,19 +237,9 @@ async def save_report(data: SaveReportInput):
     保存攻击溯源报告到本地 knowledge_graph/input 目录
     """
     try:
-        os.makedirs(REPORT_OUTPUT_DIR, exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = (
-            Path(data.filename).name if data.filename else f"attack_trace_report_{timestamp}.md"
-        )
-        # 确保扩展名是 .md
-        if not filename.endswith(".md"):
-            filename += ".md"
-        filepath = os.path.join(REPORT_OUTPUT_DIR, filename)
-
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(data.content)
+        saved_path = _save_report_to_output(data.content, data.filename)
+        filename = saved_path.name
+        filepath = str(saved_path)
 
         response = {
             "status": "ok",
@@ -270,8 +320,15 @@ async def save_report(data: SaveReportInput):
                             "error": failed.as_dict(),
                         }
         return response
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    except ReportScoringError as exc:
+        return {"status": "error", **exc.as_dict()}
+    except Exception:
+        logger.exception("报告保存失败")
+        return {
+            "status": "error",
+            "code": "REPORT_SAVE_FAILED",
+            "message": "报告保存失败",
+        }
 
 
 # ── 开发期报告评分 API ──

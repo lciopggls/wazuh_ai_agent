@@ -1,10 +1,32 @@
+import importlib
 import inspect
 import json
 import pathlib
 import re
+import sys
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+
+
+def test_server_api_import_does_not_request_token(monkeypatch):
+    token_module = importlib.import_module("wazuh_api.wazuh_server_token")
+    sys.modules.pop("wazuh_api.server_api", None)
+    try:
+        with monkeypatch.context() as context:
+            context.setattr(
+                token_module,
+                "wazuh_server_token",
+                lambda: (_ for _ in ()).throw(AssertionError("import requested a token")),
+            )
+            imported = importlib.import_module("wazuh_api.server_api")
+            assert imported.requests_headers == {
+                "Content-Type": "application/json",
+                "Authorization": None,
+            }
+    finally:
+        sys.modules.pop("wazuh_api.server_api", None)
+        importlib.import_module("wazuh_api.server_api")
 
 
 @pytest.fixture

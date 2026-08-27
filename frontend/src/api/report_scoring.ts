@@ -12,7 +12,7 @@ export interface AgentSummary {
   display_name: string;
 }
 
-export type ReportSource = "ai_chat" | "studio" | "upload";
+export type ReportSource = "ai_chat" | "studio" | "upload" | "local_import";
 
 export interface ReportRecord {
   report_id: string;
@@ -27,10 +27,45 @@ export interface ReportRecord {
   thread_id?: string | null;
   run_id?: string | null;
   note?: string | null;
+  attack_run_id?: string | null;
+  anchor_sha256?: string | null;
+  confirmation_actor?: string | null;
+  confirmed_at?: string | null;
   latest_attempt_status?: "not_scored" | "running" | "succeeded" | "failed";
   latest_attempt_id?: string | null;
   latest_score_id?: string | null;
   latest_total_score?: number | null;
+}
+
+export interface ReportScoringErrorPayload {
+  code: string;
+  message: string;
+  field?: string;
+  details?: Record<string, unknown>;
+}
+
+export type ChatReportRegistrationResult =
+  | { status: "ok"; report: ReportRecord }
+  | { status: "error"; error: ReportScoringErrorPayload };
+
+export interface ChatReportSaveResponse {
+  status: "ok";
+  filepath: string;
+  filename: string;
+  message: string;
+  scoring_registration?: ChatReportRegistrationResult;
+}
+
+export interface ChatReportSavePayload {
+  content: string;
+  filename?: string;
+  scoring_registration?: {
+    test_case_id: string;
+    agent_id: string;
+    thread_id?: string;
+    run_id?: string;
+    note?: string;
+  };
 }
 
 export interface DimensionScore {
@@ -162,14 +197,6 @@ export function uploadReport(form: FormData) {
   return request<ReportRecord>("/reports/upload", { method: "POST", body: form });
 }
 
-export function importStudioReport(payload: Record<string, unknown>) {
-  return request<ReportRecord>("/reports/studio-import", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-}
-
 export function scoreReport(reportId: string, rescore = false) {
   return request<{ attempt: ScoringAttempt; result: ScoreResult; reused: boolean }>(
     `/reports/${encodeURIComponent(reportId)}/${rescore ? "rescore" : "score"}`,
@@ -192,7 +219,9 @@ export const getComparison = (testCaseId: string, standardVersion = "v3.0") =>
     `/comparisons?test_case_id=${encodeURIComponent(testCaseId)}&standard_version=${encodeURIComponent(standardVersion)}`,
   );
 
-export async function saveAndRegisterChatReport(payload: Record<string, unknown>) {
+export async function saveChatReport(
+  payload: ChatReportSavePayload,
+): Promise<ChatReportSaveResponse> {
   const response = await fetch("http://127.0.0.1:8001/api/report/save", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -202,8 +231,7 @@ export async function saveAndRegisterChatReport(payload: Record<string, unknown>
   if (!response.ok || result.status !== "ok") {
     throw new ReportScoringApiError(response.status, result);
   }
-  if (result.scoring_registration?.status !== "ok") {
-    throw new ReportScoringApiError(400, result.scoring_registration?.error || result);
-  }
-  return result;
+  return result as ChatReportSaveResponse;
 }
+
+export const saveAndRegisterChatReport = saveChatReport;

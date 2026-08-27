@@ -21,7 +21,6 @@ def create_report_scoring_runtime(data_root: Path, model) -> ReportScoringRuntim
     case_registry = CaseRegistry(data_root / "catalog")
     report_repository = ReportRepository(
         data_root / "runtime",
-        data_root / "studio_inbox",
         case_registry,
     )
     score_repository = ScoreRepository(data_root / "runtime")

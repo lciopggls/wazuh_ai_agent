@@ -1,19 +1,19 @@
 <script setup lang="ts">
 import { computed, ref, watchEffect } from "vue";
 import {
-  importStudioReport,
   type AgentSummary,
   type TestCaseSummary,
   uploadReport,
 } from "@/api/report_scoring";
+import { formatReportScoringError } from "./presentation";
 
 const props = defineProps<{ cases: TestCaseSummary[]; agents: AgentSummary[] }>();
 const emit = defineEmits<{ registered: [] }>();
 
 const testCaseId = ref("");
 const agentId = ref("");
-const studioPath = ref("");
 const selectedFile = ref<File | null>(null);
+const fileInput = ref<HTMLInputElement | null>(null);
 const threadId = ref("");
 const runId = ref("");
 const note = ref("");
@@ -35,8 +35,14 @@ function optionalFields() {
   };
 }
 
-function displayError(error: any) {
-  errorMessage.value = `${error?.code || "REQUEST_FAILED"}: ${error?.message || String(error)}`;
+function displayError(error: unknown) {
+  errorMessage.value = formatReportScoringError(error);
+  successMessage.value = "";
+}
+
+function selectFile(event: Event) {
+  selectedFile.value = (event.target as HTMLInputElement).files?.[0] || null;
+  errorMessage.value = "";
   successMessage.value = "";
 }
 
@@ -50,9 +56,10 @@ async function submitUpload() {
     form.append("test_case_id", testCaseId.value);
     form.append("agent_id", agentId.value);
     for (const [key, value] of Object.entries(optionalFields())) form.append(key, value);
-    await uploadReport(form);
-    successMessage.value = "手动报告已登记。";
+    const report = await uploadReport(form);
+    successMessage.value = `报告已登记：${report.report_id}；存储位置：${report.stored_path}`;
     selectedFile.value = null;
+    if (fileInput.value) fileInput.value.value = "";
     emit("registered");
   } catch (error) {
     displayError(error);
@@ -61,31 +68,11 @@ async function submitUpload() {
   }
 }
 
-async function submitStudio() {
-  if (!canSubmit.value || !studioPath.value.trim()) return;
-  busy.value = true;
-  errorMessage.value = "";
-  try {
-    await importStudioReport({
-      relative_path: studioPath.value.trim(),
-      test_case_id: testCaseId.value,
-      agent_id: agentId.value,
-      ...optionalFields(),
-    });
-    successMessage.value = "Studio 报告已登记。";
-    studioPath.value = "";
-    emit("registered");
-  } catch (error) {
-    displayError(error);
-  } finally {
-    busy.value = false;
-  }
-}
 </script>
 
 <template>
   <section class="card registration-card">
-    <h3>登记报告</h3>
+    <h3>上传本机报告</h3>
     <div class="form-grid">
       <label>测试案例<select v-model="testCaseId"><option v-for="item in cases" :key="item.test_case_id" :value="item.test_case_id">{{ item.display_name }}</option></select></label>
       <label>被测智能体<select v-model="agentId"><option v-for="item in agents" :key="item.agent_id" :value="item.agent_id">{{ item.display_name }}</option></select></label>
@@ -95,14 +82,9 @@ async function submitStudio() {
     </div>
     <div class="source-row">
       <div class="source-box">
-        <strong>电脑上传</strong>
-        <input type="file" accept=".md,.txt,text/markdown,text/plain" @change="selectedFile = ($event.target as HTMLInputElement).files?.[0] || null" />
+        <strong>溯源报告</strong>
+        <input ref="fileInput" type="file" accept=".md,.txt,text/markdown,text/plain" @change="selectFile" />
         <button :disabled="busy || !canSubmit || !selectedFile" @click="submitUpload">上传并登记</button>
-      </div>
-      <div class="source-box">
-        <strong>Studio inbox</strong>
-        <input v-model="studioPath" placeholder="例如 SIM-204-report.md" />
-        <button :disabled="busy || !canSubmit || !studioPath.trim()" @click="submitStudio">从受控目录登记</button>
       </div>
     </div>
     <p v-if="successMessage" class="success">{{ successMessage }}</p>
@@ -117,7 +99,7 @@ h3 { margin: 0 0 12px; color: #1f2937; font-size: 15px; }
 label { display: flex; flex-direction: column; gap: 5px; color: #64748b; font-size: 12px; }
 .wide { grid-column: 1 / -1; }
 input, select { min-width: 0; border: 1px solid #d1d5db; border-radius: 6px; padding: 7px 9px; background: #fff; color: #1f2937; }
-.source-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.source-row { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 12px; }
 .source-box { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; padding: 10px; background: #f8fafc; border-radius: 8px; color: #334155; font-size: 12px; }
 button { border: 0; border-radius: 6px; padding: 8px 12px; color: #fff; background: #2563eb; cursor: pointer; &:disabled { opacity: .45; cursor: not-allowed; } }
 .success { color: #059669; margin: 10px 0 0; }

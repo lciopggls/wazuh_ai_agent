@@ -16,8 +16,9 @@ const emit = defineEmits<{
 
 const sourceLabels: Record<string, string> = {
   ai_chat: "AI 对话",
-  studio: "Studio",
-  upload: "电脑上传",
+  studio: "历史 Studio 导入",
+  upload: "本机上传",
+  local_import: "历史本机导入",
 };
 
 const presentation = (report: ReportRecord) =>
@@ -35,7 +36,7 @@ const presentation = (report: ReportRecord) =>
           <tr v-for="report in reports" :key="report.report_id" :class="{ selected: selectedReportId === report.report_id }" @click="emit('select', report)">
             <td><strong>{{ report.original_filename }}</strong><small>{{ report.report_sha256.slice(0, 10) }}…</small></td>
             <td>{{ report.agent_id }}</td>
-            <td>{{ sourceLabels[report.source_type] }}</td>
+            <td>{{ sourceLabels[report.source_type] || report.source_type }}</td>
             <td>{{ new Date(report.imported_at).toLocaleString() }}</td>
             <td>
               <div class="score-state">

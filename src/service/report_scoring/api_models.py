@@ -61,7 +61,8 @@ class AgentSummary(BaseModel):
     display_name: str
 
 
-ReportSource = Literal["ai_chat", "studio", "upload"]
+WritableReportSource = Literal["ai_chat", "upload"]
+StoredReportSource = Literal["ai_chat", "studio", "upload", "local_import"]
 AuditId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
 AuditNote = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
 
@@ -80,17 +81,19 @@ class ReportRegistrationInput(ScoringRegistration):
     """Validated repository input before a report directory is allocated."""
 
     filename: Annotated[str, StringConstraints(min_length=1, max_length=255)]
-    source_type: ReportSource
+    source_type: WritableReportSource
 
 
 class ReportRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1] = 1
+    # Schema 2 was written by the removed dynamic case-preparation prototype.
+    # Keep read compatibility so preserved report/score history still loads.
+    schema_version: Literal[1, 2] = 1
     report_id: Annotated[str, StringConstraints(pattern=r"^rpt_[0-9a-f]{32}$")]
     test_case_id: TestCaseId
     agent_id: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{1,63}$")]
-    source_type: ReportSource
+    source_type: StoredReportSource
     original_filename: Annotated[str, StringConstraints(min_length=1, max_length=255)]
     stored_path: RelativePath
     report_sha256: Sha256
@@ -99,6 +102,10 @@ class ReportRecord(BaseModel):
     thread_id: AuditId | None = None
     run_id: AuditId | None = None
     note: AuditNote | None = None
+    attack_run_id: AuditId | None = None
+    anchor_sha256: Sha256 | None = None
+    confirmation_actor: AuditId | None = None
+    confirmed_at: datetime | None = None
 
 
 class ReportListItem(ReportRecord):
@@ -106,10 +113,6 @@ class ReportListItem(ReportRecord):
     latest_attempt_id: str | None = None
     latest_score_id: str | None = None
     latest_total_score: float | None = Field(default=None, ge=0, le=100)
-
-
-class StudioImportRequest(ScoringRegistration):
-    relative_path: RelativePath
 
 
 class ReportListResponse(BaseModel):

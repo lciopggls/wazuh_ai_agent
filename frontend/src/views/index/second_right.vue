@@ -4,15 +4,27 @@ import VueMarkdown from 'vue-markdown-render';
 import {
   listAgents as listScoringAgents,
   listTestCases as listScoringTestCases,
+  saveChatReport,
   saveAndRegisterChatReport,
   type AgentSummary,
   type TestCaseSummary,
 } from "@/api/report_scoring";
-import { hasFinalAttributionReportHeading } from "./report-scoring/presentation";
+import {
+  formatLocalReportSaved,
+  formatReportRegistrationPartialFailure,
+  formatReportRegistrationSaved,
+  formatReportScoringError,
+  hasFinalAttributionReportHeading,
+} from "./report-scoring/presentation";
 
 type AgentOption = {
   id: string;
   name: string;
+};
+
+type ReportActionFeedback = {
+  tone: 'success' | 'warning' | 'error';
+  message: string;
 };
 
 const DEFAULT_AGENT_OPTIONS: AgentOption[] = [
@@ -66,6 +78,9 @@ const visualizationRequested = ref(false);
 // --- 报告下载状态追踪（按消息索引） ---
 const downloadStates = ref<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({});
 const registrationStates = ref<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({});
+const downloadFeedback = ref<Record<number, ReportActionFeedback>>({});
+const registrationFeedback = ref<Record<number, ReportActionFeedback>>({});
+const localReportFilenames = ref<Record<number, string>>({});
 const scoringCases = ref<TestCaseSummary[]>([]);
 const scoringAgents = ref<AgentSummary[]>([]);
 const registrationDialogVisible = ref(false);
@@ -92,28 +107,29 @@ async function downloadReport(msg: any, index: number) {
 
   downloadStates.value[index] = 'saving';
   try {
-    const response = await fetch('http://127.0.0.1:8001/api/report/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
-    const result = await response.json();
-    if (result.status === 'ok') {
-      downloadStates.value[index] = 'saved';
-      setTimeout(() => {
-        if (downloadStates.value[index] === 'saved') {
-          downloadStates.value[index] = 'idle';
-        }
-      }, 3000);
-    } else {
-      downloadStates.value[index] = 'error';
-      setTimeout(() => { downloadStates.value[index] = 'idle'; }, 3000);
-    }
-  } catch (err: any) {
-    console.error('保存报告失败:', err);
+    const result = await saveChatReport({ content });
+    localReportFilenames.value[index] = result.filename;
+    downloadStates.value[index] = 'saved';
+    downloadFeedback.value[index] = {
+      tone: 'success',
+      message: formatLocalReportSaved(result.filepath),
+    };
+  } catch (error: unknown) {
+    console.error('保存报告失败:', error);
     downloadStates.value[index] = 'error';
-    setTimeout(() => { downloadStates.value[index] = 'idle'; }, 3000);
+    downloadFeedback.value[index] = {
+      tone: 'error',
+      message: formatReportScoringError(error),
+    };
   }
+}
+
+function dismissReportFeedback(kind: 'download' | 'registration', index: number) {
+  const source = kind === 'download' ? downloadFeedback.value : registrationFeedback.value;
+  const next = { ...source };
+  delete next[index];
+  if (kind === 'download') downloadFeedback.value = next;
+  else registrationFeedback.value = next;
 }
 
 async function openScoringRegistration(msg: any, index: number) {
@@ -150,8 +166,11 @@ async function submitScoringRegistration() {
   registrationStates.value[index] = 'saving';
   registrationError.value = "";
   try {
-    await saveAndRegisterChatReport({
+    const result = await saveAndRegisterChatReport({
       content: registrationDialogContent.value,
+      ...(localReportFilenames.value[index]
+        ? { filename: localReportFilenames.value[index] }
+        : {}),
       scoring_registration: {
         test_case_id: registrationCaseId.value,
         agent_id: registrationAgentId.value,
@@ -162,14 +181,37 @@ async function submitScoringRegistration() {
         ...(registrationNote.value.trim() ? { note: registrationNote.value.trim() } : {}),
       },
     });
-    registrationStates.value[index] = 'saved';
-    registrationDialogVisible.value = false;
-    setTimeout(() => {
-      if (registrationStates.value[index] === 'saved') registrationStates.value[index] = 'idle';
-    }, 3000);
-  } catch (error: any) {
+    localReportFilenames.value[index] = result.filename;
+    const registration = result.scoring_registration;
+    if (registration?.status === 'ok') {
+      registrationStates.value[index] = 'saved';
+      registrationFeedback.value[index] = {
+        tone: 'success',
+        message: formatReportRegistrationSaved(
+          result.filepath,
+          registration.report.report_id,
+        ),
+      };
+      registrationDialogVisible.value = false;
+      return;
+    }
+    const registrationFailure = registration?.status === 'error'
+      ? registration.error
+      : { code: 'SCORING_REGISTRATION_ERROR', message: '服务端未返回评分登记结果' };
+    const partialMessage = formatReportRegistrationPartialFailure(
+      result.filepath,
+      registrationFailure,
+    );
     registrationStates.value[index] = 'error';
-    registrationError.value = `${error?.code || "REQUEST_FAILED"}: ${error?.message || String(error)}`;
+    registrationError.value = partialMessage;
+    registrationFeedback.value[index] = { tone: 'warning', message: partialMessage };
+  } catch (error: unknown) {
+    registrationStates.value[index] = 'error';
+    registrationError.value = formatReportScoringError(error);
+    registrationFeedback.value[index] = {
+      tone: 'error',
+      message: registrationError.value,
+    };
   }
 }
 
@@ -685,7 +727,7 @@ const scrollToBottom = async () => {
                   'report_download_btn--saved': downloadStates[index] === 'saved',
                   'report_download_btn--error': downloadStates[index] === 'error',
                 }"
-                :disabled="downloadStates[index] === 'saving'"
+                :disabled="downloadStates[index] === 'saving' || downloadStates[index] === 'saved'"
                 @click.stop="downloadReport(msg, index)"
                 :title="
                   downloadStates[index] === 'saving' ? '保存中...' :
@@ -697,7 +739,7 @@ const scrollToBottom = async () => {
                 <template v-if="downloadStates[index] === 'saving'">⏳</template>
                 <template v-else-if="downloadStates[index] === 'saved'">✅</template>
                 <template v-else-if="downloadStates[index] === 'error'">❌</template>
-                <template v-else>💾 下载报告</template>
+                <template v-else>💾 保存到本地</template>
               </button>
               <button
                 v-if="reportScoringActionsEnabled && isReportContent(msg)"
@@ -707,7 +749,7 @@ const scrollToBottom = async () => {
                   'report_download_btn--saved': registrationStates[index] === 'saved',
                   'report_download_btn--error': registrationStates[index] === 'error',
                 }"
-                :disabled="registrationStates[index] === 'saving'"
+                :disabled="registrationStates[index] === 'saving' || registrationStates[index] === 'saved'"
                 title="选择已登记案例和被测智能体后，保存并登记到开发期评分工具"
                 @click.stop="openScoringRegistration(msg, index)"
               >
@@ -719,6 +761,21 @@ const scrollToBottom = async () => {
             </template>
             <template v-else-if="msg.node === 'model'">🤖 AI 文本回复</template>
             <template v-else>⚡ 步骤: {{ msg.node }}</template>
+          </div>
+
+          <div
+            v-if="downloadFeedback[index]"
+            :class="['report_action_feedback', downloadFeedback[index].tone]"
+          >
+            <span>{{ downloadFeedback[index].message }}</span>
+            <button type="button" title="关闭提示" @click="dismissReportFeedback('download', index)">✕</button>
+          </div>
+          <div
+            v-if="registrationFeedback[index]"
+            :class="['report_action_feedback', registrationFeedback[index].tone]"
+          >
+            <span>{{ registrationFeedback[index].message }}</span>
+            <button type="button" title="关闭提示" @click="dismissReportFeedback('registration', index)">✕</button>
           </div>
 
           <!-- ──── AI 消息渲染 ──── -->
@@ -1228,6 +1285,43 @@ const scrollToBottom = async () => {
     color: #6d28d9;
     border-color: #7c3aed;
     background: rgba(124, 58, 237, 0.14);
+  }
+}
+
+.report_action_feedback {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  background: #f0fdf4;
+  color: #047857;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+
+  &.warning {
+    border-color: #fde68a;
+    background: #fffbeb;
+    color: #92400e;
+  }
+
+  &.error {
+    border-color: #fecaca;
+    background: #fef2f2;
+    color: #b91c1c;
+  }
+
+  button {
+    flex: 0 0 auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: currentColor;
+    cursor: pointer;
   }
 }
 

@@ -10,7 +10,12 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from .api_models import ReportRecord, ReportRegistrationInput, ReportSource
+from .api_models import (
+    ReportRecord,
+    ReportRegistrationInput,
+    StoredReportSource,
+    WritableReportSource,
+)
 from .case_registry import CaseRegistry
 from .errors import ReportScoringError
 from .safe_paths import UnsafePathError, is_reparse_point, resolve_path_within_root
@@ -42,24 +47,19 @@ class ReportRepository:
     def __init__(
         self,
         runtime_root: Path | str,
-        studio_inbox: Path | str,
         case_registry: CaseRegistry,
     ) -> None:
         configured_runtime_root = Path(runtime_root)
-        configured_studio_inbox = Path(studio_inbox)
-        if is_reparse_point(configured_runtime_root) or is_reparse_point(configured_studio_inbox):
+        if is_reparse_point(configured_runtime_root):
             raise ReportScoringError(
                 "PATH_OUTSIDE_ALLOWED_ROOT", "报告存储目录包含 reparse point", status_code=500
             )
         self.runtime_root = configured_runtime_root.resolve()
         self.reports_root = self.runtime_root / "reports"
-        self.studio_inbox = configured_studio_inbox.resolve()
         self.case_registry = case_registry
         self.reports_root.mkdir(parents=True, exist_ok=True)
-        self.studio_inbox.mkdir(parents=True, exist_ok=True)
         try:
             resolve_path_within_root(self.reports_root, self.runtime_root, strict=True)
-            resolve_path_within_root(self.studio_inbox, self.studio_inbox, strict=True)
         except UnsafePathError:
             raise ReportScoringError(
                 "PATH_OUTSIDE_ALLOWED_ROOT", "报告存储目录包含 reparse point", status_code=500
@@ -182,11 +182,10 @@ class ReportRepository:
         filename: str,
         test_case_id: str,
         agent_id: str,
-        source_type: ReportSource,
+        source_type: WritableReportSource,
         thread_id: str | None = None,
         run_id: str | None = None,
         note: str | None = None,
-        allow_agent_alias: bool = False,
     ) -> ReportRecord:
         safe_name = self._validate_filename(filename)
         self._validate_content(content)
@@ -206,9 +205,7 @@ class ReportRepository:
         except ValidationError as exc:
             raise self._validation_error(exc) from None
         case = self.case_registry.get_case(test_case_id)
-        canonical_agent = self.case_registry.canonicalize_agent_id(
-            agent_id, allow_alias=allow_agent_alias
-        )
+        canonical_agent = self.case_registry.canonicalize_agent_id(agent_id)
         report_hash = hashlib.sha256(content).hexdigest()
         duplicate_key = (test_case_id, canonical_agent, report_hash)
 
@@ -260,51 +257,6 @@ class ReportRepository:
             self._register_loaded(record)
             return record
 
-    def import_studio_report(
-        self,
-        *,
-        relative_path: str,
-        test_case_id: str,
-        agent_id: str,
-        thread_id: str | None = None,
-        run_id: str | None = None,
-        note: str | None = None,
-    ) -> ReportRecord:
-        relative = Path(relative_path)
-        if relative.is_absolute() or relative.drive or ".." in relative.parts:
-            raise self._studio_path_error(relative_path)
-        unresolved = self.studio_inbox / relative
-        try:
-            source = resolve_path_within_root(unresolved, self.studio_inbox, strict=True)
-        except UnsafePathError:
-            raise self._studio_path_error(relative_path) from None
-        if not source.is_file():
-            raise self._studio_path_error(relative_path)
-        try:
-            content = source.read_bytes()
-        except OSError:
-            raise ReportScoringError("INVALID_STUDIO_REPORT", "无法读取 Studio 报告") from None
-        return self.create_report(
-            content=content,
-            filename=source.name,
-            test_case_id=test_case_id,
-            agent_id=agent_id,
-            source_type="studio",
-            thread_id=thread_id,
-            run_id=run_id,
-            note=note,
-            allow_agent_alias=True,
-        )
-
-    @staticmethod
-    def _studio_path_error(relative_path: str) -> ReportScoringError:
-        return ReportScoringError(
-            "PATH_OUTSIDE_ALLOWED_ROOT",
-            "Studio 报告路径无效或超出 inbox",
-            field="relative_path",
-            details={"path": relative_path},
-        )
-
     def get_report(self, report_id: str) -> ReportRecord:
         with self._lock:
             record = self._records.get(report_id)
@@ -343,7 +295,7 @@ class ReportRepository:
         *,
         test_case_id: str | None = None,
         agent_id: str | None = None,
-        source_type: ReportSource | None = None,
+        source_type: StoredReportSource | None = None,
         offset: int = 0,
         limit: int = 50,
     ) -> tuple[list[ReportRecord], int]:
