@@ -90,7 +90,9 @@ class CaseRegistry:
     def _read_utf8(path: Path, field: str) -> tuple[str, bytes]:
         try:
             raw = path.read_bytes()
-            return raw.decode("utf-8"), raw
+            text = raw.decode("utf-8")
+            canonical_text = text.replace("\r\n", "\n").replace("\r", "\n")
+            return canonical_text, canonical_text.encode("utf-8")
         except UnicodeDecodeError:
             raise ReportScoringError(
                 "INVALID_TEST_CASE", "案例文件不是有效 UTF-8", field=field

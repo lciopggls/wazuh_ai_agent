@@ -1,3 +1,6 @@
 # Catalog evidence preserves Markdown hard line breaks from the frozen source.
+report_scoring_data/catalog/**/*.json text eol=lf
+report_scoring_data/catalog/**/*.txt text eol=lf
+report_scoring_data/catalog/**/*.md text eol=lf
 report_scoring_data/catalog/cases/*/archives_evidence.md whitespace=-blank-at-eol
 report_scoring_data/catalog/cases/*/degraded_telemetry_boundary.md whitespace=-blank-at-eol

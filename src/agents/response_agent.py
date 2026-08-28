@@ -3,6 +3,7 @@ import json
 import logging
 import time
 from datetime import datetime
+from functools import partial
 from typing import Literal, NotRequired
 
 from langchain.agents import create_agent
@@ -27,6 +28,53 @@ from wazuh_api.server_api import (
 )
 
 logger = logging.getLogger(__name__)
+
+_RESPONSE_WAIT_TIMEOUT = 60
+
+block_ip_and_verify_on_agent = partial(
+    block_ip_and_verify_on_agent,
+    wait_timeout=_RESPONSE_WAIT_TIMEOUT,
+)
+unblock_ip_and_verify_on_agent = partial(
+    unblock_ip_and_verify_on_agent,
+    wait_timeout=_RESPONSE_WAIT_TIMEOUT,
+)
+list_blocked_ips_on_agent = partial(
+    list_blocked_ips_on_agent,
+    wait_timeout=_RESPONSE_WAIT_TIMEOUT,
+)
+block_port_and_verify_on_agent = partial(
+    block_port_and_verify_on_agent,
+    wait_timeout=_RESPONSE_WAIT_TIMEOUT,
+)
+unblock_port_and_verify_on_agent = partial(
+    unblock_port_and_verify_on_agent,
+    wait_timeout=_RESPONSE_WAIT_TIMEOUT,
+)
+query_blocked_port_on_agent = partial(
+    query_blocked_port_on_agent,
+    wait_timeout=_RESPONSE_WAIT_TIMEOUT,
+)
+query_process_on_agent = partial(
+    query_process_on_agent,
+    wait_timeout=_RESPONSE_WAIT_TIMEOUT,
+)
+terminate_process_on_agent = partial(
+    terminate_process_on_agent,
+    wait_timeout=_RESPONSE_WAIT_TIMEOUT,
+)
+query_local_account_on_agent = partial(
+    query_local_account_on_agent,
+    wait_timeout=_RESPONSE_WAIT_TIMEOUT,
+)
+disable_local_account_on_agent = partial(
+    disable_local_account_on_agent,
+    wait_timeout=_RESPONSE_WAIT_TIMEOUT,
+)
+enable_local_account_on_agent = partial(
+    enable_local_account_on_agent,
+    wait_timeout=_RESPONSE_WAIT_TIMEOUT,
+)
 
 
 class ResponseAgentState(AgentState):

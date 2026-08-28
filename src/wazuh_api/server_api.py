@@ -986,6 +986,8 @@ def block_ip_and_verify_on_agent(
     target_ip: str,
     direction: Literal["srcip", "dstip", "both"] = "srcip",
     command_name: BlockCommand = "block-ip600",
+    *,
+    wait_timeout: float = 30,
 ):
     """Dispatch an IP block, then verify the real Windows Firewall state."""
     result = block_ip_on_agent(agent_id, target_ip, direction, command_name)
@@ -1000,11 +1002,13 @@ def block_ip_and_verify_on_agent(
         )
         return result
 
+    verification_kwargs = {"wait_timeout": wait_timeout} if wait_timeout != 30 else {}
     verification = list_blocked_ips_on_agent(
         result["agent_id"],
         target_ip,
         expected_action="block",
         expected_direction=direction,
+        **verification_kwargs,
     )
     result["verification"] = verification
     result["status"] = verification["status"]
@@ -1012,7 +1016,12 @@ def block_ip_and_verify_on_agent(
     return result
 
 
-def unblock_ip_and_verify_on_agent(agent_id: str, target_ip: str):
+def unblock_ip_and_verify_on_agent(
+    agent_id: str,
+    target_ip: str,
+    *,
+    wait_timeout: float = 30,
+):
     """Dispatch an IP unblock, then verify that both firewall rules are absent."""
     result = unblock_ip_on_agent(agent_id, target_ip)
     result["dispatch_success"] = result["success"]
@@ -1026,11 +1035,13 @@ def unblock_ip_and_verify_on_agent(agent_id: str, target_ip: str):
         )
         return result
 
+    verification_kwargs = {"wait_timeout": wait_timeout} if wait_timeout != 30 else {}
     verification = list_blocked_ips_on_agent(
         result["agent_id"],
         target_ip,
         expected_action="unblock",
         expected_direction="both",
+        **verification_kwargs,
     )
     result["verification"] = verification
     result["status"] = verification["status"]
@@ -1378,6 +1389,8 @@ def block_port_and_verify_on_agent(
     agent_id: str,
     target_port: int,
     duration_seconds: Literal[30, 60, 300] = 30,
+    *,
+    wait_timeout: float = 30,
 ) -> dict:
     """Dispatch the fixed port block and require verified firewall state."""
     result = block_port_on_agent(agent_id, target_port, duration_seconds)
@@ -1392,14 +1405,24 @@ def block_port_and_verify_on_agent(
         result["success"] = False
         return result
 
-    verification = query_blocked_port_on_agent(result["agent_id"], result["target_port"])
+    verification_kwargs = {"wait_timeout": wait_timeout} if wait_timeout != 30 else {}
+    verification = query_blocked_port_on_agent(
+        result["agent_id"],
+        result["target_port"],
+        **verification_kwargs,
+    )
     result["verification"] = verification
     result["status"] = verification["status"]
     result["success"] = verification["status"] == "blocked"
     return result
 
 
-def unblock_port_and_verify_on_agent(agent_id: str, target_port: int) -> dict:
+def unblock_port_and_verify_on_agent(
+    agent_id: str,
+    target_port: int,
+    *,
+    wait_timeout: float = 30,
+) -> dict:
     """Dispatch the fixed port unblock and require verified firewall state."""
     result = unblock_port_on_agent(agent_id, target_port)
     if not result["dispatch_success"]:
@@ -1413,7 +1436,12 @@ def unblock_port_and_verify_on_agent(agent_id: str, target_port: int) -> dict:
         result["success"] = False
         return result
 
-    verification = query_blocked_port_on_agent(result["agent_id"], result["target_port"])
+    verification_kwargs = {"wait_timeout": wait_timeout} if wait_timeout != 30 else {}
+    verification = query_blocked_port_on_agent(
+        result["agent_id"],
+        result["target_port"],
+        **verification_kwargs,
+    )
     result["verification"] = verification
     result["status"] = verification["status"]
     result["success"] = verification["status"] == "unblocked"

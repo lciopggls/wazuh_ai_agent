@@ -55,7 +55,7 @@
 - 后端新增 `src/agents/report_scoring/dimensions.py` 作为稳定字段、正式中文名称和权重的唯一映射；Studio AIMessage、持久化 Markdown、Schema 描述和比较聚合均复用该映射。
 - 前端在 `frontend/src/api/report_scoring.ts` 建立同一组类型化映射，报告详情与多智能体对比不再分别硬编码名称。
 - `PROMPT_VERSION` 从 `report-scoring-v3.0-3` 更新为 `report-scoring-v3.0-4`；稳定结构化字段、`SCORING_AGENT_VERSION` 和 `SCORING_CONTRACT_VERSION` 保持不变。
-- 正式 `评分标准v3.0.md`、伴随设计文档、当前运行指南和运行时标准副本已同步；正式标准与运行时副本 SHA256 均为 `55484bd1528841dfd3d6f21798b50b19a9ccff938110db9b856a3f938889bff9`，SIM-204～SIM-206 manifest 已更新，案例上下文哈希由 `CaseRegistry` 基于输入、Ground Truth、遥测边界和新标准动态重算。
+- 正式 `评分标准v3.0.md`、伴随设计文档、当前运行指南和运行时标准副本已同步；正式标准与运行时副本 SHA256 均为 `58606b7a13078cbb4e95504e747596c0851771fad26c49b7d120df5cc977e7a2`，SIM-204～SIM-206 manifest 已更新，案例上下文哈希由 `CaseRegistry` 基于输入、Ground Truth、遥测边界和新标准动态重算。
 - 历史评分结果和冻结 V2 材料未改写；旧成功结果仍可读取，但标准哈希、上下文哈希或提示词版本不匹配时不会被当作当前结果复用。
 - 验证结果：报告评分后端测试 `102 passed, 1 skipped`；完整后端回归 `145 passed, 1 skipped, 2 warnings`；前端名称映射测试 `5 passed`；前端类型检查和生产构建通过；Ruff 格式化及检查通过。Black 在当前 `.venv` 中持续无输出挂起，已终止并以 Ruff formatter 完成格式化，此环境限制需在审查时保留说明。
 
