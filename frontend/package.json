@@ -7,6 +7,7 @@
     "build:old": "run-p type-check build-only",
     "build": "vite build",
     "preview": "vite preview --port 4173",
+    "test:chat-persistence": "node --test tests/chat-navigation-persistence.test.mjs",
     "test:report-scoring": "node --test tests/report-scoring-presentation.test.mjs",
     "build-only": "vite build",
     "type-check": "vue-tsc --noEmit"

@@ -193,6 +193,9 @@ export async function listReports(filters: {
   return response.items;
 }
 
+export const getReport = (reportId: string) =>
+  request<ReportRecord>(`/reports/${encodeURIComponent(reportId)}`);
+
 export function uploadReport(form: FormData) {
   return request<ReportRecord>("/reports/upload", { method: "POST", body: form });
 }

@@ -10,8 +10,35 @@ const statusLabels = {
 const FINAL_ATTRIBUTION_REPORT_HEADING =
   /^\s{0,3}#{1,6}\s+(?:\*\*)?(?:Wazuh\s+)?攻击溯源调查报告(?:\*\*)?\s*$/imu;
 
+const ATTRIBUTION_REPORT_PRESENTATION_NODES = new Set([
+  "reply",
+  "final_report",
+  "Reporter_Node",
+]);
+
 export function hasFinalAttributionReportHeading(content: string): boolean {
   return FINAL_ATTRIBUTION_REPORT_HEADING.test(content);
+}
+
+export function isAttributionReportPresentationNode(node: unknown): boolean {
+  return typeof node === "string" && ATTRIBUTION_REPORT_PRESENTATION_NODES.has(node);
+}
+
+export function isAttributionReportMessage(
+  role: unknown,
+  node: unknown,
+  content: string,
+): boolean {
+  if (role !== "assistant" || !isAttributionReportPresentationNode(node)) return false;
+  return node === "final_report" || hasFinalAttributionReportHeading(content);
+}
+
+export function buildReportActionKey(
+  agentId: string,
+  threadId: string,
+  messageIndex: number,
+): string {
+  return JSON.stringify([agentId, threadId, messageIndex]);
 }
 
 export function getReportScorePresentation(
@@ -24,6 +51,13 @@ export function getReportScorePresentation(
     status,
     statusText: statusLabels[status],
   };
+}
+
+export function isReportScoreBusy(
+  report: Pick<ReportRecord, "report_id" | "latest_attempt_status">,
+  busyReportIds: ReadonlySet<string>,
+): boolean {
+  return busyReportIds.has(report.report_id) || report.latest_attempt_status === "running";
 }
 
 export function formatReportScoringError(error: unknown): string {

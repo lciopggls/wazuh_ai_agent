@@ -3,12 +3,16 @@ import test from "node:test";
 
 import { REPORT_SCORE_DIMENSIONS } from "../src/api/report_scoring.ts";
 import {
+  buildReportActionKey,
   formatLocalReportSaved,
   formatReportRegistrationPartialFailure,
   formatReportRegistrationSaved,
   formatReportScoringError,
   getReportScorePresentation,
   hasFinalAttributionReportHeading,
+  isAttributionReportMessage,
+  isAttributionReportPresentationNode,
+  isReportScoreBusy,
 } from "../src/views/index/report-scoring/presentation.ts";
 
 const report = (status) => ({ latest_attempt_status: status });
@@ -54,6 +58,24 @@ test("409 进行中错误保留 code 和 message", () => {
   );
 });
 
+test("服务端或本地任一状态显示评分中时禁止重复评分", () => {
+  assert.equal(
+    isReportScoreBusy({ report_id: "rpt_running", latest_attempt_status: "running" }, new Set()),
+    true,
+  );
+  assert.equal(
+    isReportScoreBusy(
+      { report_id: "rpt_local", latest_attempt_status: "not_scored" },
+      new Set(["rpt_local"]),
+    ),
+    true,
+  );
+  assert.equal(
+    isReportScoreBusy({ report_id: "rpt_done", latest_attempt_status: "succeeded" }, new Set()),
+    false,
+  );
+});
+
 test("只有带报告标题的最终回复才允许保存并登记", () => {
   assert.equal(
     hasFinalAttributionReportHeading("### **攻击溯源调查报告**\n\n正文"),
@@ -67,6 +89,33 @@ test("只有带报告标题的最终回复才允许保存并登记", () => {
     hasFinalAttributionReportHeading("请启动攻击溯源调查。请问线索是否符合要求？"),
     false,
   );
+});
+
+test("攻击溯源 Reporter_Node 报告可显示保存和评分操作", () => {
+  const reportContent = "# 攻击溯源调查报告\n\n正文";
+
+  assert.equal(isAttributionReportPresentationNode("Reporter_Node"), true);
+  assert.equal(isAttributionReportMessage("assistant", "Reporter_Node", reportContent), true);
+  assert.equal(
+    isAttributionReportMessage("assistant", "Reporter_Node", "报告生成失败，请稍后重试"),
+    false,
+  );
+});
+
+test("非报告节点即使包含报告标题也不显示保存操作", () => {
+  assert.equal(
+    isAttributionReportMessage("assistant", "model", "# 攻击溯源调查报告\n\n正文"),
+    false,
+  );
+  assert.equal(isAttributionReportMessage("user", "Reporter_Node", "# 攻击溯源调查报告"), false);
+});
+
+test("不同智能体相同消息序号使用独立报告操作状态", () => {
+  const simpleKey = buildReportActionKey("baseline_agent_simple", "tid_simple", 7);
+  const plusKey = buildReportActionKey("baseline_agent_plus", "tid_plus", 7);
+
+  assert.notEqual(simpleKey, plusKey);
+  assert.equal(simpleKey, buildReportActionKey("baseline_agent_simple", "tid_simple", 7));
 });
 
 test("报告保存和登记反馈包含实际路径与报告 ID", () => {

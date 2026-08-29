@@ -1,99 +1,107 @@
 # 报告评分智能体：当前任务
 
-> 更新日期：2026-08-28
-> 实施基线：`origin/master=d56130c`
+> 更新日期：2026-08-29
 > 当前分支：`codex/report-scoring-case-preparation`
-> 当前任务状态：代码、六份项目文档、验证和提交边界已收口
+> 本轮起点提交：`718db3a`
+> 当前任务状态：功能验收通过，正在执行交付验证、提交和远程主分支合并
 
-## 1. 任务目标
+本文件只描述当前尚未完成的交付任务。产品合同见
+[`11_FIXED_BENCHMARK_SCORING_REQUIREMENTS.md`](./11_FIXED_BENCHMARK_SCORING_REQUIREMENTS.md)，当前完成状态和
+数据边界见 [`00_CURRENT_PROJECT_STATE.md`](./00_CURRENT_PROJECT_STATE.md)。
 
-把报告评分流程收敛为：
+## 1. 已确认结论
 
-```text
-AI 对话生成的最终报告 ──选择本地已有案例和被测智能体──┐
-                                                        ├→ 报告登记 → 评分 → 详情/历史/对比
-本机上传的溯源报告 ─────选择本地已有案例和被测智能体──┘
-```
+- 用户已确认当前功能完全符合要求，运行效果良好，暂未发现其他 bug。
+- 固定案例双入口、报告保存/登记、首次评分、重评分、详情、历史和对比链路均可用。
+- AI 对话和评分页面切换不会中断正在运行的溯源；评分运行状态不会因导航切换而丢失。
+- 当前没有需要继续实现的功能。不得在交付前顺手扩展需求、重跑攻击、清理历史数据或修改固定
+  评分合同。
 
-所有评分答案在测试前已经保存在本地。测试阶段只登记报告和调用评分，不再准备案例。
+## 2. 当前目标
 
-## 2. 本轮实施范围
+1. 更新正式项目状态与操作文档；
+2. 按显式白名单复核准备提交的代码、测试和文档；
+3. 运行前端测试、类型检查、构建、后端专项和完整 pytest；
+4. 提交当前功能分支；
+5. 把最新 `origin/master` 整合到功能分支，解决冲突并复跑受影响验证；
+6. 推送功能分支；
+7. 将已包含最新主分支的交付结果合并到远程 `master`，核对远程指针。
 
-- 删除案例准备 repository/service、前端案例准备面板和相关 API。
-- 删除锚点预览、本机 `anchor.json` 上传和 AI 对话锚点绑定合同。
-- 删除 Archives 查询、草稿状态、材料确认、发布恢复和来源补录逻辑。
-- 恢复 AI 对话的简单评分登记合同：案例、被测智能体和可选审计字段。
-- 恢复本机报告上传合同：报告文件、案例、被测智能体和可选审计字段。
-- 删除旧功能专属测试，保留并调整固定案例登记与评分核心测试。
-- 精简长期文档，删除已结束的审查、SIM-207 手工验收和已取消方案文档。
-- 删除已失去用途的本地 `report_scoring_data/case_preparation/` 草稿与审计数据。
-- 新增新主机新攻击案例的文件化准备流程，明确攻击前计划答案、攻击后正式答案、案例安装、答案
-  隔离和辅助 AI 的操作边界，不增加新的产品代码逻辑。
+## 3. 本轮提交白名单
 
-## 3. 明确保留
+### 3.1 功能代码与测试
 
-- 评分图、提示词、六维 schema、结果校验和总分重算；
-- 本地案例注册表、上下文加载和案例完整性校验；
-- 报告/attempt/评分结果持久化；
-- 首次评分、重评分、详情、历史和多智能体对比；
-- AI 报告只保存到本地的能力；
-- 测试模块与评分模块功能开关；
-- 仿真资料、现有评分历史、SIM-207 本地案例、知识图谱输入报告和 stash；
-- 与本任务无关的测试修改和用户工作树内容。
+- `frontend/package.json`；
+- `frontend/src/api/report_scoring.ts`；
+- `frontend/src/views/index/index.vue`；
+- `frontend/src/views/index/second_right.vue`；
+- `frontend/src/views/index/report_scoring.vue`；
+- `frontend/src/views/index/report-scoring/ReportList.vue`；
+- `frontend/src/views/index/report-scoring/presentation.ts`；
+- `frontend/tests/report-scoring-presentation.test.mjs`；
+- `frontend/tests/chat-navigation-persistence.test.mjs`。
 
-## 4. 验收标准
+### 3.2 正式项目文档
 
-### AI 对话入口
+- `docs/report_scoring_agent/00_CURRENT_PROJECT_STATE.md`；
+- `docs/report_scoring_agent/02_CURRENT_TASK.md`；
+- `docs/report_scoring_agent/12_NEW_HOST_NEW_ATTACK_TEST_FLOW.md`。
 
-- 最终报告可选择一个本地已有案例和实际被测智能体后登记。
-- 用户也可以只保存报告到本机，不登记评分。
-- 登记不要求上传锚点或填写答案材料。
-- 评分登记失败不阻断核心报告保存。
+只有完成远程主分支整合后，为解决真实合并冲突而必须修改的已跟踪文件，才可以在复核后追加到
+白名单。任何追加都必须服务于同时保留两侧既有功能，不能夹带本机运行数据。
 
-### 本机报告入口
+## 4. 明确排除项
 
-- 报告文件、案例和被测智能体齐全时可以登记。
-- 不要求 `anchor.json`、RUN ID、答案文件或 ZIP。
-- 空报告、未知案例、未知智能体和重复报告返回明确错误。
-- 登记成功后可以使用现有评分、历史和对比功能。
+- `.pytest-tmp/` 和其他临时缓存；
+- `attack_simulations/` 全部内容，包括 SIM-209 答案和 cleanup 证据；
+- `report_scoring_data/catalog/cases/SIM-207`～`SIM-209`；
+- `report_scoring_data/runtime/`；
+- `src/knowledge_graph/input/` 中的本机溯源报告；
+- Word 文档和其他用户资料；
+- `tests/test_report_scoring_api.py`、`tests/test_report_scoring_case_registry.py`、
+  `tests/test_report_scoring_validation.py` 中仅适配本机 SIM-208/209 的断言；
+- `tests/test_knowledge_graph_template.py`；
+- 内容与索引一致、仅工作树元数据呈修改状态的 `.gitignore`；
+- 本地运行交接 `13_SIM205_SIM209_NEXT_WINDOW_HANDOFF.md`。
 
-### 公共回归
+不执行 `git add .`，不删除排除项，也不通过 reset、clean 或广泛 stash 隐藏它们。
 
-- 本地已启用且完整的案例可被读取。
-- 评分详情、历史、重评分和多智能体对比保持可用。
-- 普通页面不再出现动态案例准备、Archives 或发布入口。
-- 清理后代码中不存在对已删除案例准备模块的导入。
-- 不写入新的草稿、Archives 快照或案例目录。
+## 5. 远程整合事实
 
-## 5. 操作边界
+同步后的 `origin/master` 为 `9656aa5`，当前功能分支起点为 `718db3a`，共同基线为 `d56130c`。
+远程主分支在共同基线之后新增了事件响应、前端和知识图谱相关提交，也在合并过程中删除了本功能
+分支已有的固定评分需求文档及部分报告评分测试。
 
-本轮只清理用户已经确认的动态案例准备增量和专属历史文件。不得扩展删除范围，也不得清理
-仿真数据、运行评分历史、知识图谱输入报告、SIM-207 本地案例或 stash。
+整合原则：
 
-完成代码后按项目约定执行 Black、Ruff、相关测试、前端检查和完整 pytest。用户已授权在提交
-边界无疑问后提交并推送；提交仍必须使用显式白名单，不能把本地攻击仿真、历史报告、运行评分
-记录、SIM-207 或无关工作树内容带入提交。
+- 保留远程主分支新增功能和文件组织；
+- 保留本功能分支的固定基准评分合同、代码、文档和测试；
+- 对 `frontend/package.json`、评分 API、页面和聊天组件等重叠文件逐项语义合并；
+- 不用整文件单边覆盖代替冲突分析；
+- 不让远程知识图谱数据与本地未跟踪溯源报告发生混淆；
+- 合并完成后检查冲突标记、暂存清单、提交差异和完整测试结果。
 
-## 6. 本轮完成结果
+## 6. 验证门
 
-- 动态案例准备后端、前端、API、模型和来源补录代码已删除。
-- 普通评分页面只保留本机报告上传；AI 对话继续支持只保存或保存并登记评分。
-- Studio inbox 登记路由、仓储入口、前端 API 和专属测试已删除；旧来源只读兼容保留。
-- 旧功能专属文档和测试已删除，混合测试已收缩到现行合同。
-- `report_scoring_data/case_preparation/`、根目录测试缓存及 `src/`、`tests/` 下的 Python 字节码
-  缓存已删除。
-- 对 schema 2 / `local_import` 历史报告只保留读取兼容，未恢复旧入口或写入能力。
-- AI 保存、登记成功和部分失败均持久显示实际保存路径；成功登记同时显示 `report_id`，并防止
-  对同一消息重复点击。
-- 本机上传成功显示报告 ID 和存储位置，并清空真实文件输入；历史来源具有明确标签。
-- 本地报告保存新增空内容、1 MiB 上限和同名防覆盖边界。
-- 已补充 `11_FIXED_BENCHMARK_SCORING_REQUIREMENTS.md` 与
-  `12_NEW_HOST_NEW_ATTACK_TEST_FLOW.md`，把固定基准重测和新主机新案例准备明确拆开。
-- 新主机流程已补齐首次依赖同步、环境文件、前端功能开关、三个服务启动和案例 API 就绪门；不依赖
-  当前主机已有报告或评分历史。新主机相关注册表/API 测试 `35 passed, 1 skipped`，LangGraph 配置
-  校验通过并识别 9 个图。
-- 本轮后端专项为 `157 passed, 1 skipped`；前端 `7 passed`，类型检查和构建通过。
-- 本轮完整 pytest 为 `208 passed, 1 skipped, 1 failed`；唯一失败是既有真实模型 strict 轨迹
-  对参数类型和最终措辞的波动，与报告评分修改无关。
-- 本轮 16 个 Python 文件 Black 复查通过且定向 Ruff 通过；全仓 Ruff 仍有 3 个既有范围外问题。
-- 本任务按显式白名单交付；本地仿真、历史报告、SIM-207 和无关测试文件不属于交付内容。
+提交前至少满足：
+
+- 两组前端 Node 测试通过；
+- `npm run type-check` 通过；
+- `npm run build` 通过；
+- 报告评分后端专项测试通过；
+- 完整 `uv run pytest` 的结果被准确记录；若仍只有既有真实模型 strict 轨迹失败，必须明确披露，
+  不能声称全绿；
+- `git diff --check` 通过；
+- `git diff --cached --name-status` 只包含批准白名单和经复核的冲突解决文件；
+- 不包含 `.env`、凭据、真实运行数据、SIM-207～SIM-209 或本机报告。
+
+远程主分支整合后，至少重新运行受冲突影响的前端测试、类型检查、构建和后端报告评分专项；若整合
+影响面扩大，则再次运行完整 pytest。
+
+## 7. 完成条件
+
+- 功能分支提交已推送且本地 HEAD 与远程分支一致；
+- 远程 `master` 包含最新主分支改动和本轮报告评分交付；
+- 远程 `master` 指向已经验证的整合提交；
+- 本地排除数据仍原样保留且未进入提交；
+- 最终向用户报告提交哈希、主分支哈希、实际测试结果和仍保留的已知范围外问题。

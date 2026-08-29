@@ -10,11 +10,13 @@ import {
   type TestCaseSummary,
 } from "@/api/report_scoring";
 import {
+  buildReportActionKey,
   formatLocalReportSaved,
   formatReportRegistrationPartialFailure,
   formatReportRegistrationSaved,
   formatReportScoringError,
-  hasFinalAttributionReportHeading,
+  isAttributionReportMessage,
+  isAttributionReportPresentationNode,
 } from "./report-scoring/presentation";
 
 type AgentOption = {
@@ -75,16 +77,17 @@ const isTyping = ref(false);
 const scrollRef = ref<HTMLElement | null>(null);
 const visualizationRequested = ref(false);
 
-// --- 报告下载状态追踪（按消息索引） ---
-const downloadStates = ref<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({});
-const registrationStates = ref<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({});
-const downloadFeedback = ref<Record<number, ReportActionFeedback>>({});
-const registrationFeedback = ref<Record<number, ReportActionFeedback>>({});
-const localReportFilenames = ref<Record<number, string>>({});
+// --- 报告操作状态追踪（按智能体、线程和消息索引隔离） ---
+const downloadStates = ref<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({});
+const registrationStates = ref<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({});
+const downloadFeedback = ref<Record<string, ReportActionFeedback>>({});
+const registrationFeedback = ref<Record<string, ReportActionFeedback>>({});
+const localReportFilenames = ref<Record<string, string>>({});
 const scoringCases = ref<TestCaseSummary[]>([]);
 const scoringAgents = ref<AgentSummary[]>([]);
 const registrationDialogVisible = ref(false);
 const registrationDialogIndex = ref(-1);
+const registrationDialogActionKey = ref("");
 const registrationDialogContent = ref("");
 const registrationCaseId = ref("");
 const registrationAgentId = ref("");
@@ -95,9 +98,11 @@ const registrationError = ref("");
 
 /** 判断气泡内容是否为攻击溯源报告 */
 function isReportContent(msg: any): boolean {
-  if (msg.role !== 'assistant' || !['reply', 'final_report'].includes(msg.node)) return false;
-  const content = getMessageContent(msg);
-  return msg.node === 'final_report' || hasFinalAttributionReportHeading(content);
+  return isAttributionReportMessage(msg.role, msg.node, getMessageContent(msg));
+}
+
+function reportActionKey(index: number): string {
+  return buildReportActionKey(currentAgentId.value, currentThreadId.value, index);
 }
 
 /** 下载报告：调用后端 API 保存到指定目录 */
@@ -105,19 +110,20 @@ async function downloadReport(msg: any, index: number) {
   const content = getMessageContent(msg);
   if (!content) return;
 
-  downloadStates.value[index] = 'saving';
+  const actionKey = reportActionKey(index);
+  downloadStates.value[actionKey] = 'saving';
   try {
     const result = await saveChatReport({ content });
-    localReportFilenames.value[index] = result.filename;
-    downloadStates.value[index] = 'saved';
-    downloadFeedback.value[index] = {
+    localReportFilenames.value[actionKey] = result.filename;
+    downloadStates.value[actionKey] = 'saved';
+    downloadFeedback.value[actionKey] = {
       tone: 'success',
       message: formatLocalReportSaved(result.filepath),
     };
   } catch (error: unknown) {
     console.error('保存报告失败:', error);
-    downloadStates.value[index] = 'error';
-    downloadFeedback.value[index] = {
+    downloadStates.value[actionKey] = 'error';
+    downloadFeedback.value[actionKey] = {
       tone: 'error',
       message: formatReportScoringError(error),
     };
@@ -125,9 +131,10 @@ async function downloadReport(msg: any, index: number) {
 }
 
 function dismissReportFeedback(kind: 'download' | 'registration', index: number) {
+  const actionKey = reportActionKey(index);
   const source = kind === 'download' ? downloadFeedback.value : registrationFeedback.value;
   const next = { ...source };
-  delete next[index];
+  delete next[actionKey];
   if (kind === 'download') downloadFeedback.value = next;
   else registrationFeedback.value = next;
 }
@@ -135,6 +142,7 @@ function dismissReportFeedback(kind: 'download' | 'registration', index: number)
 async function openScoringRegistration(msg: any, index: number) {
   registrationError.value = "";
   registrationDialogIndex.value = index;
+  registrationDialogActionKey.value = reportActionKey(index);
   registrationDialogContent.value = getMessageContent(msg);
   registrationDialogVisible.value = true;
   try {
@@ -156,20 +164,21 @@ async function openScoringRegistration(msg: any, index: number) {
 }
 
 function closeScoringRegistration() {
-  if (registrationStates.value[registrationDialogIndex.value] === 'saving') return;
+  if (registrationStates.value[registrationDialogActionKey.value] === 'saving') return;
   registrationDialogVisible.value = false;
 }
 
 async function submitScoringRegistration() {
   const index = registrationDialogIndex.value;
-  if (index < 0 || !registrationCaseId.value || !registrationAgentId.value) return;
-  registrationStates.value[index] = 'saving';
+  const actionKey = registrationDialogActionKey.value;
+  if (index < 0 || !actionKey || !registrationCaseId.value || !registrationAgentId.value) return;
+  registrationStates.value[actionKey] = 'saving';
   registrationError.value = "";
   try {
     const result = await saveAndRegisterChatReport({
       content: registrationDialogContent.value,
-      ...(localReportFilenames.value[index]
-        ? { filename: localReportFilenames.value[index] }
+      ...(localReportFilenames.value[actionKey]
+        ? { filename: localReportFilenames.value[actionKey] }
         : {}),
       scoring_registration: {
         test_case_id: registrationCaseId.value,
@@ -181,11 +190,11 @@ async function submitScoringRegistration() {
         ...(registrationNote.value.trim() ? { note: registrationNote.value.trim() } : {}),
       },
     });
-    localReportFilenames.value[index] = result.filename;
+    localReportFilenames.value[actionKey] = result.filename;
     const registration = result.scoring_registration;
     if (registration?.status === 'ok') {
-      registrationStates.value[index] = 'saved';
-      registrationFeedback.value[index] = {
+      registrationStates.value[actionKey] = 'saved';
+      registrationFeedback.value[actionKey] = {
         tone: 'success',
         message: formatReportRegistrationSaved(
           result.filepath,
@@ -202,13 +211,13 @@ async function submitScoringRegistration() {
       result.filepath,
       registrationFailure,
     );
-    registrationStates.value[index] = 'error';
+    registrationStates.value[actionKey] = 'error';
     registrationError.value = partialMessage;
-    registrationFeedback.value[index] = { tone: 'warning', message: partialMessage };
+    registrationFeedback.value[actionKey] = { tone: 'warning', message: partialMessage };
   } catch (error: unknown) {
-    registrationStates.value[index] = 'error';
+    registrationStates.value[actionKey] = 'error';
     registrationError.value = formatReportScoringError(error);
-    registrationFeedback.value[index] = {
+    registrationFeedback.value[actionKey] = {
       tone: 'error',
       message: registrationError.value,
     };
@@ -716,46 +725,46 @@ const scrollToBottom = async () => {
         <div class="content_box">
           <div v-if="msg.role === 'assistant' && msg.node" class="node_tag">
             <template v-if="msg.node === 'tools'">⚙️ 工具输出 (原始数据)</template>
-            <template v-else-if="msg.node === 'reply' || msg.node === 'final_report'">
+            <template v-else-if="isAttributionReportPresentationNode(msg.node)">
               📋 提取结论
               <!-- 攻击溯源报告下载按钮 -->
               <button
                 v-if="isReportContent(msg)"
                 class="report_download_btn"
                 :class="{
-                  'report_download_btn--saving': downloadStates[index] === 'saving',
-                  'report_download_btn--saved': downloadStates[index] === 'saved',
-                  'report_download_btn--error': downloadStates[index] === 'error',
+                  'report_download_btn--saving': downloadStates[reportActionKey(index)] === 'saving',
+                  'report_download_btn--saved': downloadStates[reportActionKey(index)] === 'saved',
+                  'report_download_btn--error': downloadStates[reportActionKey(index)] === 'error',
                 }"
-                :disabled="downloadStates[index] === 'saving' || downloadStates[index] === 'saved'"
+                :disabled="downloadStates[reportActionKey(index)] === 'saving' || downloadStates[reportActionKey(index)] === 'saved'"
                 @click.stop="downloadReport(msg, index)"
                 :title="
-                  downloadStates[index] === 'saving' ? '保存中...' :
-                  downloadStates[index] === 'saved' ? '已保存 ✓' :
-                  downloadStates[index] === 'error' ? '保存失败' :
+                  downloadStates[reportActionKey(index)] === 'saving' ? '保存中...' :
+                  downloadStates[reportActionKey(index)] === 'saved' ? '已保存 ✓' :
+                  downloadStates[reportActionKey(index)] === 'error' ? '保存失败' :
                   '保存报告到本地'
                 "
               >
-                <template v-if="downloadStates[index] === 'saving'">⏳</template>
-                <template v-else-if="downloadStates[index] === 'saved'">✅</template>
-                <template v-else-if="downloadStates[index] === 'error'">❌</template>
+                <template v-if="downloadStates[reportActionKey(index)] === 'saving'">⏳</template>
+                <template v-else-if="downloadStates[reportActionKey(index)] === 'saved'">✅</template>
+                <template v-else-if="downloadStates[reportActionKey(index)] === 'error'">❌</template>
                 <template v-else>💾 保存到本地</template>
               </button>
               <button
                 v-if="reportScoringActionsEnabled && isReportContent(msg)"
                 class="report_download_btn report_register_btn"
                 :class="{
-                  'report_download_btn--saving': registrationStates[index] === 'saving',
-                  'report_download_btn--saved': registrationStates[index] === 'saved',
-                  'report_download_btn--error': registrationStates[index] === 'error',
+                  'report_download_btn--saving': registrationStates[reportActionKey(index)] === 'saving',
+                  'report_download_btn--saved': registrationStates[reportActionKey(index)] === 'saved',
+                  'report_download_btn--error': registrationStates[reportActionKey(index)] === 'error',
                 }"
-                :disabled="registrationStates[index] === 'saving' || registrationStates[index] === 'saved'"
+                :disabled="registrationStates[reportActionKey(index)] === 'saving' || registrationStates[reportActionKey(index)] === 'saved'"
                 title="选择已登记案例和被测智能体后，保存并登记到开发期评分工具"
                 @click.stop="openScoringRegistration(msg, index)"
               >
-                <template v-if="registrationStates[index] === 'saving'">⏳ 登记中</template>
-                <template v-else-if="registrationStates[index] === 'saved'">✅ 已登记</template>
-                <template v-else-if="registrationStates[index] === 'error'">❌ 重试登记</template>
+                <template v-if="registrationStates[reportActionKey(index)] === 'saving'">⏳ 登记中</template>
+                <template v-else-if="registrationStates[reportActionKey(index)] === 'saved'">✅ 已登记</template>
+                <template v-else-if="registrationStates[reportActionKey(index)] === 'error'">❌ 重试登记</template>
                 <template v-else>🧮 保存并登记评分</template>
               </button>
             </template>
@@ -764,17 +773,17 @@ const scrollToBottom = async () => {
           </div>
 
           <div
-            v-if="downloadFeedback[index]"
-            :class="['report_action_feedback', downloadFeedback[index].tone]"
+            v-if="downloadFeedback[reportActionKey(index)]"
+            :class="['report_action_feedback', downloadFeedback[reportActionKey(index)].tone]"
           >
-            <span>{{ downloadFeedback[index].message }}</span>
+            <span>{{ downloadFeedback[reportActionKey(index)].message }}</span>
             <button type="button" title="关闭提示" @click="dismissReportFeedback('download', index)">✕</button>
           </div>
           <div
-            v-if="registrationFeedback[index]"
-            :class="['report_action_feedback', registrationFeedback[index].tone]"
+            v-if="registrationFeedback[reportActionKey(index)]"
+            :class="['report_action_feedback', registrationFeedback[reportActionKey(index)].tone]"
           >
-            <span>{{ registrationFeedback[index].message }}</span>
+            <span>{{ registrationFeedback[reportActionKey(index)].message }}</span>
             <button type="button" title="关闭提示" @click="dismissReportFeedback('registration', index)">✕</button>
           </div>
 

@@ -280,8 +280,9 @@ Preflight 失败必须停止，不能继续执行并把不完整运行做成正�
 3. 执行 `simulation.ps1` 或 `trigger.bat`；
 4. 保存每个关键步骤的退出码、stdout、stderr 和产物哈希；
 5. 记录 UTC 结束时间；
-6. 在清理前完成 Wazuh 证据采集；
-7. 执行 `cleanup.ps1`，保存 `cleanup-result.md`。
+6. 在清理前完成 Wazuh 证据采集，并把 runtime manifest 和必要产物信息复制到开发机；
+7. 完成阶段 C、D 的答案冻结和案例就绪检查后，再执行 `cleanup.ps1`，保存
+   `cleanup-result.md`。如确需提前清理，必须由操作人员明确确认已经不再需要目标机活动产物。
 
 `runtime-manifest.json` 至少记录：
 
@@ -470,6 +471,26 @@ Get-FileHash -Algorithm SHA256 `
 完成正式目录后重启后端。评分页面案例列表应出现 `SIM-208`，或
 `GET /api/report-scoring/test-cases` 返回 `SIM-208`。加载失败时应修复具体文件错误，不得绕过校验，
 也不得把新报告临时绑定到旧 SIM 案例。
+
+### D5. Cleanup、目标机关机与后续测试
+
+标准 cleanup 只允许删除 runtime manifest 明确记录、且位于预定安全根目录中的本次 RUN 产物。
+它不应删除：
+
+- 已写入 Wazuh Indexer 的历史 Alerts/Archives；
+- 已复制到开发机的 anchor、input、runtime manifest、Archives 冻结证据和正式答案；
+- 已保存或登记的报告；
+- 评分 attempts、结果和历史。
+
+因此，在阶段 C、D 完整通过并保存 cleanup 输出后，可以关闭目标 Windows 虚拟机，再进行基于
+历史 Wazuh 数据的攻击溯源和本地报告评分。此时仍必须保证 Wazuh Manager/Indexer 可访问；本地
+LangGraph、评分 API 和前端则在相应测试时启动。
+
+Cleanup 仍可能影响观察内容：它会删除目标机活动产物，并可能产生比攻击 RUN 更晚的进程或文件
+删除遥测。不要在同一案例的溯源任务正在运行时执行 cleanup；应记录 cleanup 时间，并让后续查询
+使用冻结输入和覆盖攻击 RUN 的受控时间窗，避免把清理动作误并入攻击链。若被测流程还需要直接
+检查目标机文件系统或现场状态，则必须先完成该检查，不能以 Indexer 历史数据能够保留为由提前
+清理或关机。
 
 ## 9. 阶段 E：被测智能体溯源、报告保存和登记
 
@@ -664,6 +685,7 @@ report_scoring_data/runtime/scoring_attempts/...   本机评分 attempt、结果
   -> 把计划答案修订为实际 Ground Truth
   -> 完成遥测边界、预期报告和泄漏检查
   -> 安装 catalog/cases/SIM-XXX 并重启后端
+  -> 经操作人员确认后 cleanup，保存结果；不再需要现场检查时可关闭目标机
   -> 原样发送 input_message.txt 给被测智能体
   -> 保存/登记最终报告
   -> 首次评分、历史和对比

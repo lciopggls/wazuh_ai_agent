@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   getComparison,
+  getReport,
   getLatestScore,
   getScoreHistory,
   listAgents,
@@ -20,7 +21,7 @@ import ComparisonTable from "./report-scoring/ComparisonTable.vue";
 import ReportList from "./report-scoring/ReportList.vue";
 import ReportRegistrationPanel from "./report-scoring/ReportRegistrationPanel.vue";
 import ScoreDetail from "./report-scoring/ScoreDetail.vue";
-import { formatReportScoringError } from "./report-scoring/presentation";
+import { formatReportScoringError, isReportScoreBusy } from "./report-scoring/presentation";
 
 const cases = ref<TestCaseSummary[]>([]);
 const agents = ref<AgentSummary[]>([]);
@@ -35,6 +36,9 @@ const comparison = ref<ComparisonResponse | null>(null);
 const busyReportIds = ref(new Set<string>());
 const loading = ref(false);
 const errorMessage = ref("");
+const SCORE_STATUS_POLL_INTERVAL_MS = 2_000;
+let scoreStatusPollTimer: number | undefined;
+let scoreStatusPollInFlight = false;
 
 function showError(error: unknown) {
   errorMessage.value = formatReportScoringError(error);
@@ -98,7 +102,30 @@ async function refresh(options: { clearError?: boolean } = {}) {
   }
 }
 
+async function pollRunningReportStatuses() {
+  if (scoreStatusPollInFlight || loading.value) return;
+  const runningReportIds = reports.value
+    .filter((report) => report.latest_attempt_status === "running")
+    .map((report) => report.report_id);
+  if (!runningReportIds.length) return;
+
+  scoreStatusPollInFlight = true;
+  try {
+    const updatedReports = await Promise.all(runningReportIds.map((reportId) => getReport(reportId)));
+    const updatesById = new Map(updatedReports.map((report) => [report.report_id, report]));
+    reports.value = reports.value.map((report) => updatesById.get(report.report_id) || report);
+    if (updatedReports.some((report) => report.latest_attempt_status !== "running")) {
+      await refresh({ clearError: false });
+    }
+  } catch (error) {
+    showError(error);
+  } finally {
+    scoreStatusPollInFlight = false;
+  }
+}
+
 async function runScore(report: ReportRecord, rescore: boolean) {
+  if (isReportScoreBusy(report, busyReportIds.value)) return;
   if (rescore && !window.confirm("重新评分会调用模型并新增历史记录，旧结果不会被覆盖。是否继续？")) return;
   const nextBusy = new Set(busyReportIds.value);
   nextBusy.add(report.report_id);
@@ -123,6 +150,13 @@ watch([selectedCaseId, selectedAgentId], () => refresh());
 onMounted(async () => {
   await loadCatalog();
   await refresh();
+  scoreStatusPollTimer = window.setInterval(
+    () => void pollRunningReportStatuses(),
+    SCORE_STATUS_POLL_INTERVAL_MS,
+  );
+});
+onBeforeUnmount(() => {
+  if (scoreStatusPollTimer !== undefined) window.clearInterval(scoreStatusPollTimer);
 });
 </script>
 

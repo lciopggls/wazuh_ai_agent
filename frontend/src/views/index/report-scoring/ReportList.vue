@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ReportRecord, ScoreResult } from "@/api/report_scoring";
-import { getReportScorePresentation } from "./presentation";
+import { getReportScorePresentation, isReportScoreBusy } from "./presentation";
 
 const props = defineProps<{
   reports: ReportRecord[];
@@ -45,8 +45,8 @@ const presentation = (report: ReportRecord) =>
               </div>
             </td>
             <td class="actions" @click.stop>
-              <button v-if="!latestScores[report.report_id]" :disabled="busyReportIds.has(report.report_id)" @click="emit('score', report, false)">首次评分</button>
-              <button v-else class="secondary" :disabled="busyReportIds.has(report.report_id)" @click="emit('score', report, true)">重新评分</button>
+              <button v-if="!latestScores[report.report_id]" :disabled="isReportScoreBusy(report, busyReportIds)" @click="emit('score', report, false)">首次评分</button>
+              <button v-else class="secondary" :disabled="isReportScoreBusy(report, busyReportIds)" @click="emit('score', report, true)">重新评分</button>
             </td>
           </tr>
         </tbody>
