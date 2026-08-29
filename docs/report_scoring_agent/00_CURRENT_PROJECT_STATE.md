@@ -119,6 +119,11 @@
   远程测试代码；
 - 唯一 failure 仍为上述 `test_indexer_agent` 模型 strict 轨迹波动。
 
+推送前再次同步发现 `origin/master` 已前进到 `e7a28cf`。该提交补充知识图谱前端入口及其启动说明，
+已在不覆盖双方实现的前提下自动整合：远程的 `attack_pattern`/`knowledge_graph` 入口与本分支的聊天、
+评分页面持久挂载逻辑同时保留。整合后的两组前端测试再次为 `11 passed` 和 `2 passed`，类型检查、
+生产构建均通过；构建只保留既有 Browserslist 过期和大 chunk 警告。
+
 ## 6. Git 交付与集成边界
 
 - 使用显式路径白名单暂存，不执行 `git add .`。
