@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed, watch, defineAsyncComponent } from 'vue';
 import ItemWrap from "@/components/item-wrap";
 // 第一页组件
 import LeftTop from "./left-top.vue";
@@ -24,16 +24,28 @@ import asset_list from './asset_list.vue';
 import process_monitor from './process_monitor.vue';
 import threat_hunt from './threat_hunt.vue';
 import SecurityInsights from './security_insights.vue';
-import knowledge_graph from './knowledge_graph.vue';
-import attack_pattern from './attack_pattern.vue';
+
+const reportScoringEnabled = import.meta.env.VITE_ENABLE_REPORT_SCORING === 'true';
+const testModuleEnabled = import.meta.env.VITE_ENABLE_TEST_MODULE === 'true';
+const ReportScoring = reportScoringEnabled
+  ? defineAsyncComponent(() => import('./report_scoring.vue'))
+  : null;
 
 // 控制页面切换
 const currentPage = ref(1);
 const globalSessions = ref<Record<string, any[]>>({});
+const testSessions = ref<Record<string, any[]>>({});
 
 // 确保此处的 ID 与 second_right 智能体组件内的 id 保持一致
 const currentAgentId = ref("router_agent");
+const testAgentId = ref("attack_attribution");
 const isComponentsReady = ref(false);
+
+const testAgents = [
+  { id: 'attack_attribution', name: '攻击溯源智能体' },
+  { id: 'baseline_agent_simple', name: '基线智能体 Simple' },
+  { id: 'baseline_agent_plus', name: '基线智能体 Plus' },
+];
 
 // 侧边栏菜单配置（按安全运维工作流分组）
 const currentMenu = ref('ai-chat');
@@ -44,6 +56,17 @@ const sidebarGroups = [
       { key: 'ai-chat',    icon: '💬', label: 'AI 对话窗口' },
     ]
   },
+  ...(testModuleEnabled
+    ? [{
+        title: '测试',
+        items: [
+          { key: 'test-ai-chat', icon: '🧪', label: 'AI 对话窗口' },
+          ...(reportScoringEnabled
+            ? [{ key: 'test-report-scoring', icon: '🧮', label: '报告评分' }]
+            : []),
+        ],
+      }]
+    : []),
   {
     title: '告警与威胁',
     items: [
@@ -74,7 +97,6 @@ const sidebarGroups = [
     items: [
       { key: 'tactical',  icon: '📊', label: '战术卡片' },
       { key: 'topology',  icon: '🕸️', label: '攻击拓扑图' },
-      { key: 'knowledge-graph', icon: '🧠', label: '知识图谱' },
     ]
   },
 ];
@@ -87,6 +109,10 @@ onMounted(() => {
   const saved = localStorage.getItem('wazuh_all_sessions');
   if (saved) {
     globalSessions.value = JSON.parse(saved);
+  }
+  const savedTest = localStorage.getItem('wazuh_test_sessions');
+  if (savedTest) {
+    testSessions.value = JSON.parse(savedTest);
   }
 
   // 监听来自 center-bottom 的跳转请求
@@ -136,6 +162,10 @@ onBeforeUnmount(() => {
 // 持久化全局会话数据（供 right-bottom 等跨组件读取）
 watch(globalSessions, (val) => {
   localStorage.setItem('wazuh_all_sessions', JSON.stringify(val));
+}, { deep: true });
+
+watch(testSessions, (val) => {
+  localStorage.setItem('wazuh_test_sessions', JSON.stringify(val));
 }, { deep: true });
 
 // 动态实时从当前的会话流中提取 attack_abstract 数据
@@ -242,7 +272,24 @@ const latestAttackSvgs = computed(() => {
       <!-- 右侧内容区 -->
       <div class="main-content">
         <template v-if="currentMenu === 'ai-chat'">
-          <second_right v-model:sessions="globalSessions" v-model:agent-id="currentAgentId" />
+          <second_right
+            v-model:sessions="globalSessions"
+            v-model:agent-id="currentAgentId"
+            :agent-options="[{ id: 'router_agent', name: '路由智能体' }]"
+            storage-namespace="production"
+          />
+        </template>
+        <template v-else-if="currentMenu === 'test-ai-chat' && testModuleEnabled">
+          <second_right
+            v-model:sessions="testSessions"
+            v-model:agent-id="testAgentId"
+            :agent-options="testAgents"
+            storage-namespace="test"
+            :enable-report-scoring-actions="reportScoringEnabled"
+          />
+        </template>
+        <template v-else-if="currentMenu === 'test-report-scoring' && testModuleEnabled && reportScoringEnabled && ReportScoring">
+          <component :is="ReportScoring" />
         </template>
         <template v-else-if="currentMenu === 'alerts'">
           <alerts_query :attack-abstract="latestAttackAbstract" />
@@ -279,9 +326,6 @@ const latestAttackSvgs = computed(() => {
         </template>
         <template v-else-if="currentMenu === 'topology'">
           <topology_view :svgs="latestAttackSvgs" />
-        </template>
-        <template v-else-if="currentMenu === 'knowledge-graph'">
-          <knowledge_graph />
         </template>
       </div>
     </div>

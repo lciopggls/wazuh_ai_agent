@@ -1,0 +1,13 @@
+<!--
+  Add this group inside /var/ossec/etc/rules/local_rules.xml on the Wazuh Manager.
+  Rule ID 100210 is in Wazuh's recommended custom-rule range (100000-120000).
+-->
+<group name="wazuh_ai_active_response,">
+  <rule id="100210" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="event_type" type="pcre2">^wazuh_ai_block_query_(rule|complete)$</field>
+    <description>Wazuh AI Windows Firewall query result: $(event_type)</description>
+    <group>active_response,wazuh_ai_block_query,</group>
+    <options>no_full_log</options>
+  </rule>
+</group>

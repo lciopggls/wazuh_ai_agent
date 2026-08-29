@@ -6,11 +6,12 @@ class Settings(BaseSettings):
     WAZUH_SERVER_API_HOST: str = "localhost"
     WAZUH_SERVER_API_PORT: str = "55000"
     WAZUH_SERVER_API_USERNAME: str = "wazuh"
-    WAZUH_SERVER_API_PASSWORD: str = "wazuh"
+    WAZUH_SERVER_API_PASSWORD: str = ""
     WAZUH_SERVER_AUTH_TOKEN_EXP_TIMEOUT: int = 900
 
+    WAZUH_INDEXER_HOST: str | None = None
     WAZUH_INDEXER_USER: str = "admin"
-    WAZUH_INDEXER_PASSWORD: str = "?bk5+GvTVeKBtL7J5wcSMmenR8Hk+lue"
+    WAZUH_INDEXER_PASSWORD: str = ""
     WAZUH_INDEXER_PORT: str = "9200"
 
     TEST_LLM_MODEL: str | None = None

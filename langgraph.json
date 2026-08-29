@@ -2,12 +2,14 @@
   "dependencies": ["."],
   "graphs": {
     "demo_agent": "./src/agents/agent.py:demo_agent",
+    "indexer_agent": "./src/agents/agent.py:indexer_agent",
     "router_agent": "./src/agents/agent.py:router_agent",
     "rule_agent": "./src/agents/agent.py:rule_agent",
     "attack_attributor": "./src/agents/agent.py:attack_attributor",
     "baseline_agent_plus": "./src/agents/agent.py:baseline_agent_plus",
     "baseline_agent_simple": "./src/agents/agent.py:baseline_agent_simple",
-    "response_agent": "./src/agents/agent.py:response_agent"
+    "response_agent": "./src/agents/agent.py:response_agent",
+    "report_scoring_agent": "./src/agents/report_scoring/entry.py:report_scoring_agent"
   },
   "env": ".env"
 }

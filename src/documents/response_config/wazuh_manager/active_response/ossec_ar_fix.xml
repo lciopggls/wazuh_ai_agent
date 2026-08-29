@@ -1,0 +1,132 @@
+<!-- PASTE THIS ENTIRE BLOCK into /var/ossec/etc/ossec.conf -->
+<!-- Find the block starting from "<command name="disable-account">" -->
+<!-- and replace everything from there through the last "</active-response>" -->
+<!-- before the Log analysis section. -->
+
+  <command>
+    <name>disable-account</name>
+    <executable>disable-account</executable>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <command>
+    <name>restart-wazuh</name>
+    <executable>restart-wazuh</executable>
+  </command>
+
+  <command>
+    <name>firewall-drop</name>
+    <executable>firewall-drop</executable>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <command>
+    <name>host-deny</name>
+    <executable>host-deny</executable>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <command>
+    <name>route-null</name>
+    <executable>route-null</executable>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <command>
+    <name>win_route-null</name>
+    <executable>route-null.exe</executable>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <command>
+    <name>netsh</name>
+    <executable>netsh.exe</executable>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <command>
+    <name>block-ip</name>
+    <executable>block-ip.bat</executable>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <command>
+    <name>block-port</name>
+    <executable>block-port.bat</executable>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <command>
+    <name>endpoint-response</name>
+    <executable>endpoint-response.bat</executable>
+    <timeout_allowed>no</timeout_allowed>
+  </command>
+
+  <active-response>
+    <disabled>no</disabled>
+    <command>block-ip</command>
+    <location>local</location>
+    <rules_id>999991</rules_id>
+    <timeout>600</timeout>
+  </active-response>
+
+  <active-response>
+    <disabled>no</disabled>
+    <command>block-ip</command>
+    <location>local</location>
+    <rules_id>999992</rules_id>
+    <timeout>3600</timeout>
+  </active-response>
+
+  <active-response>
+    <disabled>no</disabled>
+    <command>block-ip</command>
+    <location>local</location>
+    <rules_id>999993</rules_id>
+    <timeout>86400</timeout>
+  </active-response>
+
+  <active-response>
+    <disabled>no</disabled>
+    <command>block-ip</command>
+    <location>local</location>
+    <rules_id>999994</rules_id>
+  </active-response>
+
+  <active-response>
+    <disabled>no</disabled>
+    <command>endpoint-response</command>
+    <location>local</location>
+    <rules_id>999995</rules_id>
+  </active-response>
+
+  <active-response>
+    <disabled>no</disabled>
+    <command>block-port</command>
+    <location>local</location>
+    <rules_id>999996</rules_id>
+    <timeout>30</timeout>
+  </active-response>
+
+  <active-response>
+    <disabled>no</disabled>
+    <command>block-port</command>
+    <location>local</location>
+    <rules_id>999997</rules_id>
+    <timeout>60</timeout>
+  </active-response>
+
+  <active-response>
+    <disabled>no</disabled>
+    <command>block-port</command>
+    <location>local</location>
+    <rules_id>999998</rules_id>
+    <timeout>300</timeout>
+  </active-response>
+
+  <active-response>
+    <disabled>no</disabled>
+    <command>block-port</command>
+    <location>local</location>
+    <rules_id>999999</rules_id>
+  </active-response>

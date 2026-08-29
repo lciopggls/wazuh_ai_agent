@@ -787,11 +787,11 @@ class RuleRequirements(BaseModel):
     )
     user_provided_full_log: str | None = Field(
         default=None,
-        description="If the user explicitly included a complete log entry (raw full_log string) for rule generation, save the original full_log text here verbatim. Otherwise set to null.",
+        description="If the user explicitly included a complete log entry (raw full_log string) for rule generation, save the original full_log text here verbatim. Otherwise set to null."
     )
     user_provided_location: str | None = Field(
         default=None,
-        description="If the user's log data includes a 'location' field (e.g. 'EventChannel', '/var/log/syslog'), save it here. Otherwise set to null.",
+        description="If the user's log data includes a 'location' field (e.g. 'EventChannel', '/var/log/syslog'), save it here. Otherwise set to null."
     )
 
 
@@ -1668,9 +1668,7 @@ Do not add explanations, comments, or markdown fences."""
             if not result_text:
                 result_text = generation_result["messages"][-1].content or ""
         if not isinstance(result_text, str) or not result_text.strip():
-            raise ValueError(
-                "LLM returned empty output. No text content in any generation agent message."
-            )
+            raise ValueError("LLM returned empty output. No text content in any generation agent message.")
         logger.info(f"Rule generation raw output (first 500 chars): {str(result_text)[:500]}")
         generated_xml = _extract_xml_block(str(result_text))
         if not generated_xml:
@@ -1679,10 +1677,10 @@ Do not add explanations, comments, or markdown fences."""
             )
         try:
             rule_id, rule_description = _extract_generated_rule_metadata(generated_xml)
-        except Exception as exc:
+        except Exception:
             raise ValueError(
                 f"Failed to parse generated XML. Content (first 300 chars): {generated_xml[:300]}"
-            ) from exc
+            )
         if _rule_exists(rule_id):
             raise ValueError(
                 f"Generated rule id {rule_id} already exists in the loaded manager ruleset."
@@ -2150,7 +2148,7 @@ def response_node(state: RuleGeneratorState, config: RunnableConfig, model: Base
 def log_sample_processing_node(
     state: RuleGeneratorState, config: RunnableConfig, model: BaseChatModel
 ):
-    """Process a user-provided full_log sample into the same format as the log_retrieval_feasibility_node (S3) output."""
+    """Process a user-provided full_log sample into the same format as the log_retrieval_feasibility_node (S3) output. """
 
     logger.info("Executing Log Sample Processing Node")
 
@@ -2238,9 +2236,7 @@ Analyze the log for:
                 "format_instructions": parser.get_format_instructions(),
             }
         )
-        log_analysis = (
-            f"{result.log_features}\n\nfeasibility={result.is_feasible}; reason={result.reason}"
-        )
+        log_analysis = f"{result.log_features}\n\nfeasibility={result.is_feasible}; reason={result.reason}"
     except Exception as exc:
         logger.warning(f"Log sample processing analysis failed: {exc}")
         log_analysis = ""
@@ -2249,12 +2245,20 @@ Analyze the log for:
     sysmon_hint = ""
     try:
         log_data = json.loads(full_log)
-        provider = log_data.get("win", {}).get("system", {}).get("providerName", "")
-        event_id = log_data.get("win", {}).get("system", {}).get("eventID", "")
+        provider = (
+            log_data.get("win", {})
+            .get("system", {})
+            .get("providerName", "")
+        )
+        event_id = (
+            log_data.get("win", {})
+            .get("system", {})
+            .get("eventID", "")
+        )
         if "Microsoft-Windows-Sysmon" in provider and event_id:
             sysmon_hint = (
                 f"\n\n[IF_GROUP REQUIRED] This is a Sysmon log (provider={provider}, eventID={event_id}). "
-                f"The generated rule MUST include <if_group>sysmon_event{event_id}</if_group> "
+                f'The generated rule MUST include <if_group>sysmon_event{event_id}</if_group> '
                 f"to ensure proper parent rule dependency. "
                 f"For example, a Sysmon eventID=3 rule would use <if_group>sysmon_event3</if_group>.\n"
             )

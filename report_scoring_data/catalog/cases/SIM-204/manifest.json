@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "test_case_id": "SIM-204",
+  "display_name": "SIM-204 PowerShell EncodedCommand",
+  "enabled": true,
+  "scoring_standard_version": "v3.0",
+  "scoring_standard_path": "standards/scoring_v3_0.md",
+  "input_path": "input_message.txt",
+  "anchor_path": "anchor.json",
+  "ground_truth_path": "ground_truth.json",
+  "telemetry_boundary_paths": ["archives_evidence.md"],
+  "expected_report_path": "expected_report.md",
+  "input_sha256": "a2700aea4270539f36f1812f0cdc47ce68ea08f55448a70bcbb4f1fabee1c6cf",
+  "standard_sha256": "58606b7a13078cbb4e95504e747596c0851771fad26c49b7d120df5cc977e7a2"
+}

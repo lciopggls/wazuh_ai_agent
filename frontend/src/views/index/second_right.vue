@@ -1,30 +1,61 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick, computed, watch } from "vue";
 import VueMarkdown from 'vue-markdown-render';
+import {
+  listAgents as listScoringAgents,
+  listTestCases as listScoringTestCases,
+  saveAndRegisterChatReport,
+  type AgentSummary,
+  type TestCaseSummary,
+} from "@/api/report_scoring";
+import { hasFinalAttributionReportHeading } from "./report-scoring/presentation";
+
+type AgentOption = {
+  id: string;
+  name: string;
+};
+
+const DEFAULT_AGENT_OPTIONS: AgentOption[] = [
+  { id: "router_agent", name: "路由智能体" },
+];
 
 // --- 1. 配置与状态定义 ---
 // ⚡ 修改点：将 agentId 提升为从父组件传入，便于全局共享当前选中状态
 const props = defineProps<{
   sessions: Record<string, any[]>;
   agentId: string; 
+  agentOptions?: AgentOption[];
+  storageNamespace?: string;
+  enableReportScoringActions?: boolean;
 }>();
 
 const emit = defineEmits(['update:sessions', 'update:agentId']);
 
-// 智能体配置列表（当前仅保留路由智能体）
-const agents = [
-  { id: 'router_agent', name: '路由智能体' }
-];
+const agents = props.agentOptions?.length ? props.agentOptions : DEFAULT_AGENT_OPTIONS;
+const defaultAgentId = agents[0]?.id || "router_agent";
+const storageNamespace = props.storageNamespace || "production";
+const storageKeys = storageNamespace === "production"
+  ? {
+      sessions: "wazuh_all_sessions",
+      agentThreadMap: "wazuh_agent_thread_map",
+    }
+  : {
+      sessions: `wazuh_${storageNamespace}_sessions`,
+      agentThreadMap: `wazuh_${storageNamespace}_agent_thread_map`,
+    };
+const reportScoringActionsEnabled =
+  import.meta.env.VITE_ENABLE_REPORT_SCORING === 'true' &&
+  props.enableReportScoringActions === true;
 
 // 当前活跃智能体（基于 prop 的计算属性，切换时通知父组件）
 const currentAgentId = computed({
-  get: () => props.agentId || "router_agent",
+  get: () => props.agentId || defaultAgentId,
   set: (val: string) => emit('update:agentId', val)
 });
 
 // 智能体与线程 ID 的映射表（本地持久化）
 const agentThreadMap = ref<Record<string, string>>(
-  JSON.parse(localStorage.getItem('wazuh_agent_thread_map') || '{}')
+  JSON.parse(localStorage.getItem(storageKeys.agentThreadMap) || '{}')
 );
 
 const userInput = ref("");
@@ -34,12 +65,24 @@ const visualizationRequested = ref(false);
 
 // --- 报告下载状态追踪（按消息索引） ---
 const downloadStates = ref<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({});
+const registrationStates = ref<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({});
+const scoringCases = ref<TestCaseSummary[]>([]);
+const scoringAgents = ref<AgentSummary[]>([]);
+const registrationDialogVisible = ref(false);
+const registrationDialogIndex = ref(-1);
+const registrationDialogContent = ref("");
+const registrationCaseId = ref("");
+const registrationAgentId = ref("");
+const includeCurrentThread = ref(true);
+const registrationRunId = ref("");
+const registrationNote = ref("");
+const registrationError = ref("");
 
 /** 判断气泡内容是否为攻击溯源报告 */
 function isReportContent(msg: any): boolean {
-  if (msg.role !== 'assistant' || msg.node !== 'reply') return false;
+  if (msg.role !== 'assistant' || !['reply', 'final_report'].includes(msg.node)) return false;
   const content = getMessageContent(msg);
-  return content.includes('攻击溯源调查');
+  return msg.node === 'final_report' || hasFinalAttributionReportHeading(content);
 }
 
 /** 下载报告：调用后端 API 保存到指定目录 */
@@ -70,6 +113,63 @@ async function downloadReport(msg: any, index: number) {
     console.error('保存报告失败:', err);
     downloadStates.value[index] = 'error';
     setTimeout(() => { downloadStates.value[index] = 'idle'; }, 3000);
+  }
+}
+
+async function openScoringRegistration(msg: any, index: number) {
+  registrationError.value = "";
+  registrationDialogIndex.value = index;
+  registrationDialogContent.value = getMessageContent(msg);
+  registrationDialogVisible.value = true;
+  try {
+    if (!scoringCases.value.length || !scoringAgents.value.length) {
+      [scoringCases.value, scoringAgents.value] = await Promise.all([
+        listScoringTestCases(),
+        listScoringAgents(),
+      ]);
+    }
+    if (!registrationCaseId.value && scoringCases.value.length) {
+      registrationCaseId.value = scoringCases.value[0].test_case_id;
+    }
+    if (!registrationAgentId.value && scoringAgents.value.length) {
+      registrationAgentId.value = scoringAgents.value[0].agent_id;
+    }
+  } catch (error: any) {
+    registrationError.value = `${error?.code || "REQUEST_FAILED"}: ${error?.message || String(error)}`;
+  }
+}
+
+function closeScoringRegistration() {
+  if (registrationStates.value[registrationDialogIndex.value] === 'saving') return;
+  registrationDialogVisible.value = false;
+}
+
+async function submitScoringRegistration() {
+  const index = registrationDialogIndex.value;
+  if (index < 0 || !registrationCaseId.value || !registrationAgentId.value) return;
+  registrationStates.value[index] = 'saving';
+  registrationError.value = "";
+  try {
+    await saveAndRegisterChatReport({
+      content: registrationDialogContent.value,
+      scoring_registration: {
+        test_case_id: registrationCaseId.value,
+        agent_id: registrationAgentId.value,
+        ...(includeCurrentThread.value && currentThreadId.value
+          ? { thread_id: currentThreadId.value }
+          : {}),
+        ...(registrationRunId.value.trim() ? { run_id: registrationRunId.value.trim() } : {}),
+        ...(registrationNote.value.trim() ? { note: registrationNote.value.trim() } : {}),
+      },
+    });
+    registrationStates.value[index] = 'saved';
+    registrationDialogVisible.value = false;
+    setTimeout(() => {
+      if (registrationStates.value[index] === 'saved') registrationStates.value[index] = 'idle';
+    }, 3000);
+  } catch (error: any) {
+    registrationStates.value[index] = 'error';
+    registrationError.value = `${error?.code || "REQUEST_FAILED"}: ${error?.message || String(error)}`;
   }
 }
 
@@ -218,7 +318,7 @@ const currentThreadId = computed({
   get: () => agentThreadMap.value[currentAgentId.value] || "",
   set: (newTid: string) => {
     agentThreadMap.value[currentAgentId.value] = newTid;
-    localStorage.setItem('wazuh_agent_thread_map', JSON.stringify(agentThreadMap.value));
+    localStorage.setItem(storageKeys.agentThreadMap, JSON.stringify(agentThreadMap.value));
   }
 });
 
@@ -246,7 +346,7 @@ onMounted(() => {
   });
 
   if (mapChanged) {
-    localStorage.setItem('wazuh_agent_thread_map', JSON.stringify(agentThreadMap.value));
+    localStorage.setItem(storageKeys.agentThreadMap, JSON.stringify(agentThreadMap.value));
   }
 });
 
@@ -254,7 +354,7 @@ onMounted(() => {
 watch(currentAgentId, (newAgentId) => {
   if (!agentThreadMap.value[newAgentId]) {
     initAgentThread(newAgentId);
-    localStorage.setItem('wazuh_agent_thread_map', JSON.stringify(agentThreadMap.value));
+    localStorage.setItem(storageKeys.agentThreadMap, JSON.stringify(agentThreadMap.value));
   }
 });
 
@@ -276,8 +376,8 @@ const clearAllHistory = () => {
   if (!window.confirm('⚠️ 确定要清除所有历史对话数据吗？\n\n此操作会永久删除所有线程的聊天记录，且不可恢复！')) return;
 
   // 清空 localStorage 中持久化的会话数据
-  localStorage.removeItem('wazuh_all_sessions');
-  localStorage.removeItem('wazuh_agent_thread_map');
+  localStorage.removeItem(storageKeys.sessions);
+  localStorage.removeItem(storageKeys.agentThreadMap);
 
   // 重置本地线程映射状态
   agentThreadMap.value = {};
@@ -287,7 +387,7 @@ const clearAllHistory = () => {
 
   // 为当前智能体创建一个新的默认线程，保证界面可继续使用
   initAgentThread(currentAgentId.value);
-  localStorage.setItem('wazuh_agent_thread_map', JSON.stringify(agentThreadMap.value));
+  localStorage.setItem(storageKeys.agentThreadMap, JSON.stringify(agentThreadMap.value));
 };
 
 // 💡 动态拼装 Markdown 代码块辅助函数
@@ -574,7 +674,7 @@ const scrollToBottom = async () => {
         <div class="content_box">
           <div v-if="msg.role === 'assistant' && msg.node" class="node_tag">
             <template v-if="msg.node === 'tools'">⚙️ 工具输出 (原始数据)</template>
-            <template v-else-if="msg.node === 'reply'">
+            <template v-else-if="msg.node === 'reply' || msg.node === 'final_report'">
               📋 提取结论
               <!-- 攻击溯源报告下载按钮 -->
               <button
@@ -598,6 +698,23 @@ const scrollToBottom = async () => {
                 <template v-else-if="downloadStates[index] === 'saved'">✅</template>
                 <template v-else-if="downloadStates[index] === 'error'">❌</template>
                 <template v-else>💾 下载报告</template>
+              </button>
+              <button
+                v-if="reportScoringActionsEnabled && isReportContent(msg)"
+                class="report_download_btn report_register_btn"
+                :class="{
+                  'report_download_btn--saving': registrationStates[index] === 'saving',
+                  'report_download_btn--saved': registrationStates[index] === 'saved',
+                  'report_download_btn--error': registrationStates[index] === 'error',
+                }"
+                :disabled="registrationStates[index] === 'saving'"
+                title="选择已登记案例和被测智能体后，保存并登记到开发期评分工具"
+                @click.stop="openScoringRegistration(msg, index)"
+              >
+                <template v-if="registrationStates[index] === 'saving'">⏳ 登记中</template>
+                <template v-else-if="registrationStates[index] === 'saved'">✅ 已登记</template>
+                <template v-else-if="registrationStates[index] === 'error'">❌ 重试登记</template>
+                <template v-else>🧮 保存并登记评分</template>
               </button>
             </template>
             <template v-else-if="msg.node === 'model'">🤖 AI 文本回复</template>
@@ -654,6 +771,26 @@ const scrollToBottom = async () => {
       <button @click="handleSend" :disabled="isTyping">发送</button>
     </div>
   </div>
+
+  <teleport to="body">
+    <div
+      v-if="registrationDialogVisible"
+      class="scoring_dialog_overlay"
+      @click.self="closeScoringRegistration"
+    >
+      <div class="scoring_dialog">
+        <header><h3>保存并登记评分报告</h3><button @click="closeScoringRegistration">✕</button></header>
+        <p>请显式选择报告对应的测试案例和被测智能体。当前聊天智能体不会自动覆盖该选择。</p>
+        <label>测试案例<select v-model="registrationCaseId"><option v-for="item in scoringCases" :key="item.test_case_id" :value="item.test_case_id">{{ item.display_name }} · {{ item.scoring_standard_version }}</option></select></label>
+        <label>被测智能体<select v-model="registrationAgentId"><option v-for="item in scoringAgents" :key="item.agent_id" :value="item.agent_id">{{ item.display_name }}</option></select></label>
+        <label class="checkbox"><input v-model="includeCurrentThread" type="checkbox" />附带当前 Thread ID：{{ currentThreadId || '无' }}</label>
+        <label>Run ID（可选）<input v-model="registrationRunId" maxlength="160" /></label>
+        <label>备注（可选）<input v-model="registrationNote" maxlength="1000" /></label>
+        <div v-if="registrationError" class="scoring_dialog_error">{{ registrationError }}</div>
+        <footer><button class="cancel" @click="closeScoringRegistration">取消</button><button :disabled="!registrationCaseId || !registrationAgentId || registrationStates[registrationDialogIndex] === 'saving'" @click="submitScoringRegistration">确认保存并登记</button></footer>
+      </div>
+    </div>
+  </teleport>
 
   <!-- JSON 日志抽屉 -->
   <teleport to="body">
@@ -1080,5 +1217,100 @@ const scrollToBottom = async () => {
     border-color: #ef4444;
     background: rgba(239, 68, 68, 0.08);
   }
+}
+
+.report_register_btn {
+  color: #7c3aed;
+  border-color: rgba(124, 58, 237, 0.3);
+  background: rgba(124, 58, 237, 0.08);
+
+  &:hover:not(:disabled) {
+    color: #6d28d9;
+    border-color: #7c3aed;
+    background: rgba(124, 58, 237, 0.14);
+  }
+}
+
+.scoring_dialog_overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.scoring_dialog {
+  width: min(520px, calc(100vw - 32px));
+  padding: 20px;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.24);
+  color: #334155;
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    h3 { margin: 0; color: #1e3a8a; }
+    button { border: 0; background: transparent; color: #64748b; cursor: pointer; }
+  }
+
+  > p { color: #64748b; font-size: 12px; line-height: 1.6; }
+
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: 10px;
+    color: #64748b;
+    font-size: 12px;
+
+    input, select {
+      padding: 8px 10px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      background: #ffffff;
+      color: #1f2937;
+    }
+  }
+
+  label.checkbox {
+    flex-direction: row;
+    align-items: center;
+
+    input { margin: 0; }
+  }
+
+  footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 18px;
+
+    button {
+      padding: 8px 13px;
+      border: 0;
+      border-radius: 6px;
+      background: #7c3aed;
+      color: #ffffff;
+      cursor: pointer;
+
+      &.cancel { background: #e2e8f0; color: #475569; }
+      &:disabled { opacity: 0.45; cursor: not-allowed; }
+    }
+  }
+}
+
+.scoring_dialog_error {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 12px;
+  word-break: break-word;
 }
 </style>
