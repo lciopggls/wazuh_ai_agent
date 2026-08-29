@@ -50,6 +50,7 @@ const fetchAgents = async (isRetry = false) => {
   }
 
   loading.value = true;
+  const startTime = performance.now();
 
   try {
     // 移除所有 params 参数，防止代理层解析 query 字符串时触发 400 错误
@@ -67,6 +68,10 @@ const fetchAgents = async (isRetry = false) => {
     }
   } finally {
     loading.value = false;
+    // 查询耗时统计：查询结束后弹出耗时提示
+    const elapsed = performance.now() - startTime;
+    const duration = elapsed >= 1000 ? `${(elapsed / 1000).toFixed(2)} s` : `${Math.round(elapsed)} ms`;
+    ElMessage.info(`查询耗时 ${duration}`);
   }
 };
 

@@ -3,10 +3,14 @@ from xml.etree import ElementTree
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RESPONSE_CONFIG_ROOT = PROJECT_ROOT / "src" / "documents" / "response_config"
+WINDOWS_AGENT_SCRIPTS = RESPONSE_CONFIG_ROOT / "windows_agent" / "scripts"
+WINDOWS_AGENT_LOG_COLLECTION = RESPONSE_CONFIG_ROOT / "windows_agent" / "log_collection"
+WAZUH_MANAGER_ACTIVE_RESPONSE = RESPONSE_CONFIG_ROOT / "wazuh_manager" / "active_response"
+WAZUH_MANAGER_RULES = RESPONSE_CONFIG_ROOT / "wazuh_manager" / "rules"
 
 
 def test_active_response_fragment_registers_custom_command_for_all_timeouts():
-    fragment = (RESPONSE_CONFIG_ROOT / "ossec_ar_fix.xml").read_text(encoding="utf-8")
+    fragment = (WAZUH_MANAGER_ACTIVE_RESPONSE / "ossec_ar_fix.xml").read_text(encoding="utf-8")
     root = ElementTree.fromstring(f"<root>{fragment}</root>")
 
     commands = {
@@ -32,7 +36,7 @@ def test_active_response_fragment_registers_custom_command_for_all_timeouts():
 
 
 def test_endpoint_response_config_is_separate_and_restricted_for_demo_actions():
-    fragment = (RESPONSE_CONFIG_ROOT / "ossec_ar_fix.xml").read_text(encoding="utf-8")
+    fragment = (WAZUH_MANAGER_ACTIVE_RESPONSE / "ossec_ar_fix.xml").read_text(encoding="utf-8")
     root = ElementTree.fromstring(f"<root>{fragment}</root>")
     commands = {command.findtext("name"): command for command in root.findall("command")}
     endpoint_command = commands["endpoint-response"]
@@ -48,8 +52,10 @@ def test_endpoint_response_config_is_separate_and_restricted_for_demo_actions():
     assert endpoint_responses[0].findtext("disabled") == "no"
     assert endpoint_responses[0].findtext("rules_id") == "999995"
 
-    batch_script = (RESPONSE_CONFIG_ROOT / "endpoint-response.bat").read_text(encoding="utf-8")
-    powershell_script = (RESPONSE_CONFIG_ROOT / "endpoint-response.ps1").read_text(encoding="utf-8")
+    batch_script = (WINDOWS_AGENT_SCRIPTS / "endpoint-response.bat").read_text(encoding="utf-8")
+    powershell_script = (WINDOWS_AGENT_SCRIPTS / "endpoint-response.ps1").read_text(
+        encoding="utf-8"
+    )
     assert "%~dp0endpoint-response.ps1" in batch_script
     assert "[Console]::In.ReadLine()" in powershell_script
     assert '$allowedProcessName = "notepad.exe"' in powershell_script
@@ -63,10 +69,10 @@ def test_endpoint_response_config_is_separate_and_restricted_for_demo_actions():
 
 def test_endpoint_response_result_log_and_manager_rule_use_json():
     agent_config = ElementTree.parse(
-        RESPONSE_CONFIG_ROOT / "windows-agent-endpoint-response.xml"
+        WINDOWS_AGENT_LOG_COLLECTION / "windows-agent-endpoint-response.xml"
     ).getroot()
     manager_rule = ElementTree.parse(
-        RESPONSE_CONFIG_ROOT / "manager-endpoint-response-rule.xml"
+        WAZUH_MANAGER_RULES / "manager-endpoint-response-rule.xml"
     ).getroot()
 
     localfile = agent_config.find("localfile")
@@ -82,8 +88,8 @@ def test_endpoint_response_result_log_and_manager_rule_use_json():
 
 
 def test_windows_scripts_use_wazuh_json_protocol():
-    batch_script = (RESPONSE_CONFIG_ROOT / "block-ip.bat").read_text(encoding="utf-8")
-    powershell_script = (RESPONSE_CONFIG_ROOT / "block-ip.ps1").read_text(encoding="utf-8")
+    batch_script = (WINDOWS_AGENT_SCRIPTS / "block-ip.bat").read_text(encoding="utf-8")
+    powershell_script = (WINDOWS_AGENT_SCRIPTS / "block-ip.ps1").read_text(encoding="utf-8")
 
     assert "%~dp0block-ip.ps1" in batch_script
     assert "set ACTION=%1" not in batch_script
@@ -97,7 +103,7 @@ def test_windows_scripts_use_wazuh_json_protocol():
 
 
 def test_port_response_config_is_fixed_to_demo_agent_port_and_durations():
-    fragment = (RESPONSE_CONFIG_ROOT / "ossec_ar_fix.xml").read_text(encoding="utf-8")
+    fragment = (WAZUH_MANAGER_ACTIVE_RESPONSE / "ossec_ar_fix.xml").read_text(encoding="utf-8")
     root = ElementTree.fromstring(f"<root>{fragment}</root>")
     commands = {
         command.findtext("name"): command.findtext("executable")
@@ -122,8 +128,8 @@ def test_port_response_config_is_fixed_to_demo_agent_port_and_durations():
         if response.findtext("command") == "block-port"
     )
 
-    batch_script = (RESPONSE_CONFIG_ROOT / "block-port.bat").read_text(encoding="utf-8")
-    powershell_script = (RESPONSE_CONFIG_ROOT / "block-port.ps1").read_text(encoding="utf-8")
+    batch_script = (WINDOWS_AGENT_SCRIPTS / "block-port.bat").read_text(encoding="utf-8")
+    powershell_script = (WINDOWS_AGENT_SCRIPTS / "block-port.ps1").read_text(encoding="utf-8")
     assert "%~dp0block-port.ps1" in batch_script
     assert "$allowedPort = 54321" in powershell_script
     assert '$allowedProtocol = "TCP"' in powershell_script
@@ -136,10 +142,10 @@ def test_port_response_config_is_fixed_to_demo_agent_port_and_durations():
 
 def test_port_query_uses_separate_json_log_and_manager_rule():
     agent_config = ElementTree.parse(
-        RESPONSE_CONFIG_ROOT / "windows-agent-port-query.xml"
+        WINDOWS_AGENT_LOG_COLLECTION / "windows-agent-port-query.xml"
     ).getroot()
-    manager_rule = ElementTree.parse(RESPONSE_CONFIG_ROOT / "manager-port-query-rule.xml").getroot()
-    powershell_script = (RESPONSE_CONFIG_ROOT / "block-port.ps1").read_text(encoding="utf-8")
+    manager_rule = ElementTree.parse(WAZUH_MANAGER_RULES / "manager-port-query-rule.xml").getroot()
+    powershell_script = (WINDOWS_AGENT_SCRIPTS / "block-port.ps1").read_text(encoding="utf-8")
 
     localfile = agent_config.find("localfile")
     assert localfile is not None
@@ -156,9 +162,11 @@ def test_port_query_uses_separate_json_log_and_manager_rule():
 
 
 def test_firewall_query_uses_structured_json_log_and_custom_alert_rule():
-    powershell_script = (RESPONSE_CONFIG_ROOT / "block-ip.ps1").read_text(encoding="utf-8")
-    agent_config = ElementTree.parse(RESPONSE_CONFIG_ROOT / "windows-agent-query.xml").getroot()
-    manager_rule = ElementTree.parse(RESPONSE_CONFIG_ROOT / "manager-query-rule.xml").getroot()
+    powershell_script = (WINDOWS_AGENT_SCRIPTS / "block-ip.ps1").read_text(encoding="utf-8")
+    agent_config = ElementTree.parse(
+        WINDOWS_AGENT_LOG_COLLECTION / "windows-agent-query.xml"
+    ).getroot()
+    manager_rule = ElementTree.parse(WAZUH_MANAGER_RULES / "manager-query-rule.xml").getroot()
 
     assert 'Get-NetFirewallRule -DisplayName "Wazuh_AI_Block_*"' in powershell_script
     assert 'event_type = "wazuh_ai_block_query_rule"' in powershell_script

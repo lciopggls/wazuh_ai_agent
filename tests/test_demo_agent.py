@@ -597,6 +597,8 @@ def test_demo_agent_exposes_demo_response_tools(monkeypatch):
     ]
     assert "立即调用" in captured["system_prompt"]
     assert "不要提供手工 curl 命令" in captured["system_prompt"]
+    assert "支持任意有效的数字 Agent ID" in captured["system_prompt"]
+    assert "只允许 Agent 001" not in captured["system_prompt"]
     assert _HIDDEN_BRAND.search(captured["system_prompt"]) is None
     assert len(captured["middleware"]) == 1
     assert isinstance(captured["middleware"][0], demo_agent_module.DemoVisibleTextMiddleware)

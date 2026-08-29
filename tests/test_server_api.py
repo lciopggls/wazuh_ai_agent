@@ -460,12 +460,12 @@ def test_block_and_unblock_high_level_functions_require_verified_state(monkeypat
 @pytest.mark.usefixtures("mock_auth")
 def test_block_port_dispatches_fixed_inbound_tcp_rule_with_selected_duration(requests_mock):
     requests_mock.put(
-        re.compile(r"^https?://[^/:]+:\d+/active-response\?agents_list=001$"),
-        json={"data": {"affected_items": ["001"], "failed_items": []}, "error": 0},
+        re.compile(r"^https?://[^/:]+:\d+/active-response\?agents_list=005$"),
+        json={"data": {"affected_items": ["005"], "failed_items": []}, "error": 0},
     )
     from wazuh_api.server_api import block_port_on_agent
 
-    result = block_port_on_agent("001", 54321, 60)
+    result = block_port_on_agent("005", 54321, 60)
 
     assert requests_mock.last_request.json() == {
         "command": "block-port60",
@@ -481,6 +481,7 @@ def test_block_port_dispatches_fixed_inbound_tcp_rule_with_selected_duration(req
         },
     }
     assert result["dispatch_success"] is True
+    assert result["agent_id"] == "005"
     assert result["duration_seconds"] == 60
     assert result["direction"] == "in"
 
@@ -514,12 +515,12 @@ def test_unblock_port_uses_non_timed_command(requests_mock):
 @pytest.mark.parametrize(
     ("agent_id", "target_port", "duration", "message"),
     [
-        ("002", 54321, 30, "仅授权 Agent 001"),
+        ("agent005", 54321, 30, "Invalid agent ID"),
         ("001", 54322, 30, "仅授权入站 TCP 54321"),
         ("001", 54321, 45, "仅支持 30、60 或 300 秒"),
     ],
 )
-def test_block_port_rejects_unauthorized_scope_before_dispatch(
+def test_block_port_rejects_unauthorized_port_or_duration_before_dispatch(
     requests_mock,
     agent_id,
     target_port,
@@ -652,8 +653,8 @@ def test_port_high_level_functions_require_matching_verified_state(monkeypatch):
 @pytest.mark.usefixtures("mock_auth")
 def test_terminate_demo_process_dispatches_and_returns_verified_result(requests_mock, monkeypatch):
     requests_mock.put(
-        re.compile(r"^https?://[^/:]+:\d+/active-response\?agents_list=001$"),
-        json={"data": {"affected_items": ["001"], "failed_items": []}, "error": 0},
+        re.compile(r"^https?://[^/:]+:\d+/active-response\?agents_list=005$"),
+        json={"data": {"affected_items": ["005"], "failed_items": []}, "error": 0},
     )
     from wazuh_api import server_api
 
@@ -679,7 +680,7 @@ def test_terminate_demo_process_dispatches_and_returns_verified_result(requests_
     }
     monkeypatch.setattr(server_api, "active_response_query_events", lambda *_, **__: events)
 
-    result = server_api.terminate_process_on_agent("001", 4321, wait_timeout=0, poll_interval=0)
+    result = server_api.terminate_process_on_agent("005", 4321, wait_timeout=0, poll_interval=0)
 
     payload = requests_mock.last_request.json()
     assert payload["command"] == "endpoint-response0"
@@ -688,6 +689,7 @@ def test_terminate_demo_process_dispatches_and_returns_verified_result(requests_
     assert payload["alert"]["data"]["request_id"]
     assert result["status"] == "success"
     assert result["success"] is True
+    assert result["agent_id"] == "005"
     assert result["evidence"] == {
         "process_id": 4321,
         "process_name": "notepad.exe",
@@ -752,8 +754,8 @@ def test_demo_account_actions_use_fixed_account_and_verify_state(
     changed,
 ):
     requests_mock.put(
-        re.compile(r"^https?://[^/:]+:\d+/active-response\?agents_list=001$"),
-        json={"data": {"affected_items": ["001"], "failed_items": []}, "error": 0},
+        re.compile(r"^https?://[^/:]+:\d+/active-response\?agents_list=005$"),
+        json={"data": {"affected_items": ["005"], "failed_items": []}, "error": 0},
     )
     from wazuh_api import server_api
 
@@ -779,28 +781,28 @@ def test_demo_account_actions_use_fixed_account_and_verify_state(
     monkeypatch.setattr(server_api, "active_response_query_events", lambda *_, **__: events)
 
     function = getattr(server_api, function_name)
-    result = function("001", "demo_user", wait_timeout=0, poll_interval=0)
+    result = function("005", "demo_user", wait_timeout=0, poll_interval=0)
 
     data = requests_mock.last_request.json()["alert"]["data"]
     assert requests_mock.last_request.json()["command"] == "endpoint-response0"
     assert data["action"] == expected_action
     assert data["account_name"] == "demo_user"
     assert result["status"] == "success"
+    assert result["agent_id"] == "005"
     assert result["evidence"]["account_enabled"] is enabled
 
 
 @pytest.mark.usefixtures("mock_auth")
-def test_endpoint_demo_scope_rejects_other_agents_accounts_and_invalid_pids(requests_mock):
+def test_endpoint_demo_scope_rejects_other_accounts_and_invalid_pids(requests_mock):
     from wazuh_api import server_api
 
     before = requests_mock.call_count
-    wrong_agent = server_api.terminate_process_on_agent("002", 1234)
     wrong_account = server_api.disable_local_account_on_agent("001", "Administrator")
     invalid_pid = server_api.terminate_process_on_agent("001", 0)
+    with pytest.raises(ValueError, match="Invalid agent ID"):
+        server_api.query_process_on_agent("agent005", 4321)
 
     assert requests_mock.call_count == before
-    assert wrong_agent["status"] == "failed"
-    assert wrong_agent["reason_code"] == "invalid_agent"
     assert wrong_account["reason_code"] == "account_not_allowed"
     assert invalid_pid["reason_code"] == "invalid_process_id"
 

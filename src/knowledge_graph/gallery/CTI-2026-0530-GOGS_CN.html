@@ -1,0 +1,127 @@
+<html>
+    <head>
+        <meta charset="utf-8">
+        
+            <script src="lib/bindings/utils.js"></script>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js" integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+            
+        
+<center>
+<h1></h1>
+</center>
+
+<!-- <link rel="stylesheet" href="../node_modules/vis/dist/vis.min.css" type="text/css" />
+<script type="text/javascript" src="../node_modules/vis/dist/vis.js"> </script>-->
+        <link
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css"
+          rel="stylesheet"
+          integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6"
+          crossorigin="anonymous"
+        />
+        <script
+          src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf"
+          crossorigin="anonymous"
+        ></script>
+
+
+        <center>
+          <h1></h1>
+        </center>
+        <style type="text/css">
+
+             #mynetwork {
+                 width: 3200px;
+                 height: 1800px;
+                 background-color: #ffffff;
+                 border: 1px solid lightgray;
+                 position: relative;
+                 float: left;
+             }
+
+             
+
+             
+
+             
+        </style>
+    </head>
+
+
+    <body>
+        <div class="card" style="width: 100%">
+            
+            
+            <div id="mynetwork" class="card-body"></div>
+        </div>
+
+        
+        
+
+        <script type="text/javascript">
+
+              // initialize global variables.
+              var edges;
+              var nodes;
+              var allNodes;
+              var allEdges;
+              var nodeColors;
+              var originalNodes;
+              var network;
+              var container;
+              var options, data;
+              var filter = {
+                  item : '',
+                  property : '',
+                  value : []
+              };
+
+              
+
+              
+
+              // This method is responsible for drawing the graph, returns the drawn network
+              function drawGraph() {
+                  var container = document.getElementById('mynetwork');
+
+                  
+
+                  // parsing and collecting nodes and edges from the python
+                  nodes = new vis.DataSet([{"color": "#B4B4D5", "depth": 2, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "rapid7", "label": "rapid7", "shape": "dot", "size": 14.0, "type": "entity", "x": 0.0, "y": 148.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 15.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "metasploit module", "label": "metasploit module", "shape": "dot", "size": 14.0, "type": "entity", "x": 64.28571428571429, "y": 68.0}, {"color": "#287271", "depth": 3, "font": {"size": 14.5, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "offensive capabilities", "label": "offensive capabilities", "shape": "dot", "size": 14.0, "type": "entity", "x": 64.28571428571429, "y": 228.0}, {"color": "#287271", "depth": 3, "font": {"size": 16.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "attack traces", "label": "attack traces", "shape": "dot", "size": 14.0, "type": "entity", "x": -64.28571428571429, "y": 260.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "exploit_0", "label": "exploit", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Resource Development", "technique": "Resource Development-T1587-Develop Capabilities", "type": "event", "x": 0.0, "y": 0.0}, {"color": "#287271", "depth": 1, "font": {"size": 15.5, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "gogs vulnerability", "label": "gogs vulnerability", "shape": "dot", "size": 14.0, "type": "entity", "x": -64.28571428571429, "y": 100.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "exploit_1", "label": "exploit", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Initial Access", "technique": "Initial Access-T1190-Exploit Public-Facing Application", "type": "event", "x": 257.14285714285717, "y": 0.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Resource Development", "label": "Resource Development", "shape": "box", "size": 14.0, "type": "tactic", "widthConstraint": {"maximum": 160, "minimum": 160}, "x": 0.0, "y": -128.0}, {"caption": "T1587", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Resource Development-T1587-Develop Capabilities", "label": "T1587", "shape": "box", "size": 14.0, "type": "technique", "widthConstraint": {"maximum": 100, "minimum": 100}, "x": 0.0, "y": -64.0}, {"color": "#B4B4D5", "depth": 2, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "gogs", "label": "gogs", "shape": "dot", "size": 14.0, "type": "entity", "x": 321.42857142857144, "y": 148.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 16.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "vulnerability", "label": "vulnerability", "shape": "dot", "size": 14.0, "type": "entity", "x": 257.14285714285717, "y": 68.0}, {"color": "#287271", "depth": 2, "font": {"size": 14.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "windows, linux, macos", "label": "windows, linux, macos", "shape": "dot", "size": 14.0, "type": "entity", "x": 192.8571428571429, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "create_2", "label": "create", "sent_nums": [2], "shape": "triangle", "size": 14.0, "tactic": "Initial Access", "technique": "Initial Access-T1190-Exploit Public-Facing Application", "type": "event", "x": 514.2857142857143, "y": 0.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "attacker", "label": "attacker", "shape": "dot", "size": 14.0, "type": "entity", "x": 925.7142857142859, "y": 68.0}, {"color": "#287271", "depth": 2, "font": {"size": 17.25, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "branch name", "label": "branch name", "shape": "dot", "size": 14.0, "type": "entity", "x": 1182.8571428571431, "y": 148.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "exploit_4", "label": "exploit", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Credential Access", "technique": "Credential Access-T1003-OS Credential Dumping", "type": "event", "x": 1028.5714285714287, "y": 0.0}, {"color": "#287271", "depth": 2, "font": {"size": 17.25, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "credentials", "label": "credentials", "shape": "dot", "size": 14.0, "type": "entity", "x": 1054.2857142857144, "y": 180.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "exploit_5", "label": "exploit", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Lateral Movement", "technique": "Lateral Movement-T1210-Exploitation of Remote Services", "type": "event", "x": 1285.7142857142858, "y": 0.0}, {"color": "#287271", "depth": 2, "font": {"size": 14.25, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "other reachable systems", "label": "other reachable systems", "shape": "dot", "size": 14.0, "type": "entity", "x": 925.7142857142859, "y": 212.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "read_6", "label": "read", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Collection", "technique": "Collection-T1530-Data from Cloud Storage", "type": "event", "x": 1542.8571428571431, "y": 0.0}, {"color": "#287271", "depth": 2, "font": {"size": 16.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "all repositories", "label": "all repositories", "shape": "dot", "size": 14.0, "type": "entity", "x": 797.1428571428573, "y": 228.0}, {"color": "#287271", "depth": 2, "font": {"size": 13.25, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "code of hosted repositories", "label": "code of hosted repositories", "shape": "dot", "size": 14.0, "type": "entity", "x": 668.5714285714287, "y": 260.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Initial Access", "label": "Initial Access", "shape": "box", "size": 14.0, "type": "tactic", "widthConstraint": {"maximum": 160, "minimum": 160}, "x": 308.5714285714286, "y": -128.0}, {"caption": "T1190", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Initial Access-T1190-Exploit Public-Facing Application", "label": "T1190", "shape": "box", "size": 14.0, "type": "technique", "widthConstraint": {"maximum": 100, "minimum": 100}, "x": 308.5714285714286, "y": -64.0}, {"color": "#287271", "depth": 1, "font": {"size": 11, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "pull request with malicious branch name", "label": "pull request with malicious branch name", "shape": "dot", "size": 14.0, "type": "entity", "x": 514.2857142857143, "y": 68.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "execute_3", "label": "execute", "sent_nums": [3], "shape": "triangle", "size": 14.0, "tactic": "Execution", "technique": "Execution-T1059-Command and Scripting Interpreter", "type": "event", "x": 771.4285714285716, "y": 0.0}, {"color": "#B4B4D5", "depth": 2, "font": {"size": 13.25, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "user controlled branch name", "label": "user controlled branch name", "shape": "dot", "size": 14.0, "type": "entity", "x": 771.4285714285716, "y": 148.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 17.5, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "git rebase", "label": "git rebase", "shape": "dot", "size": 14.0, "type": "entity", "x": 835.7142857142859, "y": 68.0}, {"color": "#287271", "depth": 1, "font": {"size": 16.5, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "shell commands", "label": "shell commands", "shape": "dot", "size": 14.0, "type": "entity", "x": 707.1428571428572, "y": 100.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Execution", "label": "Execution", "shape": "box", "size": 14.0, "type": "tactic", "widthConstraint": {"maximum": 160, "minimum": 160}, "x": 617.1428571428572, "y": -128.0}, {"caption": "T1059", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Execution-T1059-Command and Scripting Interpreter", "label": "T1059", "shape": "box", "size": 14.0, "type": "technique", "widthConstraint": {"maximum": 100, "minimum": 100}, "x": 617.1428571428572, "y": -64.0}, {"color": "#287271", "depth": 1, "font": {"size": 15.5, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "compromised server", "label": "compromised server", "shape": "dot", "size": 14.0, "type": "entity", "x": 1028.5714285714287, "y": 68.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Credential Access", "label": "Credential Access", "shape": "box", "size": 14.0, "type": "tactic", "widthConstraint": {"maximum": 160, "minimum": 160}, "x": 925.7142857142858, "y": -128.0}, {"caption": "T1003", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Credential Access-T1003-OS Credential Dumping", "label": "T1003", "shape": "box", "size": 14.0, "type": "technique", "widthConstraint": {"maximum": 100, "minimum": 100}, "x": 925.7142857142858, "y": -64.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 17.25, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "gogs server", "label": "gogs server", "shape": "dot", "size": 14.0, "type": "entity", "x": 1285.7142857142858, "y": 68.0}, {"color": "#287271", "depth": 2, "font": {"size": 16.25, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "deployment keys", "label": "deployment keys", "shape": "dot", "size": 14.0, "type": "entity", "x": 1414.2857142857144, "y": 148.0}, {"color": "#287271", "depth": 2, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "webhooks", "label": "webhooks", "shape": "dot", "size": 14.0, "type": "entity", "x": 1285.7142857142858, "y": 180.0}, {"color": "#287271", "depth": 2, "font": {"size": 16.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "ci runner tokens", "label": "ci runner tokens", "shape": "dot", "size": 14.0, "type": "entity", "x": 1157.142857142857, "y": 212.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Lateral Movement", "label": "Lateral Movement", "shape": "box", "size": 14.0, "type": "tactic", "widthConstraint": {"maximum": 160, "minimum": 160}, "x": 1234.2857142857144, "y": -128.0}, {"caption": "T1210", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Lateral Movement-T1210-Exploitation of Remote Services", "label": "T1210", "shape": "box", "size": 14.0, "type": "technique", "widthConstraint": {"maximum": 100, "minimum": 100}, "x": 1234.2857142857144, "y": -64.0}, {"color": "#287271", "depth": 1, "font": {"size": 15.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "private repositories", "label": "private repositories", "shape": "dot", "size": 14.0, "type": "entity", "x": 1542.8571428571431, "y": 68.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Collection", "label": "Collection", "shape": "box", "size": 14.0, "type": "tactic", "widthConstraint": {"maximum": 160, "minimum": 160}, "x": 1542.8571428571431, "y": -128.0}, {"caption": "T1530", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Collection-T1530-Data from Cloud Storage", "label": "T1530", "shape": "box", "size": 14.0, "type": "technique", "widthConstraint": {"maximum": 100, "minimum": 100}, "x": 1542.8571428571431, "y": -64.0}, {"color": "#B4B4D5", "depth": 3, "font": {"size": 17.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "attackers", "label": "attackers", "shape": "dot", "size": 14.0, "type": "entity", "x": 925.7142857142859, "y": 228.0}, {"color": "#287271", "depth": 4, "font": {"size": 17.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "repositories", "label": "repositories", "shape": "dot", "size": 14.0, "type": "entity", "x": 925.7142857142859, "y": 308.0}]);
+                  edges = new vis.DataSet([{"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "rapid7", "label": "publish", "relation": "publish", "to": "metasploit module", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "rapid7", "label": "develop", "relation": "develop", "to": "offensive capabilities", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "rapid7", "label": "report", "relation": "report", "to": "attack traces", "width": 1}, {"arrows": "to", "from": "metasploit module", "relation": "Subject", "to": "exploit_0", "width": 1}, {"arrows": "to", "from": "exploit_0", "relation": "Object", "to": "gogs vulnerability", "width": 1}, {"arrows": "to", "from": "exploit_0", "to": "exploit_1", "width": 1}, {"arrows": "to", "from": "Resource Development", "to": "Resource Development-T1587-Develop Capabilities", "width": 1}, {"arrows": "to", "from": "Resource Development-T1587-Develop Capabilities", "to": "exploit_0", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "gogs", "label": "have", "relation": "have", "to": "vulnerability", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "vulnerability", "label": "affect", "relation": "affect", "to": "windows, linux, macos", "width": 1}, {"arrows": "to", "from": "exploit_1", "relation": "Object", "to": "vulnerability", "width": 1}, {"arrows": "to", "from": "exploit_1", "to": "create_2", "width": 1}, {"arrows": "to", "from": "attacker", "relation": "Subject", "to": "exploit_1", "width": 1}, {"arrows": "to", "from": "attacker", "relation": "Subject", "to": "create_2", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "attacker", "label": "inject", "relation": "inject", "to": "branch name", "width": 1}, {"arrows": "to", "from": "attacker", "relation": "Subject", "to": "exploit_4", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "attacker", "label": "dump", "relation": "dump", "to": "credentials", "width": 1}, {"arrows": "to", "from": "attacker", "relation": "Subject", "to": "exploit_5", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "attacker", "label": "move to", "relation": "move to", "to": "other reachable systems", "width": 1}, {"arrows": "to", "from": "attacker", "relation": "Subject", "to": "read_6", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "attacker", "label": "access", "relation": "access", "to": "all repositories", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "attacker", "label": "tamper", "relation": "tamper", "to": "code of hosted repositories", "width": 1}, {"arrows": "to", "from": "Initial Access", "to": "Initial Access-T1190-Exploit Public-Facing Application", "width": 1}, {"arrows": "to", "from": "Initial Access-T1190-Exploit Public-Facing Application", "to": "exploit_1", "width": 1}, {"arrows": "to", "from": "Initial Access-T1190-Exploit Public-Facing Application", "to": "create_2", "width": 1}, {"arrows": "to", "from": "create_2", "relation": "Object", "to": "pull request with malicious branch name", "width": 1}, {"arrows": "to", "from": "create_2", "to": "execute_3", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "user controlled branch name", "label": "pass into", "relation": "pass into", "to": "git rebase", "width": 1}, {"arrows": "to", "from": "git rebase", "relation": "Subject", "to": "execute_3", "width": 1}, {"arrows": "to", "from": "execute_3", "relation": "Object", "to": "shell commands", "width": 1}, {"arrows": "to", "from": "execute_3", "to": "exploit_4", "width": 1}, {"arrows": "to", "from": "Execution", "to": "Execution-T1059-Command and Scripting Interpreter", "width": 1}, {"arrows": "to", "from": "Execution-T1059-Command and Scripting Interpreter", "to": "execute_3", "width": 1}, {"arrows": "to", "from": "exploit_4", "relation": "Object", "to": "compromised server", "width": 1}, {"arrows": "to", "from": "exploit_4", "to": "exploit_5", "width": 1}, {"arrows": "to", "from": "Credential Access", "to": "Credential Access-T1003-OS Credential Dumping", "width": 1}, {"arrows": "to", "from": "Credential Access-T1003-OS Credential Dumping", "to": "exploit_4", "width": 1}, {"arrows": "to", "from": "exploit_5", "relation": "Object", "to": "gogs server", "width": 1}, {"arrows": "to", "from": "exploit_5", "to": "read_6", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "gogs server", "label": "host", "relation": "host", "to": "deployment keys", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "gogs server", "label": "host", "relation": "host", "to": "webhooks", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "gogs server", "label": "host", "relation": "host", "to": "ci runner tokens", "width": 1}, {"arrows": "to", "from": "Lateral Movement", "to": "Lateral Movement-T1210-Exploitation of Remote Services", "width": 1}, {"arrows": "to", "from": "Lateral Movement-T1210-Exploitation of Remote Services", "to": "exploit_5", "width": 1}, {"arrows": "to", "from": "read_6", "relation": "Object", "to": "private repositories", "width": 1}, {"arrows": "to", "from": "Collection", "to": "Collection-T1530-Data from Cloud Storage", "width": 1}, {"arrows": "to", "from": "Collection-T1530-Data from Cloud Storage", "to": "read_6", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "attackers", "label": "access", "relation": "access", "to": "repositories", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "attackers", "label": "dump", "relation": "dump", "to": "credentials", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "attackers", "label": "tamper with", "relation": "tamper with", "to": "code of hosted repositories", "width": 1}]);
+
+                  nodeColors = {};
+                  allNodes = nodes.get({ returnType: "Object" });
+                  for (nodeId in allNodes) {
+                    nodeColors[nodeId] = allNodes[nodeId].color;
+                  }
+                  allEdges = edges.get({ returnType: "Object" });
+                  // adding nodes and edges to the graph
+                  data = {nodes: nodes, edges: edges};
+
+                  var options = {"physics": {"enabled": true, "solver": "barnesHut", "barnesHut": {"gravitationalConstant": -8000, "centralGravity": 0.3, "springLength": 95, "springConstant": 0.04, "damping": 0.6}, "stabilization": {"enabled": true, "iterations": 300, "updateInterval": 25}}};
+
+                  
+
+
+                  
+
+                  network = new vis.Network(container, data, options);
+
+                  
+
+                  
+
+                  
+
+
+                  
+
+                  return network;
+
+              }
+              drawGraph();
+        </script>
+    </body>
+</html>

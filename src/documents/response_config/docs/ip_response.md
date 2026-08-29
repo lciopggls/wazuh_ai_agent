@@ -2,6 +2,9 @@
 
 事件响应智能体使用同一套 `block-ip` 脚本完成定时封禁、永久封禁、手动解封和规则记录。实现遵循 Wazuh 4.x Active Response 协议：Agent 通过 stdin 向脚本发送 JSON，定时封禁通过 `check_keys`/`continue` 握手去重，并在超时后用 `delete` 命令撤销。
 
+完整环境、Manager、Indexer 和后端部署顺序见 [主部署文档](../README.md)。本文只补充 IP
+响应的协议、查询链路和专项验证。
+
 官方协议说明：
 
 - <https://documentation.wazuh.com/current/user-manual/capabilities/active-response/custom-active-response-scripts.html>
@@ -18,8 +21,8 @@ C:\Program Files (x86)\ossec-agent\active-response\bin\block-ip.ps1
 
 仓库中的源文件：
 
-- `src/documents/response_config/block-ip.bat`
-- `src/documents/response_config/block-ip.ps1`
+- `../windows_agent/scripts/block-ip.bat`
+- `../windows_agent/scripts/block-ip.ps1`
 
 脚本必须部署在 Agent，不是 Wazuh Manager 的 `/var/ossec/active-response/bin`。Windows Agent 的 `wazuh-execd` 会以 Active Response JSON 协议调用 BAT，BAT 再启动 PowerShell 实现。
 
@@ -41,7 +44,8 @@ Restart-Service -Name wazuh
 </command>
 ```
 
-然后把四个超时变体都绑定到 `block-ip`。项目中的 `ossec_ar_fix.xml` 包含可直接核对的完整片段。
+然后把四个超时变体都绑定到 `block-ip`。项目中的
+`../wazuh_manager/active_response/ossec_ar_fix.xml` 包含可直接核对的完整片段。
 
 ```xml
 <active-response>
@@ -122,10 +126,10 @@ Python 端向 `PUT /active-response?agents_list=<agent_id>` 发送：
 C:\Program Files (x86)\ossec-agent\active-response\block-ip-query.log
 ```
 
-`windows-agent-query.xml` 中的 `<localfile>` 配置将单行 JSON 发送给 Manager，
-`manager-query-rule.xml` 中的规则将其转换为可在 `wazuh-alerts-*` 查询的低等级告警。
-后端按 `request_id` 每秒轮询一次，最多等待 30 秒，以容纳 Agent、Manager 和 Indexer
-之间的正常采集与索引延迟。
+`../windows_agent/log_collection/windows-agent-query.xml` 中的 `<localfile>` 配置将单行
+JSON 发送给 Manager，`../wazuh_manager/rules/manager-query-rule.xml` 中的规则将其转换为
+可在 `wazuh-alerts-*` 查询的低等级告警。后端按 `request_id` 每秒轮询一次。通过事件响应
+智能体调用时最多等待 60 秒；直接调用底层 Server API 且未覆盖参数时默认等待 30 秒。
 
 Wazuh Active Response API 只确认命令是否已投递到 Agent，不会把脚本 stdout 或防火墙
 执行结果同步返回。因此，API 返回 `error: 0` 表示“命令已发送”，不能单独视为“防火墙
@@ -134,7 +138,8 @@ Wazuh Active Response API 只确认命令是否已投递到 Agent，不会把脚
 
 ### 3.1 Windows Agent 查询日志配置
 
-将 `windows-agent-query.xml` 中的 `<localfile>` 块加入 Agent 的：
+将 `../windows_agent/log_collection/windows-agent-query.xml` 中的完整 `<ossec_config>` 块
+加入 Agent 的：
 
 ```text
 C:\Program Files (x86)\ossec-agent\ossec.conf
@@ -144,15 +149,52 @@ C:\Program Files (x86)\ossec-agent\ossec.conf
 
 ### 3.2 Manager 查询告警规则
 
-将 `manager-query-rule.xml` 中的 `<group>` 加入 Manager 的：
+将 `../wazuh_manager/rules/manager-query-rule.xml` 复制到 Manager：
 
 ```text
-/var/ossec/etc/rules/local_rules.xml
+/var/ossec/etc/rules/wazuh_ai_block_query.xml
 ```
 
-先用 `wazuh-logtest` 验证示例 JSON，再重启 `wazuh-manager`。
+然后执行：
+
+```bash
+sudo chown wazuh:wazuh /var/ossec/etc/rules/wazuh_ai_block_query.xml
+sudo chmod 660 /var/ossec/etc/rules/wazuh_ai_block_query.xml
+sudo /var/ossec/bin/wazuh-analysisd -t
+sudo systemctl restart wazuh-manager
+```
+
+该规则默认使用 ID `100210`。如果目标环境已经占用该 ID，应改成未占用的自定义规则 ID。
+可将以下单行 JSON 输入 `wazuh-logtest`，预期命中规则 `100210`：
+
+```json
+{"event_type":"wazuh_ai_block_query_complete","request_id":"00000000-0000-0000-0000-000000000001","target_ip":"203.0.113.10","query_status":"ok","rule_count":0}
+```
+
+### 3.3 Indexer 连接
+
+默认让后端直接连接 `<INDEXER_IP>:9200`。先从后端主机验证：
+
+```powershell
+Test-NetConnection <INDEXER_IP> -Port 9200
+curl.exe -k -u <INDEXER_USER> https://<INDEXER_IP>:9200
+```
+
+直连失败或安全策略禁止开放 9200 时，再按照主部署文档使用本地 SSH 隧道。
 
 ## 4. 验证方法
+
+在 LangGraph 页面选择 `router_agent` 并创建新对话。将 `<AGENT_ID>` 替换为实际数字 ID，
+依次执行：
+
+```text
+查询 Agent <AGENT_ID> 是否封禁了 203.0.113.10
+在 Agent <AGENT_ID> 上双向封禁 203.0.113.10，持续 10 分钟
+查询 Agent <AGENT_ID> 当前所有由 Wazuh AI 管理的 IP 封禁规则
+在 Agent <AGENT_ID> 上解除对 203.0.113.10 的封禁
+```
+
+预期依次得到未封禁、已验证封禁、包含真实规则的查询结果和已验证解封。
 
 发送测试命令后，在目标 Agent 上检查日志：
 
@@ -192,3 +234,5 @@ Get-Content "C:\Program Files (x86)\ossec-agent\active-response\block-ip-query.l
 - 定时规则不会自动解除：确认 `<timeout_allowed>yes</timeout_allowed>`、对应 `<timeout>` 和 `check_keys` 握手均已配置。
 - 只有入站规则：确认调用方向不是 `srcip`；`dstip` 创建出站规则，`both` 才会同时创建两条。
 - 查询返回 `unknown`：检查 Agent 是否采集 `block-ip-query.log`、Manager 规则 100210 是否命中，以及 Indexer 中是否存在相同 `request_id` 的告警。
+- 直连 Indexer 失败：检查 `<INDEXER_IP>:9200` 的防火墙放行范围和 TLS 服务；如果
+  `curl` 返回 `Unauthorized`，说明网络已连通，应检查账号和密码。

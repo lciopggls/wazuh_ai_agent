@@ -986,6 +986,8 @@ def block_ip_and_verify_on_agent(
     target_ip: str,
     direction: Literal["srcip", "dstip", "both"] = "srcip",
     command_name: BlockCommand = "block-ip600",
+    *,
+    wait_timeout: float = 30,
 ):
     """Dispatch an IP block, then verify the real Windows Firewall state."""
     result = block_ip_on_agent(agent_id, target_ip, direction, command_name)
@@ -1000,11 +1002,13 @@ def block_ip_and_verify_on_agent(
         )
         return result
 
+    verification_kwargs = {"wait_timeout": wait_timeout} if wait_timeout != 30 else {}
     verification = list_blocked_ips_on_agent(
         result["agent_id"],
         target_ip,
         expected_action="block",
         expected_direction=direction,
+        **verification_kwargs,
     )
     result["verification"] = verification
     result["status"] = verification["status"]
@@ -1012,7 +1016,12 @@ def block_ip_and_verify_on_agent(
     return result
 
 
-def unblock_ip_and_verify_on_agent(agent_id: str, target_ip: str):
+def unblock_ip_and_verify_on_agent(
+    agent_id: str,
+    target_ip: str,
+    *,
+    wait_timeout: float = 30,
+):
     """Dispatch an IP unblock, then verify that both firewall rules are absent."""
     result = unblock_ip_on_agent(agent_id, target_ip)
     result["dispatch_success"] = result["success"]
@@ -1026,11 +1035,13 @@ def unblock_ip_and_verify_on_agent(agent_id: str, target_ip: str):
         )
         return result
 
+    verification_kwargs = {"wait_timeout": wait_timeout} if wait_timeout != 30 else {}
     verification = list_blocked_ips_on_agent(
         result["agent_id"],
         target_ip,
         expected_action="unblock",
         expected_direction="both",
+        **verification_kwargs,
     )
     result["verification"] = verification
     result["status"] = verification["status"]
@@ -1039,10 +1050,9 @@ def unblock_ip_and_verify_on_agent(agent_id: str, target_ip: str):
 
 
 # ---------------------------------------------------------------------------
-# Agent 001 fixed inbound TCP port demonstration
+# Fixed inbound TCP port demonstration
 # ---------------------------------------------------------------------------
 
-_DEMO_PORT_AGENT_ID = "001"
 _DEMO_PORT = 54321
 _DEMO_PORT_PROTOCOL = "tcp"
 _DEMO_PORT_COMMANDS = {
@@ -1068,8 +1078,6 @@ _DEMO_PORT_STATUS_TEXT = {
 
 def _validate_demo_port_target(agent_id: str, target_port: int) -> tuple[str, int]:
     normalized_agent_id = _validate_agent_id(agent_id)
-    if normalized_agent_id != _DEMO_PORT_AGENT_ID:
-        raise ValueError(f"无权操作 Agent {normalized_agent_id}；端口演示仅授权 Agent 001。")
     if isinstance(target_port, bool):
         parsed_port = -1
     else:
@@ -1137,7 +1145,7 @@ def block_port_on_agent(
     target_port: int,
     duration_seconds: Literal[30, 60, 300] = 30,
 ) -> dict:
-    """Block the fixed inbound TCP demonstration port on Agent 001."""
+    """Block the fixed inbound TCP demonstration port on a specified agent."""
     normalized_agent_id, parsed_port = _validate_demo_port_target(agent_id, target_port)
     parsed_duration = _validate_demo_port_duration(duration_seconds)
     command = _DEMO_PORT_COMMANDS[parsed_duration]
@@ -1165,7 +1173,7 @@ def block_port_on_agent(
 
 
 def unblock_port_on_agent(agent_id: str, target_port: int) -> dict:
-    """Remove the fixed inbound TCP demonstration rule on Agent 001."""
+    """Remove the fixed inbound TCP demonstration rule on a specified agent."""
     normalized_agent_id, parsed_port = _validate_demo_port_target(agent_id, target_port)
     response = _run_active_response(
         normalized_agent_id,
@@ -1381,6 +1389,8 @@ def block_port_and_verify_on_agent(
     agent_id: str,
     target_port: int,
     duration_seconds: Literal[30, 60, 300] = 30,
+    *,
+    wait_timeout: float = 30,
 ) -> dict:
     """Dispatch the fixed port block and require verified firewall state."""
     result = block_port_on_agent(agent_id, target_port, duration_seconds)
@@ -1395,14 +1405,24 @@ def block_port_and_verify_on_agent(
         result["success"] = False
         return result
 
-    verification = query_blocked_port_on_agent(result["agent_id"], result["target_port"])
+    verification_kwargs = {"wait_timeout": wait_timeout} if wait_timeout != 30 else {}
+    verification = query_blocked_port_on_agent(
+        result["agent_id"],
+        result["target_port"],
+        **verification_kwargs,
+    )
     result["verification"] = verification
     result["status"] = verification["status"]
     result["success"] = verification["status"] == "blocked"
     return result
 
 
-def unblock_port_and_verify_on_agent(agent_id: str, target_port: int) -> dict:
+def unblock_port_and_verify_on_agent(
+    agent_id: str,
+    target_port: int,
+    *,
+    wait_timeout: float = 30,
+) -> dict:
     """Dispatch the fixed port unblock and require verified firewall state."""
     result = unblock_port_on_agent(agent_id, target_port)
     if not result["dispatch_success"]:
@@ -1416,7 +1436,12 @@ def unblock_port_and_verify_on_agent(agent_id: str, target_port: int) -> dict:
         result["success"] = False
         return result
 
-    verification = query_blocked_port_on_agent(result["agent_id"], result["target_port"])
+    verification_kwargs = {"wait_timeout": wait_timeout} if wait_timeout != 30 else {}
+    verification = query_blocked_port_on_agent(
+        result["agent_id"],
+        result["target_port"],
+        **verification_kwargs,
+    )
     result["verification"] = verification
     result["status"] = verification["status"]
     result["success"] = verification["status"] == "unblocked"
@@ -1425,10 +1450,9 @@ def unblock_port_and_verify_on_agent(agent_id: str, target_port: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Agent 001 endpoint demonstration responses
+# Endpoint demonstration responses
 # ---------------------------------------------------------------------------
 
-_ENDPOINT_RESPONSE_AGENT_ID = "001"
 _ENDPOINT_RESPONSE_COMMAND = "endpoint-response0"
 _ENDPOINT_RESPONSE_ACTIONS = {
     "query_process",
@@ -1443,18 +1467,17 @@ _ENDPOINT_RESPONSE_STATUS_LABELS = {
     "unknown": "状态未知",
 }
 _ENDPOINT_RESPONSE_REASON_TEXT = {
-    "invalid_agent": "该功能目前只部署在 Agent 001。",
     "invalid_process_id": "PID 必须是大于 0 的整数。",
     "process_not_found": "执行前未找到指定 PID，进程可能已经退出。",
     "process_not_allowed": "指定 PID 对应的进程不在 notepad.exe 演示白名单中。",
     "process_still_running": "已执行终止操作，但指定 PID 仍然存在。",
     "account_not_allowed": "账户功能只允许操作本地账户 demo_user。",
-    "account_not_found": "Agent 001 上不存在本地账户 demo_user。",
+    "account_not_found": "目标 Agent 上不存在本地账户 demo_user。",
     "account_state_not_applied": "命令已执行，但 demo_user 没有达到预期状态。",
     "invalid_request": "Agent 收到的端点响应请求不完整或格式无效。",
     "execution_error": "Agent 执行动作时发生错误。",
-    "dispatch_failed": "Wazuh 未能将 Active Response 命令投递到 Agent 001。",
-    "timeout": "30 秒内未取得 Agent 001 返回的实际状态。",
+    "dispatch_failed": "Wazuh 未能将 Active Response 命令投递到目标 Agent。",
+    "timeout": "30 秒内未取得目标 Agent 返回的实际状态。",
 }
 
 
@@ -1482,7 +1505,7 @@ def _endpoint_success_explanation(action: str, evidence: dict) -> str:
         return "本地账户 demo_user 当前已禁用。"
     if action == "enable_account":
         return "本地账户 demo_user 当前已启用。"
-    return "Agent 001 的实际状态已达到预期。"
+    return "目标 Agent 的实际状态已达到预期。"
 
 
 def _endpoint_response_result(
@@ -1603,17 +1626,7 @@ def _run_endpoint_response_action(
     wait_timeout: float = 30,
     poll_interval: float = 1,
 ) -> dict:
-    normalized_agent_id = str(agent_id).strip()
-    if normalized_agent_id != _ENDPOINT_RESPONSE_AGENT_ID:
-        return _endpoint_response_result(
-            "failed",
-            action=action,
-            agent_id=normalized_agent_id,
-            request_id="not-dispatched",
-            dispatch_success=False,
-            query_completed=False,
-            reason_code="invalid_agent",
-        )
+    normalized_agent_id = _validate_agent_id(agent_id)
     if action not in _ENDPOINT_RESPONSE_ACTIONS:
         raise ValueError(f"Unsupported endpoint response action: {action}")
     if action in {"query_process", "terminate_process"} and (
@@ -1723,7 +1736,7 @@ def query_process_on_agent(
     wait_timeout: float = 30,
     poll_interval: float = 1,
 ) -> dict:
-    """Query one PID on Agent 001, restricted by the Agent script whitelist."""
+    """Query one PID on a specified agent, restricted by the Agent script whitelist."""
     return _run_endpoint_response_action(
         agent_id,
         "query_process",
@@ -1740,7 +1753,7 @@ def terminate_process_on_agent(
     wait_timeout: float = 30,
     poll_interval: float = 1,
 ) -> dict:
-    """Terminate one whitelisted notepad.exe PID on Agent 001 and verify it is absent."""
+    """Terminate one whitelisted notepad.exe PID on a specified agent and verify it."""
     return _run_endpoint_response_action(
         agent_id,
         "terminate_process",
@@ -1757,7 +1770,7 @@ def query_local_account_on_agent(
     wait_timeout: float = 30,
     poll_interval: float = 1,
 ) -> dict:
-    """Query the fixed demo_user local account on Agent 001."""
+    """Query the fixed demo_user local account on a specified agent."""
     return _run_endpoint_response_action(
         agent_id,
         "query_account",
@@ -1774,7 +1787,7 @@ def disable_local_account_on_agent(
     wait_timeout: float = 30,
     poll_interval: float = 1,
 ) -> dict:
-    """Disable the fixed demo_user local account on Agent 001 and verify it."""
+    """Disable the fixed demo_user local account on a specified agent and verify it."""
     return _run_endpoint_response_action(
         agent_id,
         "disable_account",
@@ -1791,7 +1804,7 @@ def enable_local_account_on_agent(
     wait_timeout: float = 30,
     poll_interval: float = 1,
 ) -> dict:
-    """Enable the fixed demo_user local account on Agent 001 and verify it."""
+    """Enable the fixed demo_user local account on a specified agent and verify it."""
     return _run_endpoint_response_action(
         agent_id,
         "enable_account",

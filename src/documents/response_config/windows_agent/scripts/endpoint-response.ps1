@@ -1,4 +1,4 @@
-# Wazuh Active Response script for the Agent 001 demonstration actions.
+# Wazuh Active Response script for demonstration actions on a Windows Agent.
 # Deploy together with endpoint-response.bat to:
 # C:\Program Files (x86)\ossec-agent\active-response\bin\
 

@@ -1,0 +1,127 @@
+<html>
+    <head>
+        <meta charset="utf-8">
+        
+            <script src="lib/bindings/utils.js"></script>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js" integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+            
+        
+<center>
+<h1></h1>
+</center>
+
+<!-- <link rel="stylesheet" href="../node_modules/vis/dist/vis.min.css" type="text/css" />
+<script type="text/javascript" src="../node_modules/vis/dist/vis.js"> </script>-->
+        <link
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css"
+          rel="stylesheet"
+          integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6"
+          crossorigin="anonymous"
+        />
+        <script
+          src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf"
+          crossorigin="anonymous"
+        ></script>
+
+
+        <center>
+          <h1></h1>
+        </center>
+        <style type="text/css">
+
+             #mynetwork {
+                 width: 3200px;
+                 height: 1800px;
+                 background-color: #ffffff;
+                 border: 1px solid lightgray;
+                 position: relative;
+                 float: left;
+             }
+
+             
+
+             
+
+             
+        </style>
+    </head>
+
+
+    <body>
+        <div class="card" style="width: 100%">
+            
+            
+            <div id="mynetwork" class="card-body"></div>
+        </div>
+
+        
+        
+
+        <script type="text/javascript">
+
+              // initialize global variables.
+              var edges;
+              var nodes;
+              var allNodes;
+              var allEdges;
+              var nodeColors;
+              var originalNodes;
+              var network;
+              var container;
+              var options, data;
+              var filter = {
+                  item : '',
+                  property : '',
+                  value : []
+              };
+
+              
+
+              
+
+              // This method is responsible for drawing the graph, returns the drawn network
+              function drawGraph() {
+                  var container = document.getElementById('mynetwork');
+
+                  
+
+                  // parsing and collecting nodes and edges from the python
+                  nodes = new vis.DataSet([{"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "use_0", "label": "use", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Resource Development", "technique": "Resource Development-Others", "type": "event", "x": 0.0, "y": 40.0}, {"color": "#287271", "depth": 1, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "telegram", "label": "telegram", "shape": "dot", "size": 14.0, "type": "entity", "x": 112.5, "y": 108.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "use_2", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Defense Evasion", "technique": "Defense Evasion-Others", "type": "event", "x": 450.0, "y": 0.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 17.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "hacker group", "label": "hacker group", "shape": "dot", "size": 14.0, "type": "entity", "x": 675.0, "y": 108.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "use_1", "label": "use", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Resource Development", "technique": "Resource Development-Others", "type": "event", "x": 0.0, "y": -40.0}, {"color": "#287271", "depth": 2, "font": {"size": 17.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "stolen funds", "label": "stolen funds", "shape": "dot", "size": 14.0, "type": "entity", "x": 675.0, "y": 188.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "compromise_5", "label": "compromise", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Impact", "technique": "Impact-T1657-Financial Theft:(0, 1, 2, 3, 4, 5, 6);", "type": "event", "x": 1350.0, "y": 40.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "compromise_6", "label": "compromise", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Impact", "technique": "Impact-T1657-Financial Theft:(0, 1, 2, 3, 4, 5, 6);", "type": "event", "x": 1350.0, "y": -40.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Resource Development", "label": "Resource Development", "shape": "box", "size": 14.0, "type": "tactic", "widthConstraint": {"maximum": 160, "minimum": 160}, "x": 0.0, "y": -168.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Resource Development-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "widthConstraint": {"maximum": 100, "minimum": 100}, "x": 0.0, "y": -104.0}, {"color": "#287271", "depth": 1, "font": {"size": 12.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "chinese made wireless devices", "label": "chinese made wireless devices", "shape": "dot", "size": 14.0, "type": "entity", "x": -112.5, "y": 140.0}, {"color": "#287271", "depth": 1, "font": {"size": 13.25, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "encrypted instant messaging", "label": "encrypted instant messaging", "shape": "dot", "size": 14.0, "type": "entity", "x": 337.5, "y": 140.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "exfiltrate to_3", "label": "exfiltrate to", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Exfiltration", "technique": "Exfiltration-T1030-Data Transfer Size Limits", "type": "event", "x": 900.0, "y": 40.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "use_4", "label": "use", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Exfiltration", "technique": "Exfiltration-Others", "type": "event", "x": 900.0, "y": -40.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "group", "label": "group", "shape": "dot", "size": 14.0, "type": "entity", "x": 562.5, "y": 108.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Defense Evasion", "label": "Defense Evasion", "shape": "box", "size": 14.0, "type": "tactic", "widthConstraint": {"maximum": 160, "minimum": 160}, "x": 337.5, "y": -168.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Defense Evasion-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "widthConstraint": {"maximum": 100, "minimum": 100}, "x": 337.5, "y": -104.0}, {"color": "#287271", "depth": 1, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "\u6d77\u5916\u52a0\u5bc6\u8d27\u5e01\u94b1\u5305", "label": "\u6d77\u5916\u52a0\u5bc6\u8d27\u5e01\u94b1\u5305", "shape": "dot", "size": 14.0, "type": "entity", "x": 900.0, "y": 140.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "\u653b\u51fb\u8005", "label": "\u653b\u51fb\u8005", "shape": "dot", "size": 14.0, "type": "entity", "x": 1125.0, "y": 108.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Exfiltration", "label": "Exfiltration", "shape": "box", "size": 14.0, "type": "tactic", "widthConstraint": {"maximum": 160, "minimum": 160}, "x": 843.75, "y": -168.0}, {"caption": "T1030", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Exfiltration-T1030-Data Transfer Size Limits", "label": "T1030", "shape": "box", "size": 14.0, "type": "technique", "widthConstraint": {"maximum": 100, "minimum": 100}, "x": 1012.5, "y": -104.0}, {"caption": "Others", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Exfiltration-Others", "label": "Others", "shape": "box", "size": 14.0, "type": "technique", "widthConstraint": {"maximum": 100, "minimum": 100}, "x": 675.0, "y": -104.0}, {"color": "#287271", "depth": 1, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "\u4e2d\u56fd\u7ecf\u7eaa\u4eba", "label": "\u4e2d\u56fd\u7ecf\u7eaa\u4eba", "shape": "dot", "size": 14.0, "type": "entity", "x": 675.0, "y": 172.0}, {"color": "#287271", "depth": 1, "font": {"size": 15.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "dprk central bank", "label": "dprk central bank", "shape": "dot", "size": 14.0, "type": "entity", "x": 1462.5, "y": 108.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Impact", "label": "Impact", "shape": "box", "size": 14.0, "type": "tactic", "widthConstraint": {"maximum": 160, "minimum": 160}, "x": 1350.0, "y": -168.0}, {"caption": "T1657", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Impact-T1657-Financial Theft:(0, 1, 2, 3, 4, 5, 6);", "label": "T1657", "shape": "box", "size": 14.0, "type": "technique", "widthConstraint": {"maximum": 100, "minimum": 100}, "x": 1350.0, "y": -104.0}, {"color": "#287271", "depth": 1, "font": {"size": 15.5, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "foreign trade bank", "label": "foreign trade bank", "shape": "dot", "size": 14.0, "type": "entity", "x": 1237.5, "y": 140.0}]);
+                  edges = new vis.DataSet([{"arrows": "to", "from": "use_0", "relation": "Object", "to": "telegram", "width": 1}, {"arrows": "to", "from": "use_0", "to": "use_2", "width": 1}, {"arrows": "to", "from": "hacker group", "relation": "Subject", "to": "use_0", "width": 1}, {"arrows": "to", "from": "hacker group", "relation": "Subject", "to": "use_1", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "hacker group", "label": "transfer", "relation": "transfer", "to": "stolen funds", "width": 1}, {"arrows": "to", "from": "hacker group", "relation": "Subject", "to": "compromise_5", "width": 1}, {"arrows": "to", "from": "hacker group", "relation": "Subject", "to": "compromise_6", "width": 1}, {"arrows": "to", "from": "Resource Development", "to": "Resource Development-Others", "width": 1}, {"arrows": "to", "from": "Resource Development-Others", "to": "use_0", "width": 1}, {"arrows": "to", "from": "Resource Development-Others", "to": "use_1", "width": 1}, {"arrows": "to", "from": "use_1", "relation": "Object", "to": "chinese made wireless devices", "width": 1}, {"arrows": "to", "from": "use_1", "to": "use_2", "width": 1}, {"arrows": "to", "from": "use_2", "relation": "Object", "to": "encrypted instant messaging", "width": 1}, {"arrows": "to", "from": "use_2", "to": "exfiltrate to_3", "width": 1}, {"arrows": "to", "from": "use_2", "to": "use_4", "width": 1}, {"arrows": "to", "from": "group", "relation": "Subject", "to": "use_2", "width": 1}, {"arrows": "to", "from": "Defense Evasion", "to": "Defense Evasion-Others", "width": 1}, {"arrows": "to", "from": "Defense Evasion-Others", "to": "use_2", "width": 1}, {"arrows": "to", "from": "exfiltrate to_3", "relation": "Object", "to": "\u6d77\u5916\u52a0\u5bc6\u8d27\u5e01\u94b1\u5305", "width": 1}, {"arrows": "to", "from": "exfiltrate to_3", "to": "compromise_5", "width": 1}, {"arrows": "to", "from": "exfiltrate to_3", "to": "compromise_6", "width": 1}, {"arrows": "to", "from": "\u653b\u51fb\u8005", "relation": "Subject", "to": "exfiltrate to_3", "width": 1}, {"arrows": "to", "from": "\u653b\u51fb\u8005", "relation": "Subject", "to": "use_4", "width": 1}, {"arrows": "to", "from": "Exfiltration", "to": "Exfiltration-T1030-Data Transfer Size Limits", "width": 1}, {"arrows": "to", "from": "Exfiltration", "to": "Exfiltration-Others", "width": 1}, {"arrows": "to", "from": "Exfiltration-T1030-Data Transfer Size Limits", "to": "exfiltrate to_3", "width": 1}, {"arrows": "to", "from": "use_4", "relation": "Object", "to": "\u4e2d\u56fd\u7ecf\u7eaa\u4eba", "width": 1}, {"arrows": "to", "from": "use_4", "to": "compromise_5", "width": 1}, {"arrows": "to", "from": "use_4", "to": "compromise_6", "width": 1}, {"arrows": "to", "from": "Exfiltration-Others", "to": "use_4", "width": 1}, {"arrows": "to", "from": "compromise_5", "relation": "Object", "to": "dprk central bank", "width": 1}, {"arrows": "to", "from": "Impact", "to": "Impact-T1657-Financial Theft:(0, 1, 2, 3, 4, 5, 6);", "width": 1}, {"arrows": "to", "from": "Impact-T1657-Financial Theft:(0, 1, 2, 3, 4, 5, 6);", "to": "compromise_5", "width": 1}, {"arrows": "to", "from": "Impact-T1657-Financial Theft:(0, 1, 2, 3, 4, 5, 6);", "to": "compromise_6", "width": 1}, {"arrows": "to", "from": "compromise_6", "relation": "Object", "to": "foreign trade bank", "width": 1}]);
+
+                  nodeColors = {};
+                  allNodes = nodes.get({ returnType: "Object" });
+                  for (nodeId in allNodes) {
+                    nodeColors[nodeId] = allNodes[nodeId].color;
+                  }
+                  allEdges = edges.get({ returnType: "Object" });
+                  // adding nodes and edges to the graph
+                  data = {nodes: nodes, edges: edges};
+
+                  var options = {"physics": {"enabled": true, "solver": "barnesHut", "barnesHut": {"gravitationalConstant": -8000, "centralGravity": 0.3, "springLength": 95, "springConstant": 0.04, "damping": 0.6}, "stabilization": {"enabled": true, "iterations": 300, "updateInterval": 25}}};
+
+                  
+
+
+                  
+
+                  network = new vis.Network(container, data, options);
+
+                  
+
+                  
+
+                  
+
+
+                  
+
+                  return network;
+
+              }
+              drawGraph();
+        </script>
+    </body>
+</html>

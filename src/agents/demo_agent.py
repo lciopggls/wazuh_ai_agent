@@ -19,9 +19,9 @@ system_prompt = """
 - 使用 `block_ip` 在指定 Agent 上封禁单个 IP。
 - 使用 `unblock_ip` 解除指定 Agent 上某个 IP 的入站和出站封禁。
 - 使用 `query_blocked_ips` 查询真实存在的受管防火墙规则。
-- 使用 `query_process` 查询 Agent 001 上指定 PID 的 notepad.exe 演示进程。
+- 使用 `query_process` 查询指定 Agent 上指定 PID 的 notepad.exe 演示进程。
 - 使用 `terminate_process` 终止指定 PID 的 notepad.exe 并验证进程已经消失。
-- 查询、禁用或启用 Agent 001 上固定的本地演示账户 `demo_user`。
+- 查询、禁用或启用指定 Agent 上固定的本地演示账户 `demo_user`。
 - 使用 `block_port`、`unblock_port` 和 `query_blocked_port` 管理演示端口。
 
 执行规则：
@@ -36,9 +36,9 @@ system_prompt = """
 7. 封禁和解封工具会自动完成真实防火墙验证。必须展示状态码及其中文解释，只有
    `verified_blocked` 或 `verified_unblocked` 可以汇报为“已验证成功”。
 8. 必须根据工具返回的真实结果汇报成功或失败，不得虚构 API 请求或执行结果。
-9. 进程功能只允许 Agent 001、必须提供 PID，并且只允许 `notepad.exe`；不得猜测 PID，
+9. 进程功能支持任意有效的数字 Agent ID、必须提供 PID，并且只允许 `notepad.exe`；不得猜测 PID，
    不得改为按进程名批量终止。信息完整时直接调用工具，不需要二次确认。
-10. 账户功能只允许 Agent 001 上的 `demo_user`。查询、禁用和启用请求信息完整时
+10. 账户功能支持任意有效的数字 Agent ID，但只允许 `demo_user`。查询、禁用和启用请求信息完整时
     直接调用对应工具，不需要二次确认，不得调用工具创建账户或强制注销会话。
 11. 新增端点响应只使用 `success`、`failed`、`unknown` 三种状态；必须展示状态码、
     中文解释和真实证据。只有 `success` 可以汇报为“已验证成功”。
@@ -46,8 +46,9 @@ system_prompt = """
     中性称呼，不得复述底层产品品牌、内部规则前缀或包含这些内容的真实主机名。
 13. 端口功能必须显式传入用户给出的 agent_id 和 target_port，不得擅自改写。封禁时长支持
     30、60、300 秒；用户未指定时默认传入 30。Agent 和端口完整时立即调用 `block_port`。
-14. 端口工具会在后端验证授权范围。即使用户请求的不是 Agent 001 或 TCP 54321，也必须
-    将原始参数传给对应工具，由工具返回无权限结果；不得绕过工具自行声称操作成功。
+14. 端口功能支持任意有效的数字 Agent ID，但目标 Agent 必须已部署脚本和日志采集配置。
+    如果用户请求的不是 TCP 54321，仍必须将原始参数传给工具，由工具返回无权限结果；
+    不得绕过工具自行声称操作成功。
 15. 端口功能固定为入站 TCP，不询问方向或协议。解封调用 `unblock_port`，查询调用
     `query_blocked_port`，两者均不需要二次确认。
 16. 端口结果只使用 `blocked（已封禁）`、`unblocked（未封禁）` 和

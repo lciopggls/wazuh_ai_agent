@@ -1,4 +1,4 @@
-# 四项事件响应功能：从零部署与验证
+# 事件响应配置：从零部署与验证
 
 本文只记录当前版本实际需要的配置，用于在另一套环境中复现以下功能：
 
@@ -7,19 +7,42 @@
 3. 指定 PID 的 `notepad.exe` 查询和终止；
 4. 本地账户 `demo_user` 查询、禁用和启用。
 
-部署目标固定为 Windows Agent 001。端口、进程和账户功能均有后端及脚本双重白名单，
+部署目标可以是任意有效的 Windows Agent。端口、进程和账户功能仍保留脚本白名单，
 不应把本文直接当作任意端口、进程或账户的通用处置方案。
+
+## 目录导航
+
+```text
+response_config/
+├─ README.md
+├─ windows_agent/
+│  ├─ scripts/          # Windows Active Response BAT/PowerShell 脚本
+│  └─ log_collection/   # Windows Agent 结果日志采集配置
+├─ wazuh_manager/
+│  ├─ active_response/  # Manager Active Response 配置片段
+│  └─ rules/            # Manager JSON 结果规则
+├─ docs/                # IP、端口和端点响应专项文档
+├─ examples/            # 完整配置参考，不能直接覆盖生产配置
+└─ baseline/            # 传统人工处置基线测量工具
+```
+
+专项说明：
+
+- [IP 响应](docs/ip_response.md)
+- [端口响应](docs/port_response.md)
+- [进程与账户响应](docs/endpoint_response.md)
 
 ## 1. 环境变量表
 
 开始前记录新环境的实际值，后文中的尖括号内容均需替换：
 
-| 变量 | 当前演示值/说明 |
+| 变量 | 说明 |
 |---|---|
-| `<AGENT_ID>` | `001`；当前代码只允许 001 |
-| `<AGENT_IP>` | 当前示例为 `192.168.28.129`，以新 Windows VM 地址为准 |
+| `<AGENT_ID>` | 目标 Agent 的数字 ID，例如 `005` |
+| `<AGENT_IP>` | 目标 Windows Agent 的实际地址 |
 | `<MANAGER_IP>` | Ubuntu Manager 的实际地址 |
-| `<UBUNTU_USER>` | 可通过 SSH 登录 Ubuntu 的用户 |
+| `<INDEXER_IP>` | Wazuh Indexer 的实际地址；一体化部署通常与 `<MANAGER_IP>` 相同 |
+| `<UBUNTU_USER>` | 可通过 SSH 登录 Ubuntu 的用户，仅隧道方案需要 |
 | `<WAZUH_API_USER>` | Wazuh Server API 用户 |
 | `<INDEXER_USER>` | Indexer 用户，常见值为 `admin` |
 
@@ -34,8 +57,8 @@ C:\Program Files (x86)\ossec-agent
 ## 2. 前置条件
 
 - Ubuntu VM 已安装并启动 Wazuh Manager、Indexer 和 API。
-- Windows VM 已安装 Wazuh Agent，并以 ID `001` 注册到该 Manager。
-- 宿主机已克隆本仓库并安装 `uv`、Git 和 SSH 客户端。
+- Windows VM 已安装 Wazuh Agent，并以有效数字 ID 注册到该 Manager。
+- 宿主机已克隆本仓库并安装 `uv` 和 Git；使用可选隧道时还需要 SSH 客户端。
 - 三台机器时间已同步；进程终止耗时展示依赖时间同步。
 - Windows 上使用管理员 PowerShell，Ubuntu 上使用具备 `sudo` 权限的终端。
 
@@ -45,9 +68,12 @@ C:\Program Files (x86)\ossec-agent
 sudo /var/ossec/bin/agent_control -lc
 ```
 
-必须能看到 Agent `001` 为 Active，之后再继续配置。
+必须能看到目标 Agent 为 Active，之后再继续配置。
 
-## 3. Windows Agent 001 配置
+## 3. 配置每个目标 Windows Agent
+
+以下脚本、结果日志和 `ossec.conf` 采集项必须在每台需要执行响应动作的 Agent 上分别部署；
+只在一台 Agent 上部署不会自动同步到其他 Agent。
 
 ### 3.1 备份配置并确认 Manager 地址
 
@@ -63,7 +89,7 @@ Copy-Item "$agentHome\ossec.conf" "$agentHome\ossec.conf.response-backup" -Force
 ```xml
 <client>
   <server>
-    <address>MANAGER_IP</address>
+    <address>&lt;MANAGER_IP&gt;</address>
     <port>1514</port>
     <protocol>tcp</protocol>
   </server>
@@ -82,7 +108,7 @@ Copy-Item "$agentHome\ossec.conf" "$agentHome\ossec.conf.response-backup" -Force
 
 ### 3.2 复制六个执行脚本
 
-从仓库的 `src/documents/response_config/` 复制下列文件：
+从仓库的 `src/documents/response_config/windows_agent/scripts/` 复制下列文件：
 
 ```text
 block-ip.bat
@@ -141,9 +167,9 @@ Get-Item `
 
 仓库中对应的独立参考片段为：
 
-- `windows-agent-query.xml`
-- `windows-agent-port-query.xml`
-- `windows-agent-endpoint-response.xml`
+- `windows_agent/log_collection/windows-agent-query.xml`
+- `windows_agent/log_collection/windows-agent-port-query.xml`
+- `windows_agent/log_collection/windows-agent-endpoint-response.xml`
 
 ### 3.4 创建日志、演示账户并重启 Agent
 
@@ -276,7 +302,8 @@ sudo cp /var/ossec/etc/ossec.conf /var/ossec/etc/ossec.conf.response-backup
 </active-response>
 ```
 
-同一片段保存在仓库的 `ossec_ar_fix.xml`。各 API 命令名称如下：
+同一片段保存在仓库的
+`wazuh_manager/active_response/ossec_ar_fix.xml`。各 API 命令名称如下：
 
 | 功能 | 后端调用的命令 |
 |---|---|
@@ -284,8 +311,9 @@ sudo cp /var/ossec/etc/ossec.conf /var/ossec/etc/ossec.conf.response-backup
 | 端口定时/手动解封/查询 | `block-port30`、`block-port60`、`block-port300`、`block-port0` |
 | 进程和账户操作 | `endpoint-response0` |
 
-注意：IP 默认封禁时长是 10 分钟；端口默认封禁时长才是 30 秒。后端等待查询结果的
-最长时间也是 30 秒，但它不是 IP 防火墙规则的有效期。
+注意：IP 默认封禁时长是 10 分钟；端口默认封禁时长才是 30 秒。事件响应智能体等待
+Agent、Manager 和 Indexer 返回验证结果的最长时间是 60 秒；底层 Server API 直接调用时
+仍默认 30 秒。这两个等待值都不是防火墙规则的有效期。
 
 ### 4.3 安装三个 JSON 结果规则
 
@@ -301,10 +329,10 @@ sudo cp /var/ossec/etc/ossec.conf /var/ossec/etc/ossec.conf.response-backup
 
 ```powershell
 scp `
-  .\src\documents\response_config\manager-query-rule.xml `
-  .\src\documents\response_config\manager-endpoint-response-rule.xml `
-  .\src\documents\response_config\manager-port-query-rule.xml `
-  UBUNTU_USER@MANAGER_IP:/tmp/
+  .\src\documents\response_config\wazuh_manager\rules\manager-query-rule.xml `
+  .\src\documents\response_config\wazuh_manager\rules\manager-endpoint-response-rule.xml `
+  .\src\documents\response_config\wazuh_manager\rules\manager-port-query-rule.xml `
+  <UBUNTU_USER>@<MANAGER_IP>:/tmp/
 ```
 
 然后在 Ubuntu 上执行：
@@ -336,7 +364,7 @@ sudo systemctl status wazuh-manager --no-pager
 sudo /var/ossec/bin/agent_control -lc
 ```
 
-必须满足：配置检查无错误、Manager 为 `active (running)`、Agent 001 为 Active。
+必须满足：配置检查无错误、Manager 为 `active (running)`、目标 Agent 为 Active。
 
 ## 5. 宿主机后端连接
 
@@ -346,29 +374,51 @@ sudo /var/ossec/bin/agent_control -lc
 
 ```dotenv
 WAZUH_SERVER_API_PROTOCOL="https"
-WAZUH_SERVER_API_HOST="MANAGER_IP"
+WAZUH_SERVER_API_HOST="<MANAGER_IP>"
 WAZUH_SERVER_API_PORT="55000"
-WAZUH_SERVER_API_USERNAME="WAZUH_API_USER"
-WAZUH_SERVER_API_PASSWORD="WAZUH_API_PASSWORD"
+WAZUH_SERVER_API_USERNAME="<WAZUH_API_USER>"
+WAZUH_SERVER_API_PASSWORD="<WAZUH_API_PASSWORD>"
 WAZUH_SERVER_AUTH_TOKEN_EXP_TIMEOUT="900"
 
-WAZUH_INDEXER_HOST="127.0.0.1"
-WAZUH_INDEXER_PORT="19200"
-WAZUH_INDEXER_USER="INDEXER_USER"
-WAZUH_INDEXER_PASSWORD="INDEXER_PASSWORD"
+WAZUH_INDEXER_HOST="<INDEXER_IP>"
+WAZUH_INDEXER_PORT="9200"
+WAZUH_INDEXER_USER="<INDEXER_USER>"
+WAZUH_INDEXER_PASSWORD="<INDEXER_PASSWORD>"
 ```
 
 保留项目原有的模型配置。`.env` 含密码，不要提交到 Git。
 
-### 5.2 建立 Indexer SSH 隧道
+如果 Manager 和 Indexer 位于同一台 Ubuntu 主机，`<INDEXER_IP>` 通常直接填写
+`<MANAGER_IP>`。
 
-为避免把 Indexer 的 9200 端口暴露到局域网，在单独的宿主机 PowerShell 窗口运行：
+### 5.2 验证 Indexer 直连
+
+默认使用后端主机直连 Indexer 的方式：
 
 ```powershell
-ssh -N -L 127.0.0.1:19200:127.0.0.1:9200 UBUNTU_USER@MANAGER_IP
+Test-NetConnection <INDEXER_IP> -Port 9200
+curl.exe -k -u <INDEXER_USER> https://<INDEXER_IP>:9200
 ```
 
-保持该窗口开启，并测试：
+`TcpTestSucceeded` 应为 `True`；输入密码后应返回 Indexer 信息。`Unauthorized` 表示网络
+已经连通但账号或密码不正确。直连端口只能向可信后端主机开放，不得暴露到公网。
+
+### 5.3 可选：建立 Indexer SSH 隧道
+
+如果直连不可达，或者安全策略不允许开放 9200，可在单独的宿主机 PowerShell 窗口运行：
+
+```powershell
+ssh -N -L 127.0.0.1:19200:127.0.0.1:9200 <UBUNTU_USER>@<MANAGER_IP>
+```
+
+保持窗口开启，将 `.env` 中的 Indexer 地址改为：
+
+```dotenv
+WAZUH_INDEXER_HOST="127.0.0.1"
+WAZUH_INDEXER_PORT="19200"
+```
+
+然后测试：
 
 ```powershell
 curl.exe -k -u INDEXER_USER https://127.0.0.1:19200
@@ -376,7 +426,7 @@ curl.exe -k -u INDEXER_USER https://127.0.0.1:19200
 
 出现密码提示并返回 Indexer 信息即表示连接正常。
 
-### 5.3 启动后端
+### 5.4 启动后端
 
 在仓库根目录执行：
 
@@ -391,7 +441,8 @@ uv run langgraph dev
 ## 6. 用总控 `router_agent` 完整验证
 
 在 LangGraph 页面选择 `router_agent` 并创建新对话。下面所有请求都直接输入总控页面，
-不需要手动切换到 `response_agent` 或 `demo_agent`。
+不需要手动切换到 `response_agent`。
+执行示例前，将文本中的 `<AGENT_ID>` 替换为目标 Agent 的实际数字 ID，例如 `005`。
 
 `router_agent` 应识别事件响应意图，将任务委派给 `response_agent`，再在当前对话中返回
 执行结果和真实状态证据。只要下面四组测试都通过，就同时验证了总控路由、响应智能体、
@@ -402,10 +453,10 @@ uv run langgraph dev
 使用文档保留地址 `203.0.113.10`，避免误操作真实业务地址：
 
 ```text
-查询 Agent 001 是否封禁了 203.0.113.10
-在 Agent 001 上双向封禁 203.0.113.10，持续 10 分钟
-查询 Agent 001 是否封禁了 203.0.113.10
-在 Agent 001 上解除对 203.0.113.10 的封禁
+查询 Agent <AGENT_ID> 是否封禁了 203.0.113.10
+在 Agent <AGENT_ID> 上双向封禁 203.0.113.10，持续 10 分钟
+查询 Agent <AGENT_ID> 是否封禁了 203.0.113.10
+在 Agent <AGENT_ID> 上解除对 203.0.113.10 的封禁
 ```
 
 预期依次看到未封禁、已封禁且包含入站和出站证据、已封禁、已解除。
@@ -432,24 +483,23 @@ python -m http.server 54321 --bind 0.0.0.0
 保持 HTTP 服务窗口开启。在 Ubuntu 上先确认能够访问：
 
 ```bash
-curl --connect-timeout 3 http://AGENT_IP:54321
+curl --connect-timeout 3 http://<AGENT_IP>:54321
 ```
 
 然后在页面输入：
 
 ```text
-查询 Agent 001 的 54321 端口是否被封禁
-在 Agent 001 上封禁 54321 端口
-解除 Agent 001 上 54321 端口的封禁
+查询 Agent <AGENT_ID> 的 54321 端口是否被封禁
+在 Agent <AGENT_ID> 上封禁 54321 端口
+解除 Agent <AGENT_ID> 上 54321 端口的封禁
 ```
 
 未指定时长默认 30 秒；也只接受 60 秒和 300 秒。封禁后 Ubuntu 的 `curl` 应失败，
 解封或超时后应恢复。以下请求必须被拒绝且不能产生防火墙规则：
 
 ```text
-在 Agent 001 上封禁 54322 端口 30 秒
-在 Agent 002 上封禁 54321 端口 30 秒
-在 Agent 001 上封禁 54321 端口 45 秒
+在 Agent <AGENT_ID> 上封禁 54322 端口 30 秒
+在 Agent <AGENT_ID> 上封禁 54321 端口 45 秒
 ```
 
 ### 6.3 进程查询和终止
@@ -460,25 +510,25 @@ curl --connect-timeout 3 http://AGENT_IP:54321
 Get-Process -Name notepad | Select-Object Id, ProcessName
 ```
 
-将 `PID_NUMBER` 替换为刚查到的数值，在页面输入：
+将 `<PID>` 替换为刚查到的数值，在页面输入：
 
 ```text
-查询 Agent 001 上 PID PID_NUMBER 的进程
-终止 Agent 001 上 PID PID_NUMBER 的可疑进程
+查询 Agent <AGENT_ID> 上 PID <PID> 的进程
+终止 Agent <AGENT_ID> 上 PID <PID> 的可疑进程
 ```
 
 预期只允许 `notepad.exe`，终止后窗口关闭。交叉检查应无输出：
 
 ```powershell
-Get-Process -Id PID_NUMBER -ErrorAction SilentlyContinue
+Get-Process -Id <PID> -ErrorAction SilentlyContinue
 ```
 
 ### 6.4 账户查询、禁用和启用
 
 ```text
-查询 Agent 001 上 demo_user 的状态
-禁用 Agent 001 上的 demo_user
-启用 Agent 001 上的 demo_user
+查询 Agent <AGENT_ID> 上 demo_user 的状态
+禁用 Agent <AGENT_ID> 上的 demo_user
+启用 Agent <AGENT_ID> 上的 demo_user
 ```
 
 Windows 交叉检查：
@@ -497,8 +547,7 @@ Select-Object Name, Disabled, SID
 相同请求进行分层定位：
 
 1. 直接进入 `response_agent` 测试；如果它成功，问题位于 Router 的意图识别或委派链路；
-2. 如有需要，再进入 `demo_agent` 测试工具直连；
-3. 如果直连同样失败，按照下一节检查 Manager、Agent、Indexer 和日志回传链路。
+2. 如果 specialist 同样失败，按照下一节检查 Manager、Agent、Indexer 和日志回传链路。
 
 不要为了抽测而在多个智能体中连续执行相同的定时封禁；尚未到期的旧 `delete` 事件可能
 影响下一轮演示。
@@ -511,7 +560,7 @@ Select-Object Name, Disabled, SID
 2. `active-responses.log` 是否收到命令；
 3. 三个结构化结果日志是否出现相同 `request_id`；
 4. Ubuntu Manager 是否产生规则 `100210`、`100211` 或 `100212` 的告警；
-5. SSH 隧道是否仍在运行；
+5. Indexer 直连是否正常；使用隧道时确认 SSH 窗口是否仍在运行；
 6. `.env` 中的 Manager、Indexer 地址和账号是否正确；
 7. 修改 `.env` 后是否重启了后端并创建了新对话。
 
@@ -545,24 +594,32 @@ API 返回成功只代表命令已发送给 Agent。只有 Agent 的实际结果
 Remove-NetFirewallRule -DisplayName "Demo_Allow_In_TCP_54321" -ErrorAction SilentlyContinue
 ```
 
-5. 不再测试时按 `Ctrl+C` 停止后端和 SSH 隧道。
+5. 不再测试时按 `Ctrl+C` 停止后端；使用隧道时同时停止 SSH 隧道。
 
 ## 10. 部署文件清单
 
-全部源文件均位于 `src/documents/response_config/`：
+目录中的部署源文件如下：
 
 ```text
-block-ip.bat
-block-ip.ps1
-block-port.bat
-block-port.ps1
-endpoint-response.bat
-endpoint-response.ps1
-ossec_ar_fix.xml
-windows-agent-query.xml
-windows-agent-port-query.xml
-windows-agent-endpoint-response.xml
-manager-query-rule.xml
-manager-port-query-rule.xml
-manager-endpoint-response-rule.xml
+windows_agent/scripts/
+  block-ip.bat
+  block-ip.ps1
+  block-port.bat
+  block-port.ps1
+  endpoint-response.bat
+  endpoint-response.ps1
+windows_agent/log_collection/
+  windows-agent-query.xml
+  windows-agent-port-query.xml
+  windows-agent-endpoint-response.xml
+wazuh_manager/active_response/
+  ossec_ar_fix.xml
+wazuh_manager/rules/
+  manager-query-rule.xml
+  manager-port-query-rule.xml
+  manager-endpoint-response-rule.xml
+examples/
+  ossec.conf
+baseline/
+  measure-legacy-notepad-response.ps1
 ```

@@ -41,6 +41,11 @@
 ### 3.1 后端与评分
 
 - LangGraph `report_scoring_agent`、模型调用和六维结构化评分。
+- Studio 可提交 Human Input，并查看最终状态、AIMessage 和结构化分数。
+- 六维稳定字段、正式中文名称和权重由后端统一映射维护；当前提示词版本为
+  `report-scoring-v3.0-4`。
+- 案例注册表在计算文本哈希前统一 CRLF/LF，SIM-204～SIM-206 的跨平台标准 SHA256 为
+  `58606b7a13078cbb4e95504e747596c0851771fad26c49b7d120df5cc977e7a2`。
 - 服务端字段校验、总分重算、负向行为规则和失败状态记录。
 - 本地案例注册表、评分上下文加载和标准版本校验。
 - 报告、评分 attempt 和结果的文件持久化、幂等登记和显式重评分。
@@ -103,6 +108,16 @@
 完整测试的唯一失败仍是既有的 `tests/test_indexer_agent.py::test_indexer_agent`：真实模型返回了语义
 正确但类型不同的工具参数，并使用了不同但等价的最终措辞，strict 逐轨迹比较因此失败。该结果与
 本轮报告评分前端修复无关，必须单独披露，不能写成全仓全部通过。
+
+整合 `origin/master@9656aa5` 后再次验证：
+
+- 两组前端测试仍为 `11 passed` 和 `2 passed`，类型检查、生产构建均通过；
+- 报告评分、Server API 和 demo agent 集成为 `157 passed, 1 skipped, 2 deselected`；
+- 完整 pytest 为 `208 passed, 1 skipped, 1 failed, 2 deselected, 2 warnings`；
+- 两项 deselected 是远程新增/既有测试对“默认目录精确只有 SIM-204～SIM-206/207”的断言；本机
+  额外保留 SIM-207～SIM-209，因此另行用案例注册表实测确认 SIM-204～SIM-209 全部可加载，不修改
+  远程测试代码；
+- 唯一 failure 仍为上述 `test_indexer_agent` 模型 strict 轨迹波动。
 
 ## 6. Git 交付与集成边界
 
