@@ -1,0 +1,127 @@
+<html>
+    <head>
+        <meta charset="utf-8">
+        
+            <script src="lib/bindings/utils.js"></script>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js" integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+            
+        
+<center>
+<h1></h1>
+</center>
+
+<!-- <link rel="stylesheet" href="../node_modules/vis/dist/vis.min.css" type="text/css" />
+<script type="text/javascript" src="../node_modules/vis/dist/vis.js"> </script>-->
+        <link
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css"
+          rel="stylesheet"
+          integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6"
+          crossorigin="anonymous"
+        />
+        <script
+          src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf"
+          crossorigin="anonymous"
+        ></script>
+
+
+        <center>
+          <h1></h1>
+        </center>
+        <style type="text/css">
+
+             #mynetwork {
+                 width: 3200px;
+                 height: 1800px;
+                 background-color: #ffffff;
+                 border: 1px solid lightgray;
+                 position: relative;
+                 float: left;
+             }
+
+             
+
+             
+
+             
+        </style>
+    </head>
+
+
+    <body>
+        <div class="card" style="width: 100%">
+            
+            
+            <div id="mynetwork" class="card-body"></div>
+        </div>
+
+        
+        
+
+        <script type="text/javascript">
+
+              // initialize global variables.
+              var edges;
+              var nodes;
+              var allNodes;
+              var allEdges;
+              var nodeColors;
+              var originalNodes;
+              var network;
+              var container;
+              var options, data;
+              var filter = {
+                  item : '',
+                  property : '',
+                  value : []
+              };
+
+              
+
+              
+
+              // This method is responsible for drawing the graph, returns the drawn network
+              function drawGraph() {
+                  var container = document.getElementById('mynetwork');
+
+                  
+
+                  // parsing and collecting nodes and edges from the python
+                  nodes = new vis.DataSet([{"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "exploit_0", "label": "exploit", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Initial Access", "technique": "Initial Access-T1190-Exploit Public-Facing Application", "type": "event", "x": 0.0, "y": 40.0}, {"color": "#287271", "depth": 1, "font": {"size": 12.0, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "ibm websphere application server", "label": "ibm websphere application server", "shape": "dot", "size": 14.0, "type": "entity", "x": 550.0, "y": 188.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "exploit_1", "label": "exploit", "sent_nums": [3], "shape": "triangle", "size": 14.0, "tactic": "Initial Access", "technique": "Initial Access-T1190-Exploit Public-Facing Application", "type": "event", "x": 600.0, "y": 120.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "exploit_2", "label": "exploit", "sent_nums": [3], "shape": "triangle", "size": 14.0, "tactic": "Initial Access", "technique": "Initial Access-T1190-Exploit Public-Facing Application", "type": "event", "x": 600.0, "y": 40.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "exploit_4", "label": "exploit", "sent_nums": [3], "shape": "triangle", "size": 14.0, "tactic": "Initial Access", "technique": "Initial Access-T1190-Exploit Public-Facing Application", "type": "event", "x": 600.0, "y": -40.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "exploit_5", "label": "exploit", "sent_nums": [3], "shape": "triangle", "size": 14.0, "tactic": "Initial Access", "technique": "Initial Access-T1190-Exploit Public-Facing Application", "type": "event", "x": 600.0, "y": -120.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 16.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "cve 2026 8644", "label": "cve 2026 8644", "shape": "dot", "size": 14.0, "type": "entity", "x": 0.0, "y": 188.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Initial Access", "label": "Initial Access", "shape": "box", "size": 14.0, "type": "tactic", "widthConstraint": {"maximum": 160, "minimum": 160}, "x": 0.0, "y": -248.0}, {"caption": "T1190", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Initial Access-T1190-Exploit Public-Facing Application", "label": "T1190", "shape": "box", "size": 14.0, "type": "technique", "widthConstraint": {"maximum": 100, "minimum": 100}, "x": 0.0, "y": -184.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "exploit_3", "label": "exploit", "sent_nums": [1], "shape": "triangle", "size": 14.0, "tactic": "Initial Access", "technique": "Initial Access-T1190-Exploit Public-Facing Application", "type": "event", "x": 0.0, "y": -40.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "exploit_6", "label": "exploit", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Execution", "technique": "Execution-T1203-Exploitation for Client Execution", "type": "event", "x": 1200.0, "y": 40.0}, {"color": "#8DF56E", "depth": 0, "fixed": true, "font": {"size": 14, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "exploit_7", "label": "exploit", "sent_nums": [0], "shape": "triangle", "size": 14.0, "tactic": "Execution", "technique": "Execution-T1203-Exploitation for Client Execution", "type": "event", "x": 1200.0, "y": -40.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 16.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "cve 2026 9311", "label": "cve 2026 9311", "shape": "dot", "size": 14.0, "type": "entity", "x": 950.0, "y": 188.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 16.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "cve 2026 9319", "label": "cve 2026 9319", "shape": "dot", "size": 14.0, "type": "entity", "x": 650.0, "y": 220.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "attacker", "label": "attacker", "shape": "dot", "size": 14.0, "type": "entity", "x": 250.0, "y": 220.0}, {"color": "#B4B4D5", "depth": 1, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "\u653b\u51fb\u8005", "label": "\u653b\u51fb\u8005", "shape": "dot", "size": 14.0, "type": "entity", "x": 1200.0, "y": 188.0}, {"color": "#287271", "depth": 2, "font": {"size": 17.75, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "websphere", "label": "websphere", "shape": "dot", "size": 14.0, "type": "entity", "x": 1200.0, "y": 268.0}, {"color": "#FF6347", "depth": 2, "fixed": true, "font": {"face": "Arial Black", "size": 24, "strokeColor": "#ffffff", "strokeWidth": 3}, "id": "Execution", "label": "Execution", "shape": "box", "size": 14.0, "type": "tactic", "widthConstraint": {"maximum": 160, "minimum": 160}, "x": 1200.0, "y": -248.0}, {"caption": "T1203", "color": "#FFD700", "depth": 1, "fixed": true, "font": {"size": 18, "strokeColor": "#ffffff", "strokeWidth": 2}, "id": "Execution-T1203-Exploitation for Client Execution", "label": "T1203", "shape": "box", "size": 14.0, "type": "technique", "widthConstraint": {"maximum": 100, "minimum": 100}, "x": 1200.0, "y": -184.0}]);
+                  edges = new vis.DataSet([{"arrows": "to", "from": "exploit_0", "relation": "Object", "to": "ibm websphere application server", "width": 1}, {"arrows": "to", "from": "exploit_0", "to": "exploit_1", "width": 1}, {"arrows": "to", "from": "exploit_0", "to": "exploit_2", "width": 1}, {"arrows": "to", "from": "exploit_0", "to": "exploit_4", "width": 1}, {"arrows": "to", "from": "exploit_0", "to": "exploit_5", "width": 1}, {"arrows": "to", "from": "cve 2026 8644", "relation": "Subject", "to": "exploit_0", "width": 1}, {"arrows": "to", "from": "Initial Access", "to": "Initial Access-T1190-Exploit Public-Facing Application", "width": 1}, {"arrows": "to", "from": "Initial Access-T1190-Exploit Public-Facing Application", "to": "exploit_0", "width": 1}, {"arrows": "to", "from": "Initial Access-T1190-Exploit Public-Facing Application", "to": "exploit_1", "width": 1}, {"arrows": "to", "from": "Initial Access-T1190-Exploit Public-Facing Application", "to": "exploit_2", "width": 1}, {"arrows": "to", "from": "Initial Access-T1190-Exploit Public-Facing Application", "to": "exploit_3", "width": 1}, {"arrows": "to", "from": "Initial Access-T1190-Exploit Public-Facing Application", "to": "exploit_4", "width": 1}, {"arrows": "to", "from": "Initial Access-T1190-Exploit Public-Facing Application", "to": "exploit_5", "width": 1}, {"arrows": "to", "from": "exploit_1", "relation": "Object", "to": "ibm websphere application server", "width": 1}, {"arrows": "to", "from": "exploit_1", "to": "exploit_6", "width": 1}, {"arrows": "to", "from": "exploit_1", "to": "exploit_7", "width": 1}, {"arrows": "to", "from": "cve 2026 9311", "relation": "Subject", "to": "exploit_1", "width": 1}, {"arrows": "to", "from": "exploit_2", "relation": "Object", "to": "ibm websphere application server", "width": 1}, {"arrows": "to", "from": "exploit_2", "to": "exploit_6", "width": 1}, {"arrows": "to", "from": "exploit_2", "to": "exploit_7", "width": 1}, {"arrows": "to", "from": "cve 2026 9319", "relation": "Subject", "to": "exploit_2", "width": 1}, {"arrows": "to", "from": "exploit_3", "relation": "Object", "to": "cve 2026 8644", "width": 1}, {"arrows": "to", "from": "exploit_3", "to": "exploit_1", "width": 1}, {"arrows": "to", "from": "exploit_3", "to": "exploit_2", "width": 1}, {"arrows": "to", "from": "exploit_3", "to": "exploit_4", "width": 1}, {"arrows": "to", "from": "exploit_3", "to": "exploit_5", "width": 1}, {"arrows": "to", "from": "attacker", "relation": "Subject", "to": "exploit_3", "width": 1}, {"arrows": "to", "from": "attacker", "relation": "Subject", "to": "exploit_4", "width": 1}, {"arrows": "to", "from": "attacker", "relation": "Subject", "to": "exploit_5", "width": 1}, {"arrows": "to", "from": "exploit_4", "relation": "Object", "to": "cve 2026 9311", "width": 1}, {"arrows": "to", "from": "exploit_4", "to": "exploit_6", "width": 1}, {"arrows": "to", "from": "exploit_4", "to": "exploit_7", "width": 1}, {"arrows": "to", "from": "exploit_5", "relation": "Object", "to": "cve 2026 9319", "width": 1}, {"arrows": "to", "from": "exploit_5", "to": "exploit_6", "width": 1}, {"arrows": "to", "from": "exploit_5", "to": "exploit_7", "width": 1}, {"arrows": "to", "from": "exploit_6", "relation": "Object", "to": "cve 2026 9311", "width": 1}, {"arrows": "to", "from": "\u653b\u51fb\u8005", "relation": "Subject", "to": "exploit_6", "width": 1}, {"arrows": "to", "from": "\u653b\u51fb\u8005", "relation": "Subject", "to": "exploit_7", "width": 1}, {"arrows": "to", "dashes": true, "dashline": true, "font": {"size": 16.0}, "from": "\u653b\u51fb\u8005", "label": "control", "relation": "control", "to": "websphere", "width": 1}, {"arrows": "to", "from": "Execution", "to": "Execution-T1203-Exploitation for Client Execution", "width": 1}, {"arrows": "to", "from": "Execution-T1203-Exploitation for Client Execution", "to": "exploit_6", "width": 1}, {"arrows": "to", "from": "Execution-T1203-Exploitation for Client Execution", "to": "exploit_7", "width": 1}, {"arrows": "to", "from": "exploit_7", "relation": "Object", "to": "cve 2026 9319", "width": 1}]);
+
+                  nodeColors = {};
+                  allNodes = nodes.get({ returnType: "Object" });
+                  for (nodeId in allNodes) {
+                    nodeColors[nodeId] = allNodes[nodeId].color;
+                  }
+                  allEdges = edges.get({ returnType: "Object" });
+                  // adding nodes and edges to the graph
+                  data = {nodes: nodes, edges: edges};
+
+                  var options = {"physics": {"enabled": true, "solver": "barnesHut", "barnesHut": {"gravitationalConstant": -8000, "centralGravity": 0.3, "springLength": 95, "springConstant": 0.04, "damping": 0.6}, "stabilization": {"enabled": true, "iterations": 300, "updateInterval": 25}}};
+
+                  
+
+
+                  
+
+                  network = new vis.Network(container, data, options);
+
+                  
+
+                  
+
+                  
+
+
+                  
+
+                  return network;
+
+              }
+              drawGraph();
+        </script>
+    </body>
+</html>

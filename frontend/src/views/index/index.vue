@@ -25,6 +25,7 @@ import process_monitor from './process_monitor.vue';
 import threat_hunt from './threat_hunt.vue';
 import SecurityInsights from './security_insights.vue';
 import knowledge_graph from './knowledge_graph.vue';
+import attack_pattern from './attack_pattern.vue';
 
 // 控制页面切换
 const currentPage = ref(1);
@@ -62,9 +63,10 @@ const sidebarGroups = [
     title: '日志与漏洞',
     items: [
       { key: 'archives',      icon: '📋', label: '历史日志查询' },
-      { key: 'vulnerability', icon: '🔍', label: '漏洞查询' },
+      { key: 'vulnerability', icon: '🔍', label: '漏洞知识实体化' },
       { key: 'vulnerability-overview', icon: '🎯', label: '漏洞信息总览' },
       { key: 'security-insights', icon: '🔭', label: '安全洞察总览' },
+      { key: 'attack-pattern', icon: '🧬', label: '攻击特征规律' },
     ]
   },
   {
@@ -262,6 +264,9 @@ const latestAttackSvgs = computed(() => {
         </template>
         <template v-else-if="currentMenu === 'security-insights'">
           <SecurityInsights />
+        </template>
+        <template v-else-if="currentMenu === 'attack-pattern'">
+          <attack_pattern />
         </template>
         <template v-else-if="currentMenu === 'assets'">
           <asset_list />

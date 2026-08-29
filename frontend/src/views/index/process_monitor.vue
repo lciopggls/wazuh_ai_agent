@@ -94,6 +94,7 @@ const fetchProcesses = async (isRetry = false) => {
   }
 
   loading.value = true;
+  const startTime = performance.now();
 
   try {
     // 调用 Wazuh 的 syscollector 进程监控接口
@@ -113,6 +114,10 @@ const fetchProcesses = async (isRetry = false) => {
     }
   } finally {
     loading.value = false;
+    // 查询耗时统计：查询结束后弹出耗时提示
+    const elapsed = performance.now() - startTime;
+    const duration = elapsed >= 1000 ? `${(elapsed / 1000).toFixed(2)} s` : `${Math.round(elapsed)} ms`;
+    ElMessage.info(`查询耗时 ${duration}`);
   }
 };
 
