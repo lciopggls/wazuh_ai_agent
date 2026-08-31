@@ -52,6 +52,12 @@ class ScoringService:
 
     @staticmethod
     def _is_current_result(result: ScoreResult, report, case) -> bool:
+        if not result.standard_sha256 or not result.scoring_context_sha256:
+            return False
+        scoring_fingerprint = (
+            result.standard_sha256.lower(),
+            result.scoring_context_sha256.lower(),
+        )
         if not (
             result.scoring_contract_version == SCORING_CONTRACT_VERSION
             and result.scoring_agent_version == SCORING_AGENT_VERSION
@@ -61,8 +67,7 @@ class ScoringService:
             and result.agent_id == report.agent_id
             and result.report_sha256.lower() == report.report_sha256.lower()
             and result.input_sha256.lower() == case.manifest.input_sha256.lower()
-            and result.standard_sha256.lower() == case.manifest.standard_sha256.lower()
-            and result.scoring_context_sha256 == case.scoring_context_sha256
+            and scoring_fingerprint in case.compatible_scoring_fingerprints
             and result.scoring_standard_version == case.manifest.scoring_standard_version
         ):
             return False

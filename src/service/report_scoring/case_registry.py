@@ -30,6 +30,7 @@ class RegisteredTestCase:
     telemetry_boundaries: tuple[str, ...]
     scoring_standard: str
     scoring_context_sha256: str
+    compatible_scoring_fingerprints: frozenset[tuple[str, str]]
     expected_report: str
 
 
@@ -228,10 +229,24 @@ class CaseRegistry:
             for index, path in enumerate(telemetry_paths)
         )
         telemetry_boundaries = tuple(text for text, _ in telemetry_material)
-        scoring_context_sha256 = self._sha256(
-            b"\0".join(
-                [input_raw, ground_truth_raw, *(raw for _, raw in telemetry_material), standard_raw]
-            )
+        scoring_material = [
+            input_raw,
+            ground_truth_raw,
+            *(raw for _, raw in telemetry_material),
+            standard_raw,
+        ]
+        scoring_context_sha256 = self._sha256(b"\0".join(scoring_material))
+        compatible_scoring_fingerprints = frozenset(
+            {
+                (manifest.standard_sha256.lower(), scoring_context_sha256),
+                *(
+                    (
+                        fingerprint.standard_sha256.lower(),
+                        fingerprint.scoring_context_sha256.lower(),
+                    )
+                    for fingerprint in manifest.compatible_scoring_fingerprints
+                ),
+            }
         )
 
         if self._sha256(input_raw) != manifest.input_sha256.lower():
@@ -271,6 +286,7 @@ class CaseRegistry:
             telemetry_boundaries=telemetry_boundaries,
             scoring_standard=standard,
             scoring_context_sha256=scoring_context_sha256,
+            compatible_scoring_fingerprints=compatible_scoring_fingerprints,
             expected_report=expected_report,
         )
 

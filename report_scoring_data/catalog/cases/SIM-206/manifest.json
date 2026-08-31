@@ -11,5 +11,11 @@
   "telemetry_boundary_paths": ["archives_evidence.md"],
   "expected_report_path": "expected_report.md",
   "input_sha256": "7f0279dbeaa987ad3c02ffa452b1e62dadbbd7f3b6076139b964c2a5b49b9d5d",
-  "standard_sha256": "58606b7a13078cbb4e95504e747596c0851771fad26c49b7d120df5cc977e7a2"
+  "standard_sha256": "58606b7a13078cbb4e95504e747596c0851771fad26c49b7d120df5cc977e7a2",
+  "compatible_scoring_fingerprints": [
+    {
+      "standard_sha256": "55484bd1528841dfd3d6f21798b50b19a9ccff938110db9b856a3f938889bff9",
+      "scoring_context_sha256": "be97c7240028990dcbc0c2f5989fc9fe85443678937bcb9b63c1bc818e913805"
+    }
+  ]
 }

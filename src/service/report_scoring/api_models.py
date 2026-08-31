@@ -14,6 +14,13 @@ Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{64}$")]
 TestCaseId = Annotated[str, StringConstraints(pattern=r"^SIM-[0-9]{3}$")]
 
 
+class ScoringFingerprint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    standard_sha256: Sha256
+    scoring_context_sha256: Sha256
+
+
 class TestCaseManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -30,6 +37,7 @@ class TestCaseManifest(BaseModel):
     expected_report_path: RelativePath
     input_sha256: Sha256
     standard_sha256: Sha256
+    compatible_scoring_fingerprints: list[ScoringFingerprint] = Field(default_factory=list)
 
 
 class AgentDefinition(BaseModel):

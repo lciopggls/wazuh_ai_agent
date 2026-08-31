@@ -88,6 +88,73 @@ def test_request_id_and_first_score_are_idempotent(tmp_path, valid_score_dict):
     assert model.calls == 1
 
 
+def test_declared_newline_legacy_result_remains_current_after_restart(tmp_path, valid_score_dict):
+    service, report, model = make_service(tmp_path, valid_score_dict)
+    request_id = str(uuid.uuid4())
+    response = service.score(report.report_id, request_id)
+    case = service.case_registry.get_case(report.test_case_id)
+    legacy_fingerprint = next(
+        fingerprint
+        for fingerprint in case.compatible_scoring_fingerprints
+        if fingerprint[0] != case.manifest.standard_sha256
+    )
+    attempt_dir = (
+        service.score_repository.attempts_root / report.report_id / response.attempt.attempt_id
+    )
+    result_path = attempt_dir / "result.json"
+    result_payload = json.loads(result_path.read_text(encoding="utf-8"))
+    result_payload["standard_sha256"] = legacy_fingerprint[0]
+    result_payload["scoring_context_sha256"] = legacy_fingerprint[1]
+    result_path.write_text(
+        json.dumps(result_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    reloaded_scores = ScoreRepository(tmp_path / "runtime")
+    reloaded = ScoringService(
+        service.case_registry,
+        service.report_repository,
+        reloaded_scores,
+        model,
+    )
+
+    latest = reloaded.latest_current_success(report.report_id)
+    reused = reloaded.score(report.report_id, request_id)
+
+    assert latest is not None
+    assert latest.score_id == response.result.score_id
+    assert reused.reused is True
+    assert reused.result.score_id == response.result.score_id
+    assert model.calls == 1
+
+
+def test_unknown_scoring_context_remains_outdated(tmp_path, valid_score_dict):
+    service, report, model = make_service(tmp_path, valid_score_dict)
+    request_id = str(uuid.uuid4())
+    response = service.score(report.report_id, request_id)
+    attempt_dir = (
+        service.score_repository.attempts_root / report.report_id / response.attempt.attempt_id
+    )
+    result_path = attempt_dir / "result.json"
+    result_payload = json.loads(result_path.read_text(encoding="utf-8"))
+    result_payload["scoring_context_sha256"] = "f" * 64
+    result_path.write_text(
+        json.dumps(result_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    reloaded_scores = ScoreRepository(tmp_path / "runtime")
+    reloaded = ScoringService(
+        service.case_registry,
+        service.report_repository,
+        reloaded_scores,
+        model,
+    )
+
+    assert reloaded.latest_current_success(report.report_id) is None
+    with pytest.raises(ReportScoringError) as exc_info:
+        reloaded.score(report.report_id, request_id)
+    assert exc_info.value.code == "SCORING_RESULT_OUTDATED"
+
+
 def test_v1_result_remains_in_history_but_is_not_current_or_reused(tmp_path, valid_score_dict):
     service, report, model = make_service(tmp_path, valid_score_dict)
     old_request_id = str(uuid.uuid4())
