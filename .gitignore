@@ -20,6 +20,11 @@ ossec.conf.block-ip-ready
 src/documents/response_config/legacy-notepad-*-results.csv
 .claude/
 
+# Codex local workspaces and generated review artifacts
+.codex_tmp/
+.codex_v3_build/
+.codex_v3_review/
+
 # Knowledge Graph
 src/knowledge_graph/data/1_rewrite/
 src/knowledge_graph/data/2_extract/
