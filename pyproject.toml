@@ -47,7 +47,6 @@ packages = ["src/core", "src/wazuh_api", "src/agents", "src/service"]
 # Use uv to manage development environment, uv add --dev pkg
 [dependency-groups]
 dev = [
-    "agentevals>=0.0.9",
     "black>=26.1.0",
     "langgraph-cli[inmem]>=0.4.11",
     "pytest>=9.0.2",

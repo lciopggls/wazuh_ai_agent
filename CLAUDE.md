@@ -40,7 +40,7 @@ uv run wazuh-topology-api    # starts uvicorn on 0.0.0.0:8000
 
 ### Agent Graph Hierarchy (defined in `langgraph.json`)
 
-Six LangGraph graphs are registered, all in [src/agents/agent.py](src/agents/agent.py):
+Five LangGraph graphs are registered, all in [src/agents/agent.py](src/agents/agent.py):
 
 ```
 router_agent        ← Main orchestrator (ReAct-style with tools)
@@ -49,7 +49,6 @@ router_agent        ← Main orchestrator (ReAct-style with tools)
   └─ response_agent ← IP blocking (ReAct-style with tools)
 
 demo_agent          ← Simple Wazuh API demo
-indexer_agent       ← Raw Indexer data access (standalone)
 ```
 
 ### Router Agent ([src/agents/router_agent.py](src/agents/router_agent.py))
@@ -102,7 +101,7 @@ The `AttributionState` carries structured routing actions (`next_action_fromPlan
 ### Configuration ([src/core/config.py](src/core/config.py))
 
 Uses `pydantic-settings` loading from `.env`. Two LLM model configs:
-- `TEST_LLM_*` — default model for router, rule, indexer, demo, response agents
+- `TEST_LLM_*` — default model for router, rule, demo, response agents
 - `ATTRIBUTION_*` — dedicated model for attack attribution (with extended HTTP timeout and `model_kwargs` support for DeepSeek Pro thinking-mode disable)
 
 ### Services ([src/service/](src/service/))
@@ -127,7 +126,7 @@ Vue 3 + TypeScript + Vite. Key dependencies: Element Plus (UI), ECharts (charts)
 Tests in [tests/](tests/) use pytest. Key test files:
 - `test_router_agent.py` — router delegation and authorization logic
 - `test_rule_agent_graph.py` — rule agent graph nodes
-- `test_indexer_agent.py` / `test_indexer_api.py` — indexer queries
+- `test_indexer_api.py` — indexer queries
 - `test_server_api.py` — Wazuh server API wrappers
 - `test_attack_attributor.py` — attack attribution flow
 - `test_topology_api.py` / `test_wazuh_server_token.py` — services

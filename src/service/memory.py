@@ -14,22 +14,14 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 # LangChain / LangGraph 导入
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from core.config import settings
-from service.report_scoring.api_models import ScoringRegistration
-from service.report_scoring.bootstrap import create_report_scoring_runtime
-from service.report_scoring.errors import ReportScoringError
-from service.report_scoring.report_repository import MAX_REPORT_BYTES
-from service.report_scoring.router import (
-    create_report_scoring_router,
-    create_unavailable_report_scoring_router,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -52,19 +44,15 @@ llm = ChatOpenAI(
 
 # 初始化智能体注册表
 def initialize_agents():
-    # 延迟导入，避免报告保存/评分等独立接口在模块导入时连接 Wazuh。
+    # 延迟导入，避免报告保存等独立接口在模块导入时连接 Wazuh。
     from agents.agent import (
         get_attack_attribution_agent,
-        get_baseline_agent_plus,
-        get_baseline_agent_simple,
         get_router_agent,
     )
 
     return {
         "router_agent": get_router_agent(llm, llm, llm, checkpointer=memory),
         "attack_attribution": get_attack_attribution_agent(llm, checkpointer=memory),
-        "baseline_agent_simple": get_baseline_agent_simple(llm, checkpointer=memory),
-        "baseline_agent_plus": get_baseline_agent_plus(llm, checkpointer=memory),
     }
 
 
@@ -88,9 +76,6 @@ class ChatInput(BaseModel):
 class SaveReportInput(BaseModel):
     content: str
     filename: str | None = None  # 可选，不传则自动生成
-    # Keep the optional registration raw until the core report has been saved.
-    # Otherwise FastAPI would reject the whole request before save_report runs.
-    scoring_registration: Any | None = None
 
 
 async def event_generator(data: ChatInput) -> AsyncGenerator[str, None]:
@@ -162,15 +147,41 @@ REPORT_OUTPUT_DIR = os.path.join(
     "input",
 )
 
+MAX_REPORT_BYTES = 1024 * 1024
+
+
+class ReportSaveError(Exception):
+    """Structured error returned by the local report-save endpoint."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status_code: int = 400,
+        field: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+        self.field = field
+
+    def as_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"code": self.code, "message": self.message}
+        if self.field is not None:
+            payload["field"] = self.field
+        return payload
+
 
 def _save_report_to_output(content: str, requested_filename: str | None) -> Path:
     """Persist one local Markdown report without overwriting different content."""
 
     if not content.strip():
-        raise ReportScoringError("EMPTY_REPORT", "报告内容不能为空")
+        raise ReportSaveError("EMPTY_REPORT", "报告内容不能为空")
     encoded = content.encode("utf-8")
     if len(encoded) > MAX_REPORT_BYTES:
-        raise ReportScoringError("FILE_TOO_LARGE", "报告文件不能超过 1 MiB")
+        raise ReportSaveError("FILE_TOO_LARGE", "报告文件不能超过 1 MiB")
 
     output_root = Path(REPORT_OUTPUT_DIR)
     output_root.mkdir(parents=True, exist_ok=True)
@@ -183,11 +194,11 @@ def _save_report_to_output(content: str, requested_filename: str | None) -> Path
         digest = hashlib.sha256(encoded).hexdigest()[:10]
         filename = f"attack_trace_report_{timestamp}_{digest}.md"
     if not filename or filename in {".", ".."}:
-        raise ReportScoringError("INVALID_REPORT_FILENAME", "报告文件名无效", field="filename")
+        raise ReportSaveError("INVALID_REPORT_FILENAME", "报告文件名无效", field="filename")
     if not filename.lower().endswith(".md"):
         filename += ".md"
     if len(filename) > 255:
-        raise ReportScoringError(
+        raise ReportSaveError(
             "INVALID_REPORT_FILENAME", "报告文件名不能超过 255 个字符", field="filename"
         )
 
@@ -196,7 +207,7 @@ def _save_report_to_output(content: str, requested_filename: str | None) -> Path
         candidate_name = base.name if sequence == 1 else f"{base.stem}-{sequence}{base.suffix}"
         candidate = output_root / candidate_name
         if candidate.resolve().parent != resolved_root:
-            raise ReportScoringError(
+            raise ReportSaveError(
                 "INVALID_REPORT_FILENAME", "报告文件路径超出允许目录", field="filename"
             )
         try:
@@ -213,11 +224,11 @@ def _save_report_to_output(content: str, requested_filename: str | None) -> Path
                 pass
             continue
         except OSError:
-            raise ReportScoringError(
+            raise ReportSaveError(
                 "REPORT_SAVE_FAILED", "报告无法写入本地输出目录", status_code=500
             ) from None
 
-    raise ReportScoringError("REPORT_SAVE_FAILED", "无法为报告分配唯一文件名", status_code=500)
+    raise ReportSaveError("REPORT_SAVE_FAILED", "无法为报告分配唯一文件名", status_code=500)
 
 
 # ── 知识图谱路径配置 ──
@@ -241,86 +252,13 @@ async def save_report(data: SaveReportInput):
         filename = saved_path.name
         filepath = str(saved_path)
 
-        response = {
+        return {
             "status": "ok",
             "filepath": filepath,
             "filename": filename,
             "message": f"报告已保存: {filename}",
         }
-        if data.scoring_registration is not None:
-            try:
-                registration = ScoringRegistration.model_validate(data.scoring_registration)
-            except ValidationError as exc:
-                invalid = ReportScoringError(
-                    "INVALID_REPORT_REGISTRATION",
-                    "评分登记字段无效，原报告已按核心流程保存",
-                    status_code=422,
-                    details={
-                        "errors": [
-                            {
-                                "field": ".".join(str(part) for part in error["loc"]),
-                                "message": error["msg"],
-                            }
-                            for error in exc.errors()
-                        ]
-                    },
-                )
-                response["scoring_registration"] = {
-                    "status": "error",
-                    "error": invalid.as_dict(),
-                }
-            else:
-                if report_repository is None:
-                    unavailable = ReportScoringError(
-                        "SCORING_UNAVAILABLE",
-                        "报告评分服务当前不可用，报告已按原流程保存",
-                        status_code=503,
-                    )
-                    response["scoring_registration"] = {
-                        "status": "error",
-                        "error": unavailable.as_dict(),
-                    }
-                else:
-                    try:
-                        record = report_repository.create_report(
-                            content=data.content.encode("utf-8"),
-                            filename=filename,
-                            test_case_id=registration.test_case_id,
-                            agent_id=registration.agent_id,
-                            source_type="ai_chat",
-                            thread_id=registration.thread_id,
-                            run_id=registration.run_id,
-                            note=registration.note,
-                        )
-                        response["scoring_registration"] = {
-                            "status": "ok",
-                            "report": record.model_dump(mode="json"),
-                        }
-                    except ReportScoringError as exc:
-                        partial_failure = ReportScoringError(
-                            exc.code,
-                            f"原报告已保存；评分登记失败：{exc.message}",
-                            status_code=exc.status_code,
-                            field=exc.field,
-                            details=exc.details,
-                        )
-                        response["scoring_registration"] = {
-                            "status": "error",
-                            "error": partial_failure.as_dict(),
-                        }
-                    except Exception:
-                        logger.exception("评分登记失败；核心报告已保存")
-                        failed = ReportScoringError(
-                            "SCORING_REGISTRATION_ERROR",
-                            "评分登记失败，原报告已按核心流程保存",
-                            status_code=500,
-                        )
-                        response["scoring_registration"] = {
-                            "status": "error",
-                            "error": failed.as_dict(),
-                        }
-        return response
-    except ReportScoringError as exc:
+    except ReportSaveError as exc:
         return {"status": "error", **exc.as_dict()}
     except Exception:
         logger.exception("报告保存失败")
@@ -329,37 +267,6 @@ async def save_report(data: SaveReportInput):
             "code": "REPORT_SAVE_FAILED",
             "message": "报告保存失败",
         }
-
-
-# ── 开发期报告评分 API ──
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_SCORING_DATA_ROOT = _PROJECT_ROOT / "report_scoring_data"
-report_scoring_runtime = None
-case_registry = None
-report_repository = None
-score_repository = None
-scoring_service = None
-try:
-    report_scoring_runtime = create_report_scoring_runtime(_SCORING_DATA_ROOT, llm)
-    case_registry = report_scoring_runtime.case_registry
-    report_repository = report_scoring_runtime.report_repository
-    score_repository = report_scoring_runtime.score_repository
-    scoring_service = report_scoring_runtime.scoring_service
-except Exception as exc:  # optional subsystem must not block core application startup
-    logger.warning("Report scoring subsystem is unavailable: %s", type(exc).__name__)
-
-
-@app.exception_handler(ReportScoringError)
-async def report_scoring_error_handler(_request, exc: ReportScoringError):
-    return JSONResponse(status_code=exc.status_code, content=exc.as_dict())
-
-
-if report_scoring_runtime is None:
-    app.include_router(create_unavailable_report_scoring_router())
-else:
-    app.include_router(
-        create_report_scoring_router(case_registry, report_repository, scoring_service)
-    )
 
 
 # ──────────────────────────────────────────────
