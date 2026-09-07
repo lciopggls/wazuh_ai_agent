@@ -24,6 +24,7 @@ src/documents/response_config/legacy-notepad-*-results.csv
 .codex_tmp/
 .codex_v3_build/
 .codex_v3_review/
+dataset_CTI/
 
 # Knowledge Graph
 src/knowledge_graph/data/1_rewrite/
