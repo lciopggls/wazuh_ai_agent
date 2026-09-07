@@ -198,7 +198,8 @@ def test_negative_behavior_id_must_match_canonical_text(
 
 
 @pytest.mark.parametrize(
-    ("case_id", "atom_count"), [("SIM-204", 5), ("SIM-205", 6), ("SIM-206", 5)]
+    ("case_id", "atom_count"),
+    [("SIM-204", 5), ("SIM-205", 6), ("SIM-206", 5), ("SIM-208", 5), ("SIM-209", 6)],
 )
 def test_each_case_atomic_catalog_can_reach_v3_negative_cap(valid_score_dict, case_id, atom_count):
     catalog = CaseRegistry(PROJECT_CATALOG).get_case(case_id).negative_behavior_catalog

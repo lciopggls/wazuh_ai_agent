@@ -33,7 +33,8 @@ def test_default_catalog_loads_published_cases_and_canonical_agents():
         "SIM-204",
         "SIM-205",
         "SIM-206",
-        "SIM-207",
+        "SIM-208",
+        "SIM-209",
     ]
     assert [agent.agent_id for agent in registry.list_agents()] == [
         "attack_attribution_agent",
@@ -89,6 +90,27 @@ def test_sim205_telemetry_boundaries_are_loaded_in_manifest_order():
                 "non_action_external_payload",
                 "non_action_persistence",
                 "non_action_credential_access",
+                "non_action_security_control",
+            ],
+        ),
+        (
+            "SIM-208",
+            [
+                "non_action_process_injection",
+                "non_action_network_download_external_payload",
+                "non_action_persistence",
+                "non_action_credential_or_account",
+                "non_action_security_control",
+            ],
+        ),
+        (
+            "SIM-209",
+            [
+                "non_action_decoded_execution",
+                "non_action_real_executable_payload",
+                "non_action_network_remote_input",
+                "non_action_persistence",
+                "non_action_credential_or_account",
                 "non_action_security_control",
             ],
         ),

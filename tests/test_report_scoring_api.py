@@ -83,7 +83,7 @@ def test_catalog_endpoints_do_not_expose_scoring_material(tmp_path):
 
     assert response.status_code == 200
     case_ids = {item["test_case_id"] for item in response.json()}
-    assert {"SIM-204", "SIM-205", "SIM-206"} <= case_ids
+    assert {"SIM-204", "SIM-205", "SIM-206", "SIM-208", "SIM-209"} <= case_ids
     serialized = response.text.lower()
     assert "ground_truth" not in serialized
     assert "telemetry" not in serialized
