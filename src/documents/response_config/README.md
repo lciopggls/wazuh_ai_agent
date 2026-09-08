@@ -20,9 +20,10 @@ response_config/
 │  └─ log_collection/   # Windows Agent 结果日志采集配置
 ├─ wazuh_manager/
 │  ├─ active_response/  # Manager Active Response 配置片段
+│  ├─ examples/          # 当前环境的 Manager 完整配置参考
 │  └─ rules/            # Manager JSON 结果规则
 ├─ docs/                # IP、端口和端点响应专项文档
-├─ examples/            # 完整配置参考，不能直接覆盖生产配置
+├─ examples/            # 通用完整配置参考，不能直接覆盖生产配置
 └─ baseline/            # 传统人工处置基线测量工具
 ```
 
@@ -207,6 +208,11 @@ demo_user
 ```bash
 sudo cp /var/ossec/etc/ossec.conf /var/ossec/etc/ossec.conf.response-backup
 ```
+
+仓库中的 `wazuh_manager/examples/ossec.conf.updated` 为当前环境的完整 Manager
+配置参考，可用于核对已启用的日志归档、命令和自动响应规则。该文件不能直接覆盖
+`/var/ossec/etc/ossec.conf`；在新环境部署时，仍应以
+`wazuh_manager/active_response/ossec_ar_fix.xml` 中的最小化配置片段为准，合并必要内容。
 
 ### 4.2 注册三个命令和九个命令变体
 
