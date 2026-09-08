@@ -51,7 +51,7 @@ def dict2line(d, joint_char=" ; "):
 
 
 def request_technique_label(
-    sents, mitre, parent_labels, model=current_model, temperature=0, max_token=120000
+    sents, mitre, parent_labels, model=current_model, temperature=0, max_token=120000, max_retries=5
 ):
     numbered_text = "\n".join("{}: {}".format(idx, sent["sent"]) for idx, sent in enumerate(sents))
     messages, tools = mitre_technique_label_template(numbered_text, mitre, parent_labels)
@@ -70,6 +70,7 @@ def request_technique_label(
         return None
 
     tool_choice = "auto"
+    retries = 0
     while True:
         try:
             response = client.chat.completions.create(
@@ -150,13 +151,22 @@ def request_technique_label(
 
             return {"triplets": triplets}
         except openai.RateLimitError:
+            retries += 1
+            if retries >= max_retries:
+                return None
             time.sleep(3)
         except openai.APIConnectionError:
+            retries += 1
+            if retries >= max_retries:
+                return None
             time.sleep(1)
         except openai.AuthenticationError as e:
             print(e)
             return None
         except openai.BadRequestError as e:
+            print(e)
+            return None
+        except Exception as e:
             print(e)
             return None
 
