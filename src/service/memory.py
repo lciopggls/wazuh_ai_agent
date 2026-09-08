@@ -1,9 +1,9 @@
+import asyncio
 import hashlib
 import json
 import logging
 import os
 import shutil
-import subprocess
 import sys
 import uuid
 from collections.abc import AsyncGenerator
@@ -229,6 +229,104 @@ KG_INPUT_DIR = os.path.join(_KG_ROOT, "input")
 KG_OUTPUT_DIR = os.path.join(_KG_ROOT, "output")
 KG_GALLERY_DIR = os.path.join(_KG_ROOT, "gallery")
 ALLOWED_EXTENSIONS = {".txt", ".pdf", ".md"}
+
+_KG_TASKS: dict[str, dict[str, Any]] = {}
+_KG_ACTIVE_TASK_ID: str | None = None
+_KG_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
+
+
+def _kg_task_timestamp() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _kg_task_response(task: dict[str, Any], message: str | None = None) -> dict[str, Any]:
+    response = {"status": "ok", **task}
+    if message is not None:
+        response["message"] = message
+    return response
+
+
+def _update_kg_task(task_id: str, **changes: Any) -> None:
+    task = _KG_TASKS.get(task_id)
+    if task is not None:
+        task.update(changes)
+
+
+async def _run_kg_generation(task_id: str, script_path: str) -> None:
+    global _KG_ACTIVE_TASK_ID
+
+    process: asyncio.subprocess.Process | None = None
+    _update_kg_task(task_id, task_status="running", started_at=_kg_task_timestamp())
+    try:
+        child_env = os.environ.copy()
+        child_env["PYTHONUTF8"] = "1"
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-B",
+            script_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=_KG_ROOT,
+            env=child_env,
+        )
+        stdout_bytes, stderr_bytes = await process.communicate()
+        stdout = stdout_bytes.decode("utf-8", errors="replace")
+        stderr = stderr_bytes.decode("utf-8", errors="replace")
+
+        if process.returncode != 0:
+            _update_kg_task(
+                task_id,
+                task_status="failed",
+                finished_at=_kg_task_timestamp(),
+                returncode=process.returncode,
+                stdout=stdout,
+                stderr=stderr,
+                message="图谱生成失败",
+            )
+            return
+
+        output_files = [
+            filename for filename in sorted(os.listdir(KG_OUTPUT_DIR)) if filename.endswith(".html")
+        ]
+        _update_kg_task(
+            task_id,
+            task_status="succeeded",
+            finished_at=_kg_task_timestamp(),
+            returncode=process.returncode,
+            stdout=stdout,
+            stderr=stderr,
+            output_files=output_files,
+            message=f"图谱生成完成，共 {len(output_files)} 个文件",
+        )
+    except asyncio.CancelledError:
+        if process is not None and process.returncode is None:
+            process.terminate()
+            await process.wait()
+        _update_kg_task(
+            task_id,
+            task_status="cancelled",
+            finished_at=_kg_task_timestamp(),
+            message="图谱生成任务已取消",
+        )
+        raise
+    except Exception as exc:
+        logger.exception("知识图谱后台任务执行失败")
+        _update_kg_task(
+            task_id,
+            task_status="failed",
+            finished_at=_kg_task_timestamp(),
+            message="图谱生成失败",
+            error=str(exc),
+        )
+    finally:
+        if _KG_ACTIVE_TASK_ID == task_id:
+            _KG_ACTIVE_TASK_ID = None
+
+
+def _discard_kg_background_task(task: asyncio.Task[None]) -> None:
+    _KG_BACKGROUND_TASKS.discard(task)
+    if not task.cancelled():
+        task.exception()
 
 
 @app.post("/api/report/save")
@@ -478,56 +576,70 @@ async def kg_upload_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@app.post("/api/knowledge-graph/generate")
+@app.post("/api/knowledge-graph/generate", status_code=202)
 async def kg_generate():
-    """运行 AttacKG 知识图谱生成流水线"""
-    try:
-        os.makedirs(KG_INPUT_DIR, exist_ok=True)
-        os.makedirs(KG_OUTPUT_DIR, exist_ok=True)
+    """启动 AttacKG 知识图谱后台任务并立即返回任务标识。"""
+    global _KG_ACTIVE_TASK_ID
 
-        script_path = os.path.join(_KG_ROOT, "AttacKG_Run.py")
-        if not os.path.isfile(script_path):
-            raise HTTPException(status_code=500, detail=f"脚本不存在: {script_path}")
+    os.makedirs(KG_INPUT_DIR, exist_ok=True)
+    os.makedirs(KG_OUTPUT_DIR, exist_ok=True)
 
-        # 检查 input 目录是否有支持的文件
-        input_files = [f for f in os.listdir(KG_INPUT_DIR) if f.endswith((".txt", ".md", ".pdf"))]
-        if not input_files:
-            raise HTTPException(
-                status_code=400, detail="input 目录中没有可处理的文件（仅支持 txt / pdf / md）"
-            )
+    script_path = os.path.join(_KG_ROOT, "AttacKG_Run.py")
+    if not os.path.isfile(script_path):
+        raise HTTPException(status_code=500, detail=f"脚本不存在: {script_path}")
 
-        result = subprocess.run(
-            [sys.executable, "-B", script_path],
-            capture_output=True,
-            text=True,
-            timeout=300,
-            cwd=_KG_ROOT,
+    input_files = sorted(
+        filename
+        for filename in os.listdir(KG_INPUT_DIR)
+        if filename.endswith((".txt", ".md", ".pdf"))
+    )
+    if not input_files:
+        raise HTTPException(
+            status_code=400, detail="input 目录中没有可处理的文件（仅支持 txt / pdf / md）"
         )
 
-        if result.returncode != 0:
-            return {
-                "status": "error",
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "message": "图谱生成失败",
-            }
+    if _KG_ACTIVE_TASK_ID is not None:
+        active_task = _KG_TASKS.get(_KG_ACTIVE_TASK_ID)
+        if active_task is not None and active_task["task_status"] in {"queued", "running"}:
+            return _kg_task_response(active_task, "图谱生成任务正在后台运行")
+        _KG_ACTIVE_TASK_ID = None
 
-        # 收集 output 文件列表
-        output_files = [f for f in sorted(os.listdir(KG_OUTPUT_DIR)) if f.endswith(".html")]
+    task_id = f"kg_{uuid.uuid4().hex}"
+    task_record = {
+        "task_id": task_id,
+        "task_status": "queued",
+        "created_at": _kg_task_timestamp(),
+        "started_at": None,
+        "finished_at": None,
+        "input_files": input_files,
+        "output_files": [],
+        "returncode": None,
+        "stdout": "",
+        "stderr": "",
+    }
+    _KG_TASKS[task_id] = task_record
+    _KG_ACTIVE_TASK_ID = task_id
 
-        return {
-            "status": "ok",
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "output_files": output_files,
-            "message": f"图谱生成完成，共 {len(output_files)} 个文件",
-        }
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="图谱生成超时（300秒）") from None
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    background_task = asyncio.create_task(_run_kg_generation(task_id, script_path))
+    _KG_BACKGROUND_TASKS.add(background_task)
+    background_task.add_done_callback(_discard_kg_background_task)
+
+    return _kg_task_response(task_record, "图谱生成任务已进入后台")
+
+
+@app.get("/api/knowledge-graph/generate/status")
+async def kg_generation_status(task_id: str | None = None):
+    """查询指定任务；未指定 task_id 时返回当前或最近一次任务。"""
+    if task_id is not None:
+        task = _KG_TASKS.get(task_id)
+    elif _KG_ACTIVE_TASK_ID is not None:
+        task = _KG_TASKS.get(_KG_ACTIVE_TASK_ID)
+    else:
+        task = next(reversed(_KG_TASKS.values()), None)
+
+    if task is None:
+        raise HTTPException(status_code=404, detail="没有可查询的图谱生成任务")
+    return _kg_task_response(task)
 
 
 @app.post("/api/knowledge-graph/save-to-gallery")
