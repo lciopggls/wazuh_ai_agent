@@ -2,7 +2,7 @@
 
 事件响应智能体使用同一套 `block-ip` 脚本完成定时封禁、永久封禁、手动解封和规则记录。实现遵循 Wazuh 4.x Active Response 协议：Agent 通过 stdin 向脚本发送 JSON，定时封禁通过 `check_keys`/`continue` 握手去重，并在超时后用 `delete` 命令撤销。
 
-完整环境、Manager、Indexer 和后端部署顺序见 [主部署文档](../README.md)。本文只补充 IP
+完整环境、Manager、Indexer 和后端部署顺序见 [主部署文档](../../../../README.md)。本文只补充 IP
 响应的协议、查询链路和专项验证。
 
 官方协议说明：

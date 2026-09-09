@@ -101,7 +101,7 @@ const agentThreadMap = ref<Record<string, string>>(
 const userInput = ref("");
 const isTyping = ref(false);
 const scrollRef = ref<HTMLElement | null>(null);
-const visualizationRequested = ref(false);
+const visualizationRequested = ref(true);
 
 // --- 报告保存状态追踪（按智能体、线程和消息索引隔离） ---
 const downloadStates = ref<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({});

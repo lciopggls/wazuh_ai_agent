@@ -1,6 +1,6 @@
 # Windows Agent 进程终止与账户控制部署验证
 
-完整环境、Manager、Indexer 和后端部署顺序见 [主部署文档](../README.md)。本文分别说明
+完整环境、Manager、Indexer 和后端部署顺序见 [主部署文档](../../../../README.md)。本文分别说明
 进程响应和账户响应，但二者共用同一套 Agent 脚本、结果日志和 Manager 规则。
 
 本文部署两个仅供演示的 Windows Active Response 功能：
