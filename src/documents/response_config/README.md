@@ -49,7 +49,6 @@ response_config/
 | `<AGENT_IP>` | 目标 Windows 采集客户端的实际地址 |
 | `<MANAGER_IP>` | 中心服务端的实际地址 |
 | `<INDEXER_IP>` | 索引服务的实际地址；一体化部署通常与 `<MANAGER_IP>` 相同 |
-| `<UBUNTU_USER>` | 可通过 SSH 登录中心服务端的用户，仅隧道方案需要 |
 | `<WAZUH_API_USER>` | 服务端 API 用户 |
 | `<INDEXER_USER>` | 索引服务用户，常见值为 `admin` |
 
@@ -64,18 +63,27 @@ C:\Program Files (x86)\ossec-agent
 ### 1.2 基础条件
 
 - 中心服务端已安装并启动相关服务。
-- Windows 采集客户端已安装采集服务，并以有效数字 ID注册到中心服务端。
-- 项目运行端已获取本仓库并安装 `uv`；使用可选隧道时还需要 SSH 客户端。
+- Windows 采集客户端已安装采集服务，并以有效数字 ID 注册到中心服务端。
+- 项目运行端已获取本仓库并安装 `uv`。
 - 中心服务端、采集客户端和项目运行端的系统时间已同步；进程终止耗时展示依赖时间同步。
 - Windows 采集客户端使用管理员 PowerShell，中心服务端使用具备 `sudo` 权限的终端。
 
-先在中心服务端确认采集客户端在线：
+IP 和端口响应依赖 Windows Defender 防火墙。在每台需要执行 IP 或端口操作的 Windows
+采集客户端上检查三个防火墙配置文件的状态：
 
-```bash
-sudo /var/ossec/bin/agent_control -lc
+```powershell
+Get-NetFirewallProfile | Format-Table Name, Enabled -Auto
 ```
 
-必须能看到目标采集客户端为 Active，之后再继续配置。
+Domain、Private 和 Public 的 `Enabled` 均应为 `True`。如果存在 `False`，并且设备没有通过
+组织策略统一管理防火墙配置，则执行：
+
+```powershell
+Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True
+Get-NetFirewallProfile | Format-Table Name, Enabled -Auto
+```
+
+如果防火墙状态由组织策略统一管理，应先按相应管理要求处理，不要在本地强行覆盖策略。
 
 ## 2. Windows 采集客户端配置
 
@@ -136,16 +144,15 @@ C:\Program Files (x86)\ossec-agent\active-response\bin\
 
 ```powershell
 $bin = "$agentHome\active-response\bin"
-Get-Item `
-  "$bin\block-ip.bat", "$bin\block-ip.ps1", `
-  "$bin\block-port.bat", "$bin\block-port.ps1", `
-  "$bin\endpoint-response.bat", "$bin\endpoint-response.ps1"
+Get-Item "$bin\block-ip.bat", "$bin\block-ip.ps1", "$bin\block-port.bat", "$bin\block-port.ps1", "$bin\endpoint-response.bat", "$bin\endpoint-response.ps1"
 ```
 
 ### 2.3 添加结果日志采集项
 
-在 Windows 采集客户端的 `ossec.conf` 文件末尾、默认结束注释之前追加一个新的
-`<ossec_config>` 块：
+打开 Windows 采集客户端的 `ossec.conf`，搜索完整注释
+`<!-- END of Default Configuration. -->`。将下面整个 `<ossec_config>` 配置块粘贴到该注释的
+上一行，保留结束注释，不要把配置写到注释内部。如果三个日志路径对应的 `<localfile>` 已经
+存在，则不要重复添加：
 
 ```xml
 <ossec_config>
@@ -192,9 +199,9 @@ $responseDir = "$agentHome\active-response"
   if (-not (Test-Path $_)) { New-Item -ItemType File -Path $_ -Force }
 }
 
-Restart-Service -Name wazuh
+Restart-Service -Name wazuhsvc
 Start-Sleep -Seconds 15
-Get-Service -Name wazuh
+Get-Service -Name wazuhsvc
 ```
 
 预期状态为 `Running`。
@@ -329,39 +336,27 @@ sudo cp /var/ossec/etc/ossec.conf /var/ossec/etc/ossec.conf.response-backup
 
 ### 3.3 安装 JSON 结果规则
 
-把仓库中的规则文件传到中心服务端，并安装到 `/var/ossec/etc/rules/`：
+将仓库 `src/documents/response_config/wazuh_manager/rules/` 目录中的三个规则文件复制到
+中心服务端的 `/var/ossec/etc/rules/` 目录，文件名不需要修改：
 
-| 仓库文件 | 中心服务端目标文件 | 规则 ID |
+| 仓库文件 | 中心服务端目标路径 | 规则 ID |
 |---|---|---:|
-| `manager-query-rule.xml` | `wazuh_ai_block_query.xml` | 100210 |
-| `manager-endpoint-response-rule.xml` | `wazuh_ai_endpoint_response.xml` | 100211 |
-| `manager-port-query-rule.xml` | `demo_port_query.xml` | 100212 |
+| `manager-query-rule.xml` | `/var/ossec/etc/rules/manager-query-rule.xml` | 100210 |
+| `manager-endpoint-response-rule.xml` | `/var/ossec/etc/rules/manager-endpoint-response-rule.xml` | 100211 |
+| `manager-port-query-rule.xml` | `/var/ossec/etc/rules/manager-port-query-rule.xml` | 100212 |
 
-可在项目运行端仓库根目录用 SCP 传输：
-
-```powershell
-scp `
-  .\src\documents\response_config\wazuh_manager\rules\manager-query-rule.xml `
-  .\src\documents\response_config\wazuh_manager\rules\manager-endpoint-response-rule.xml `
-  .\src\documents\response_config\wazuh_manager\rules\manager-port-query-rule.xml `
-  <UBUNTU_USER>@<MANAGER_IP>:/tmp/
-```
-
-然后在中心服务端执行：
+文件复制完成后，在中心服务端设置所有者和访问权限：
 
 ```bash
-sudo cp /tmp/manager-query-rule.xml /var/ossec/etc/rules/wazuh_ai_block_query.xml
-sudo cp /tmp/manager-endpoint-response-rule.xml /var/ossec/etc/rules/wazuh_ai_endpoint_response.xml
-sudo cp /tmp/manager-port-query-rule.xml /var/ossec/etc/rules/demo_port_query.xml
-sudo chown wazuh:wazuh /var/ossec/etc/rules/wazuh_ai_block_query.xml
-sudo chown wazuh:wazuh /var/ossec/etc/rules/wazuh_ai_endpoint_response.xml
-sudo chown wazuh:wazuh /var/ossec/etc/rules/demo_port_query.xml
-sudo chmod 660 /var/ossec/etc/rules/wazuh_ai_block_query.xml
-sudo chmod 660 /var/ossec/etc/rules/wazuh_ai_endpoint_response.xml
-sudo chmod 660 /var/ossec/etc/rules/demo_port_query.xml
+sudo chown wazuh:wazuh /var/ossec/etc/rules/manager-query-rule.xml
+sudo chown wazuh:wazuh /var/ossec/etc/rules/manager-endpoint-response-rule.xml
+sudo chown wazuh:wazuh /var/ossec/etc/rules/manager-port-query-rule.xml
+sudo chmod 660 /var/ossec/etc/rules/manager-query-rule.xml
+sudo chmod 660 /var/ossec/etc/rules/manager-endpoint-response-rule.xml
+sudo chmod 660 /var/ossec/etc/rules/manager-port-query-rule.xml
 ```
 
-如果中心服务端已占用规则 ID `100210`～`100212`，必须先改为未占用的自定义 ID，
+如果中心服务端已占用规则 ID `100210`～`100212`，必须先在对应规则文件中改为未占用的自定义 ID，
 并同步修改下文的日志检查命令。后端按 `request_id` 查询结果，不需要因此修改 Python 代码。
 
 同样应确认 `ossec.conf` 中的 `rules_id` `999991`～`999999` 没有被现有自动响应占用；
@@ -373,10 +368,9 @@ sudo chmod 660 /var/ossec/etc/rules/demo_port_query.xml
 sudo /var/ossec/bin/wazuh-analysisd -t
 sudo systemctl restart wazuh-manager
 sudo systemctl status wazuh-manager --no-pager
-sudo /var/ossec/bin/agent_control -lc
 ```
 
-必须满足：配置检查无错误、中心服务端为 `active (running)`、目标采集客户端为 Active。
+必须满足：配置检查无错误、中心服务端为 `active (running)`。
 
 ## 4. 平台后端配置
 
@@ -415,30 +409,7 @@ curl.exe -k -u <INDEXER_USER> https://<INDEXER_IP>:9200
 `TcpTestSucceeded` 应为 `True`；输入密码后应返回索引服务信息。`Unauthorized` 表示网络
 已经连通但账号或密码不正确。直连端口只能向可信后端主机开放，不得暴露到公网。
 
-### 4.3 可选：建立索引服务 SSH 隧道
-
-如果直连不可达，或者安全策略不允许开放 9200，可在项目运行端的单独 PowerShell 窗口运行：
-
-```powershell
-ssh -N -L 127.0.0.1:19200:127.0.0.1:9200 <UBUNTU_USER>@<MANAGER_IP>
-```
-
-保持窗口开启，将 `.env` 中的索引服务地址改为：
-
-```dotenv
-WAZUH_INDEXER_HOST="127.0.0.1"
-WAZUH_INDEXER_PORT="19200"
-```
-
-然后测试：
-
-```powershell
-curl.exe -k -u INDEXER_USER https://127.0.0.1:19200
-```
-
-出现密码提示并返回索引服务信息即表示连接正常。
-
-### 4.4 启动平台后端
+### 4.3 启动平台后端
 
 在仓库根目录执行：
 
@@ -485,9 +456,7 @@ Get-Content "$agentHome\active-response\block-ip-query.log" -Tail 20
 在 Windows 采集客户端创建临时允许规则并启动测试服务：
 
 ```powershell
-New-NetFirewallRule `
-  -DisplayName "Demo_Allow_In_TCP_54321" `
-  -Direction Inbound -Action Allow -Protocol TCP -LocalPort 54321
+New-NetFirewallRule -DisplayName "Demo_Allow_In_TCP_54321" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 54321
 
 python -m http.server 54321 --bind 0.0.0.0
 ```
@@ -546,9 +515,7 @@ Get-Process -Id <PID> -ErrorAction SilentlyContinue
 Windows 交叉检查：
 
 ```powershell
-Get-CimInstance -ClassName Win32_UserAccount `
-  -Filter "LocalAccount=True AND Name='demo_user'" |
-Select-Object Name, Disabled, SID
+Get-CimInstance -ClassName Win32_UserAccount -Filter "LocalAccount=True AND Name='demo_user'" | Select-Object Name, Disabled, SID
 ```
 
 禁用后 `Disabled=True`，启用后 `Disabled=False`。演示结束时保持账户启用。
@@ -571,12 +538,13 @@ Select-Object Name, Disabled, SID
 出现 `unknown（状态未知）` 时，按下面顺序检查，不要只看 Active Response API 是否返回成功：
 
 1. Windows 采集客户端服务是否为 `Running`；
-2. `active-responses.log` 是否收到命令；
-3. 三个结构化结果日志是否出现相同 `request_id`；
-4. 中心服务端是否产生规则 `100210`、`100211` 或 `100212` 的告警；
-5. 索引服务直连是否正常；使用隧道时确认 SSH 窗口是否仍在运行；
-6. `.env` 中的中心服务端、索引服务地址和账号是否正确；
-7. 修改 `.env` 后是否重启了后端并创建了新对话。
+2. 在中心服务端执行 `sudo /var/ossec/bin/agent_control -lc`，确认目标采集客户端为 Active；
+3. `active-responses.log` 是否收到命令；
+4. 三个结构化结果日志是否出现相同 `request_id`；
+5. 中心服务端是否产生规则 `100210`、`100211` 或 `100212` 的告警；
+6. 索引服务直连是否正常；
+7. `.env` 中的中心服务端、索引服务地址和账号是否正确；
+8. 修改 `.env` 后是否重启了后端并创建了新对话。
 
 Windows 日志：
 
@@ -608,7 +576,7 @@ API 返回成功只代表命令已发送给采集客户端。只有采集客户�
 Remove-NetFirewallRule -DisplayName "Demo_Allow_In_TCP_54321" -ErrorAction SilentlyContinue
 ```
 
-5. 不再测试时按 `Ctrl+C` 停止后端；使用隧道时同时停止 SSH 隧道。
+5. 不再测试时按 `Ctrl+C` 停止后端。
 
 ## 8. 部署文件清单
 

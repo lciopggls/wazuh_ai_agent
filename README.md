@@ -35,6 +35,8 @@
 | 25–50 | 8 vCPU | 8 GiB | 100 GB |
 | 50–100 | 8 vCPU | 8 GiB | 200 GB |
 
+中心服务端的磁盘空间**不得低于**根据日志量和保留周期估算出的存储需求。无法提前估算时，**至少分配 100 GB** 磁盘空间，避免因系统盘空间过小导致部署或运行异常。
+
 超过 100 个采集客户端时，应根据实际数据量进行分布式规划。本文不展开分布式部署命令。
 
 ## 1.2 服务端部署
@@ -49,6 +51,39 @@ sudo bash ./wazuh-install.sh -a
 ```
 
 安装完成后，终端会输出 Web 控制台地址及登录凭据，请妥善保存。
+
+项目的历史日志查询和攻击溯源功能需要使用 JSON 归档。编辑
+`/var/ossec/etc/ossec.conf`，将 `<global>` 中现有的配置修改为：
+
+```xml
+<logall_json>yes</logall_json>
+```
+
+检查配置并重启中心服务端：
+
+```bash
+sudo /var/ossec/bin/wazuh-analysisd -t
+sudo systemctl restart wazuh-manager
+```
+
+编辑 `/etc/filebeat/filebeat.yml`，确认 Wazuh 模块启用了告警和归档转发：
+
+```yaml
+filebeat.modules:
+  - module: wazuh
+    alerts:
+      enabled: true
+    archives:
+      enabled: true
+```
+
+保存后重启 Filebeat：
+
+```bash
+sudo systemctl restart filebeat
+```
+
+启用 JSON 全量归档后，中心服务端和索引服务的存储占用会相应增加，应根据实际日志量规划存储空间。
 
 ### 1.2.2 获取服务端认证信息
 
@@ -115,8 +150,7 @@ sudo systemctl start wazuh-agent
 以管理员身份打开 PowerShell，下载当前版本 MSI 安装包并完成安装：
 
 ```powershell
-Invoke-WebRequest -Uri "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.7-1.msi" `
-  -OutFile ".\wazuh-agent-4.14.7-1.msi"
+Invoke-WebRequest -Uri "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.7-1.msi" -OutFile ".\wazuh-agent-4.14.7-1.msi"
 msiexec.exe /i .\wazuh-agent-4.14.7-1.msi /q WAZUH_MANAGER="<中心服务端IP>"
 Start-Service wazuhsvc
 ```
@@ -155,14 +189,36 @@ Start-Service wazuhsvc
 
 ```powershell
 winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements
+```
+
+安装完成后关闭当前 PowerShell，再打开一个新的 PowerShell，然后执行：
+
+```powershell
 uv --version
 uv python install 3.11
+```
 
+如果后续需要直接调用 uv 安装的 Python，但当前终端无法识别对应命令，则执行：
+
+```powershell
+uv python update-shell
+```
+
+执行后关闭当前 PowerShell，再打开一个新的 PowerShell。未执行该命令时不需要因此重开终端。
+
+安装 Node.js：
+
+```powershell
 winget install --id OpenJS.NodeJS.LTS -e --accept-source-agreements --accept-package-agreements
+```
+
+安装完成后关闭当前 PowerShell，再打开一个新的 PowerShell，然后执行：
+
+```powershell
 node --version
 corepack enable
 corepack prepare pnpm@latest --activate
-pnpm --version
+pnpm.cmd --version
 ```
 
 ### 2.2.2 安装后端依赖
@@ -181,7 +237,7 @@ notepad .env
 ```powershell
 Set-Location "<项目根目录>\frontend"
 Copy-Item .env.example .env.development
-pnpm install
+pnpm.cmd install
 notepad .env.development
 ```
 
@@ -209,7 +265,7 @@ uv run wazuh-topology-api
 
 ```powershell
 Set-Location "<项目根目录>\frontend"
-pnpm dev
+pnpm.cmd dev
 ```
 
 默认服务地址：
@@ -260,11 +316,62 @@ uv run python -c "import nltk; nltk.download('punkt')"
 
 知识图谱的具体使用方式见：[使用手册](docs/manual/README.md)。
 
-## 3.3 事件响应扩展
+## 3.3 可选：使用 Sysmon 增强攻击溯源功能效果
+
+Sysmon 可以记录进程创建、网络连接、文件操作等 Windows 系统活动。配置 Wazuh 采集这些事件后，可以为攻击溯源提供更完整的数据。此功能为可选增强项，需要在每台需要增强日志采集的 Windows 采集客户端上分别配置。
+
+以管理员身份打开 PowerShell，下载并解压 Sysmon 及其配置文件：
+
+```powershell
+New-Item -ItemType Directory -Path "C:\Tools\Sysmon" -Force
+Invoke-WebRequest -Uri "https://download.sysinternals.com/files/Sysmon.zip" -OutFile "C:\Tools\Sysmon\Sysmon.zip"
+Expand-Archive -LiteralPath "C:\Tools\Sysmon\Sysmon.zip" -DestinationPath "C:\Tools\Sysmon" -Force
+Invoke-WebRequest -Uri "https://wazuh.com/resources/blog/emulation-of-attack-techniques-and-detection-with-wazuh/sysmonconfig.xml" -OutFile "C:\Tools\Sysmon\sysmonconfig.xml"
+Set-Location "C:\Tools\Sysmon"
+```
+
+检查 Sysmon 是否已经安装，并根据检查结果安装或更新配置：
+
+```powershell
+$sysmonService = Get-Service -Name "Sysmon*" -ErrorAction SilentlyContinue | Select-Object -First 1
+
+if ($sysmonService) {
+    .\Sysmon64.exe -c .\sysmonconfig.xml
+} else {
+    .\Sysmon64.exe -accepteula -i .\sysmonconfig.xml
+}
+```
+
+已安装 Sysmon 时使用 `-c` 更新配置，不要重复执行 `-i`。
+
+打开 Windows 采集客户端配置文件：
+
+```powershell
+notepad "C:\Program Files (x86)\ossec-agent\ossec.conf"
+```
+
+在现有的 `<ossec_config>` 节点内添加以下内容；如果已经存在完全相同的配置，不要重复添加：
+
+```xml
+<localfile>
+  <location>Microsoft-Windows-Sysmon/Operational</location>
+  <log_format>eventchannel</log_format>
+</localfile>
+```
+
+保存配置后重启 Wazuh Agent：
+
+```powershell
+Restart-Service -Name wazuhsvc
+```
+
+启用 Sysmon 采集后，Windows 采集客户端发送的日志量以及中心服务端和索引服务的存储占用会相应增加。
+
+## 3.4 事件响应扩展
 
 事件响应相关部署和配置见：`src/documents/response_config/README.md`。
 
-## 3.4 其他相关文档
+## 3.5 其他相关文档
 
 - [使用手册](docs/manual/README.md)：介绍平台界面和主要功能的使用方法；
 - [开发者说明](docs/dev/development.md)：介绍项目结构、测试、代码检查和前端开发命令。
@@ -276,12 +383,12 @@ uv run python -c "import nltk; nltk.download('punkt')"
 ```powershell
 uv --version
 uv sync
-pnpm --version
+pnpm.cmd --version
 Set-Location "<项目根目录>\frontend"
-pnpm install
+pnpm.cmd install
 ```
 
-如果前端依赖安装提示需要确认构建脚本，按提示执行 `pnpm approve-builds` 后再次运行 `pnpm install`。
+如果前端依赖安装提示需要确认构建脚本，按提示执行 `pnpm.cmd approve-builds` 后再次运行 `pnpm.cmd install`。
 
 ## 4.2 后端服务无法启动
 
@@ -290,6 +397,14 @@ pnpm install
 - 根目录 `.env` 是否存在，模型服务配置是否完整；
 - 中心服务端 API 和索引服务地址、端口、账号密码是否正确；
 - 8001 或 8000 端口是否已被其他进程占用。
+
+如果启动日志出现编码错误或中文乱码，可在当前 PowerShell 中启用 Python UTF-8 模式后重新启动对应服务：
+
+```powershell
+$env:PYTHONUTF8 = "1"
+```
+
+该设置只对当前 PowerShell 及其启动的进程生效。
 
 ## 4.3 前端无法访问后端
 
