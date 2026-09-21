@@ -263,8 +263,23 @@ async function generateGraph() {
     });
     const data = await res.json();
 
-    if (data.status === "ok") {
-      showStatus(data.message || "图谱生成完成", "success");
+    if (data.status !== "ok") {
+      showStatus(`生成失败: ${data.detail || data.message}`, "error");
+      return;
+    }
+
+    // 生成是异步后台任务，需要轮询状态直到完成
+    const taskId = data.task_id;
+    if (!taskId) {
+      showStatus("生成失败：未返回任务标识", "error");
+      return;
+    }
+
+    const result = await pollGenerationStatus(taskId);
+    if (result === null) return;
+
+    if (result.task_status === "succeeded") {
+      showStatus(result.message || "图谱生成完成", "success");
       activeView.value = "output";
       previewFile.value = null;
       previewHtml.value = "";
@@ -273,15 +288,43 @@ async function generateGraph() {
       if (outputFiles.value.length > 0) {
         selectedOutputFile.value = outputFiles.value[0].name;
       }
+    } else if (result.task_status === "failed") {
+      showStatus(`生成失败: ${result.message || "未知错误"}`, "error");
+      if (result.stderr) console.error("AttacKG stderr:", result.stderr);
     } else {
-      showStatus(`生成失败: ${data.message}`, "error");
-      if (data.stderr) console.error("AttacKG stderr:", data.stderr);
+      showStatus(`生成结束：${result.task_status}`, "error");
     }
   } catch (err: any) {
     showStatus(`生成出错: ${err.message}`, "error");
   } finally {
     generating.value = false;
   }
+}
+
+async function pollGenerationStatus(taskId: string): Promise<any | null> {
+  const maxAttempts = 150; // 最多轮询约 5 分钟
+  const intervalMs = 2000;
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/knowledge-graph/generate/status?task_id=${encodeURIComponent(taskId)}`
+      );
+      const data = await res.json();
+      if (data.status !== "ok") {
+        showStatus(`查询生成状态失败: ${data.detail || data.message}`, "error");
+        return null;
+      }
+      if (["succeeded", "failed", "cancelled"].includes(data.task_status)) {
+        return data;
+      }
+    } catch (err: any) {
+      showStatus(`查询生成状态出错: ${err.message}`, "error");
+      return null;
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  showStatus("生成超时，请稍后手动刷新 Output 查看结果", "error");
+  return null;
 }
 
 // ── Output 操作 ──

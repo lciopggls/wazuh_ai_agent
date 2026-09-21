@@ -1,18 +1,62 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick, computed, watch } from "vue";
 import VueMarkdown from 'vue-markdown-render';
-import {
-  listAgents as listScoringAgents,
-  listTestCases as listScoringTestCases,
-  saveAndRegisterChatReport,
-  type AgentSummary,
-  type TestCaseSummary,
-} from "@/api/report_scoring";
-import { hasFinalAttributionReportHeading } from "./report-scoring/presentation";
+
+const FINAL_ATTRIBUTION_REPORT_HEADING =
+  /^\s{0,3}#{1,6}\s+(?:\*\*)?(?:Wazuh\s+)?攻击溯源调查报告(?:\*\*)?\s*$/imu;
+
+const ATTRIBUTION_REPORT_PRESENTATION_NODES = new Set([
+  "reply",
+  "final_report",
+  "Reporter_Node",
+]);
+
+function isAttributionReportPresentationNode(node: unknown): boolean {
+  return typeof node === "string" && ATTRIBUTION_REPORT_PRESENTATION_NODES.has(node);
+}
+
+function isAttributionReportMessage(role: unknown, node: unknown, content: string): boolean {
+  if (role !== "assistant" || !isAttributionReportPresentationNode(node)) return false;
+  return node === "final_report" || FINAL_ATTRIBUTION_REPORT_HEADING.test(content);
+}
+
+/** 保存报告到本地 Markdown（后端 /api/report/save） */
+async function saveChatReport(payload: {
+  content: string;
+}): Promise<{ filepath: string; filename: string }> {
+  const response = await fetch("http://127.0.0.1:8001/api/report/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result.status !== "ok") {
+    const error = new Error(result?.message || `请求失败 (${response.status})`) as Error & {
+      code: string;
+    };
+    error.code = result?.code || "REQUEST_FAILED";
+    throw error;
+  }
+  return result;
+}
+
+function formatReportSaveError(error: unknown): string {
+  if (error instanceof Error) {
+    const code =
+      "code" in error && typeof error.code === "string" ? error.code : "REQUEST_FAILED";
+    return `${code}: ${error.message}`;
+  }
+  return `REQUEST_FAILED: ${String(error)}`;
+}
 
 type AgentOption = {
   id: string;
   name: string;
+};
+
+type ReportActionFeedback = {
+  tone: 'success' | 'error';
+  message: string;
 };
 
 const DEFAULT_AGENT_OPTIONS: AgentOption[] = [
@@ -23,10 +67,9 @@ const DEFAULT_AGENT_OPTIONS: AgentOption[] = [
 // ⚡ 修改点：将 agentId 提升为从父组件传入，便于全局共享当前选中状态
 const props = defineProps<{
   sessions: Record<string, any[]>;
-  agentId: string; 
+  agentId: string;
   agentOptions?: AgentOption[];
   storageNamespace?: string;
-  enableReportScoringActions?: boolean;
 }>();
 
 const emit = defineEmits(['update:sessions', 'update:agentId']);
@@ -43,9 +86,6 @@ const storageKeys = storageNamespace === "production"
       sessions: `wazuh_${storageNamespace}_sessions`,
       agentThreadMap: `wazuh_${storageNamespace}_agent_thread_map`,
     };
-const reportScoringActionsEnabled =
-  import.meta.env.VITE_ENABLE_REPORT_SCORING === 'true' &&
-  props.enableReportScoringActions === true;
 
 // 当前活跃智能体（基于 prop 的计算属性，切换时通知父组件）
 const currentAgentId = computed({
@@ -61,28 +101,19 @@ const agentThreadMap = ref<Record<string, string>>(
 const userInput = ref("");
 const isTyping = ref(false);
 const scrollRef = ref<HTMLElement | null>(null);
-const visualizationRequested = ref(false);
+const visualizationRequested = ref(true);
 
-// --- 报告下载状态追踪（按消息索引） ---
-const downloadStates = ref<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({});
-const registrationStates = ref<Record<number, 'idle' | 'saving' | 'saved' | 'error'>>({});
-const scoringCases = ref<TestCaseSummary[]>([]);
-const scoringAgents = ref<AgentSummary[]>([]);
-const registrationDialogVisible = ref(false);
-const registrationDialogIndex = ref(-1);
-const registrationDialogContent = ref("");
-const registrationCaseId = ref("");
-const registrationAgentId = ref("");
-const includeCurrentThread = ref(true);
-const registrationRunId = ref("");
-const registrationNote = ref("");
-const registrationError = ref("");
+// --- 报告保存状态追踪（按智能体、线程和消息索引隔离） ---
+const downloadStates = ref<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({});
+const downloadFeedback = ref<Record<string, ReportActionFeedback>>({});
 
 /** 判断气泡内容是否为攻击溯源报告 */
 function isReportContent(msg: any): boolean {
-  if (msg.role !== 'assistant' || !['reply', 'final_report'].includes(msg.node)) return false;
-  const content = getMessageContent(msg);
-  return msg.node === 'final_report' || hasFinalAttributionReportHeading(content);
+  return isAttributionReportMessage(msg.role, msg.node, getMessageContent(msg));
+}
+
+function reportActionKey(index: number): string {
+  return JSON.stringify([currentAgentId.value, currentThreadId.value, index]);
 }
 
 /** 下载报告：调用后端 API 保存到指定目录 */
@@ -90,87 +121,30 @@ async function downloadReport(msg: any, index: number) {
   const content = getMessageContent(msg);
   if (!content) return;
 
-  downloadStates.value[index] = 'saving';
+  const actionKey = reportActionKey(index);
+  downloadStates.value[actionKey] = 'saving';
   try {
-    const response = await fetch('http://127.0.0.1:8001/api/report/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
-    const result = await response.json();
-    if (result.status === 'ok') {
-      downloadStates.value[index] = 'saved';
-      setTimeout(() => {
-        if (downloadStates.value[index] === 'saved') {
-          downloadStates.value[index] = 'idle';
-        }
-      }, 3000);
-    } else {
-      downloadStates.value[index] = 'error';
-      setTimeout(() => { downloadStates.value[index] = 'idle'; }, 3000);
-    }
-  } catch (err: any) {
-    console.error('保存报告失败:', err);
-    downloadStates.value[index] = 'error';
-    setTimeout(() => { downloadStates.value[index] = 'idle'; }, 3000);
+    const result = await saveChatReport({ content });
+    downloadStates.value[actionKey] = 'saved';
+    downloadFeedback.value[actionKey] = {
+      tone: 'success',
+      message: `报告已保存到：${result.filepath}`,
+    };
+  } catch (error: unknown) {
+    console.error('保存报告失败:', error);
+    downloadStates.value[actionKey] = 'error';
+    downloadFeedback.value[actionKey] = {
+      tone: 'error',
+      message: formatReportSaveError(error),
+    };
   }
 }
 
-async function openScoringRegistration(msg: any, index: number) {
-  registrationError.value = "";
-  registrationDialogIndex.value = index;
-  registrationDialogContent.value = getMessageContent(msg);
-  registrationDialogVisible.value = true;
-  try {
-    if (!scoringCases.value.length || !scoringAgents.value.length) {
-      [scoringCases.value, scoringAgents.value] = await Promise.all([
-        listScoringTestCases(),
-        listScoringAgents(),
-      ]);
-    }
-    if (!registrationCaseId.value && scoringCases.value.length) {
-      registrationCaseId.value = scoringCases.value[0].test_case_id;
-    }
-    if (!registrationAgentId.value && scoringAgents.value.length) {
-      registrationAgentId.value = scoringAgents.value[0].agent_id;
-    }
-  } catch (error: any) {
-    registrationError.value = `${error?.code || "REQUEST_FAILED"}: ${error?.message || String(error)}`;
-  }
-}
-
-function closeScoringRegistration() {
-  if (registrationStates.value[registrationDialogIndex.value] === 'saving') return;
-  registrationDialogVisible.value = false;
-}
-
-async function submitScoringRegistration() {
-  const index = registrationDialogIndex.value;
-  if (index < 0 || !registrationCaseId.value || !registrationAgentId.value) return;
-  registrationStates.value[index] = 'saving';
-  registrationError.value = "";
-  try {
-    await saveAndRegisterChatReport({
-      content: registrationDialogContent.value,
-      scoring_registration: {
-        test_case_id: registrationCaseId.value,
-        agent_id: registrationAgentId.value,
-        ...(includeCurrentThread.value && currentThreadId.value
-          ? { thread_id: currentThreadId.value }
-          : {}),
-        ...(registrationRunId.value.trim() ? { run_id: registrationRunId.value.trim() } : {}),
-        ...(registrationNote.value.trim() ? { note: registrationNote.value.trim() } : {}),
-      },
-    });
-    registrationStates.value[index] = 'saved';
-    registrationDialogVisible.value = false;
-    setTimeout(() => {
-      if (registrationStates.value[index] === 'saved') registrationStates.value[index] = 'idle';
-    }, 3000);
-  } catch (error: any) {
-    registrationStates.value[index] = 'error';
-    registrationError.value = `${error?.code || "REQUEST_FAILED"}: ${error?.message || String(error)}`;
-  }
+function dismissReportFeedback(index: number) {
+  const actionKey = reportActionKey(index);
+  const next = { ...downloadFeedback.value };
+  delete next[actionKey];
+  downloadFeedback.value = next;
 }
 
 // --- 5. JSON 日志抽屉状态 ---
@@ -674,51 +648,42 @@ const scrollToBottom = async () => {
         <div class="content_box">
           <div v-if="msg.role === 'assistant' && msg.node" class="node_tag">
             <template v-if="msg.node === 'tools'">⚙️ 工具输出 (原始数据)</template>
-            <template v-else-if="msg.node === 'reply' || msg.node === 'final_report'">
+            <template v-else-if="isAttributionReportPresentationNode(msg.node)">
               📋 提取结论
               <!-- 攻击溯源报告下载按钮 -->
               <button
                 v-if="isReportContent(msg)"
                 class="report_download_btn"
                 :class="{
-                  'report_download_btn--saving': downloadStates[index] === 'saving',
-                  'report_download_btn--saved': downloadStates[index] === 'saved',
-                  'report_download_btn--error': downloadStates[index] === 'error',
+                  'report_download_btn--saving': downloadStates[reportActionKey(index)] === 'saving',
+                  'report_download_btn--saved': downloadStates[reportActionKey(index)] === 'saved',
+                  'report_download_btn--error': downloadStates[reportActionKey(index)] === 'error',
                 }"
-                :disabled="downloadStates[index] === 'saving'"
+                :disabled="downloadStates[reportActionKey(index)] === 'saving' || downloadStates[reportActionKey(index)] === 'saved'"
                 @click.stop="downloadReport(msg, index)"
                 :title="
-                  downloadStates[index] === 'saving' ? '保存中...' :
-                  downloadStates[index] === 'saved' ? '已保存 ✓' :
-                  downloadStates[index] === 'error' ? '保存失败' :
+                  downloadStates[reportActionKey(index)] === 'saving' ? '保存中...' :
+                  downloadStates[reportActionKey(index)] === 'saved' ? '已保存 ✓' :
+                  downloadStates[reportActionKey(index)] === 'error' ? '保存失败' :
                   '保存报告到本地'
                 "
               >
-                <template v-if="downloadStates[index] === 'saving'">⏳</template>
-                <template v-else-if="downloadStates[index] === 'saved'">✅</template>
-                <template v-else-if="downloadStates[index] === 'error'">❌</template>
-                <template v-else>💾 下载报告</template>
-              </button>
-              <button
-                v-if="reportScoringActionsEnabled && isReportContent(msg)"
-                class="report_download_btn report_register_btn"
-                :class="{
-                  'report_download_btn--saving': registrationStates[index] === 'saving',
-                  'report_download_btn--saved': registrationStates[index] === 'saved',
-                  'report_download_btn--error': registrationStates[index] === 'error',
-                }"
-                :disabled="registrationStates[index] === 'saving'"
-                title="选择已登记案例和被测智能体后，保存并登记到开发期评分工具"
-                @click.stop="openScoringRegistration(msg, index)"
-              >
-                <template v-if="registrationStates[index] === 'saving'">⏳ 登记中</template>
-                <template v-else-if="registrationStates[index] === 'saved'">✅ 已登记</template>
-                <template v-else-if="registrationStates[index] === 'error'">❌ 重试登记</template>
-                <template v-else>🧮 保存并登记评分</template>
+                <template v-if="downloadStates[reportActionKey(index)] === 'saving'">⏳</template>
+                <template v-else-if="downloadStates[reportActionKey(index)] === 'saved'">✅</template>
+                <template v-else-if="downloadStates[reportActionKey(index)] === 'error'">❌</template>
+                <template v-else>💾 保存到本地</template>
               </button>
             </template>
             <template v-else-if="msg.node === 'model'">🤖 AI 文本回复</template>
             <template v-else>⚡ 步骤: {{ msg.node }}</template>
+          </div>
+
+          <div
+            v-if="downloadFeedback[reportActionKey(index)]"
+            :class="['report_action_feedback', downloadFeedback[reportActionKey(index)].tone]"
+          >
+            <span>{{ downloadFeedback[reportActionKey(index)].message }}</span>
+            <button type="button" title="关闭提示" @click="dismissReportFeedback(index)">✕</button>
           </div>
 
           <!-- ──── AI 消息渲染 ──── -->
@@ -771,26 +736,6 @@ const scrollToBottom = async () => {
       <button @click="handleSend" :disabled="isTyping">发送</button>
     </div>
   </div>
-
-  <teleport to="body">
-    <div
-      v-if="registrationDialogVisible"
-      class="scoring_dialog_overlay"
-      @click.self="closeScoringRegistration"
-    >
-      <div class="scoring_dialog">
-        <header><h3>保存并登记评分报告</h3><button @click="closeScoringRegistration">✕</button></header>
-        <p>请显式选择报告对应的测试案例和被测智能体。当前聊天智能体不会自动覆盖该选择。</p>
-        <label>测试案例<select v-model="registrationCaseId"><option v-for="item in scoringCases" :key="item.test_case_id" :value="item.test_case_id">{{ item.display_name }} · {{ item.scoring_standard_version }}</option></select></label>
-        <label>被测智能体<select v-model="registrationAgentId"><option v-for="item in scoringAgents" :key="item.agent_id" :value="item.agent_id">{{ item.display_name }}</option></select></label>
-        <label class="checkbox"><input v-model="includeCurrentThread" type="checkbox" />附带当前 Thread ID：{{ currentThreadId || '无' }}</label>
-        <label>Run ID（可选）<input v-model="registrationRunId" maxlength="160" /></label>
-        <label>备注（可选）<input v-model="registrationNote" maxlength="1000" /></label>
-        <div v-if="registrationError" class="scoring_dialog_error">{{ registrationError }}</div>
-        <footer><button class="cancel" @click="closeScoringRegistration">取消</button><button :disabled="!registrationCaseId || !registrationAgentId || registrationStates[registrationDialogIndex] === 'saving'" @click="submitScoringRegistration">确认保存并登记</button></footer>
-      </div>
-    </div>
-  </teleport>
 
   <!-- JSON 日志抽屉 -->
   <teleport to="body">
@@ -1219,98 +1164,34 @@ const scrollToBottom = async () => {
   }
 }
 
-.report_register_btn {
-  color: #7c3aed;
-  border-color: rgba(124, 58, 237, 0.3);
-  background: rgba(124, 58, 237, 0.08);
-
-  &:hover:not(:disabled) {
-    color: #6d28d9;
-    border-color: #7c3aed;
-    background: rgba(124, 58, 237, 0.14);
-  }
-}
-
-.scoring_dialog_overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1100;
+.report_action_feedback {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(15, 23, 42, 0.48);
-}
-
-.scoring_dialog {
-  width: min(520px, calc(100vw - 32px));
-  padding: 20px;
-  border-radius: 12px;
-  background: #ffffff;
-  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.24);
-  color: #334155;
-
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-
-    h3 { margin: 0; color: #1e3a8a; }
-    button { border: 0; background: transparent; color: #64748b; cursor: pointer; }
-  }
-
-  > p { color: #64748b; font-size: 12px; line-height: 1.6; }
-
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    margin-top: 10px;
-    color: #64748b;
-    font-size: 12px;
-
-    input, select {
-      padding: 8px 10px;
-      border: 1px solid #d1d5db;
-      border-radius: 6px;
-      background: #ffffff;
-      color: #1f2937;
-    }
-  }
-
-  label.checkbox {
-    flex-direction: row;
-    align-items: center;
-
-    input { margin: 0; }
-  }
-
-  footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 18px;
-
-    button {
-      padding: 8px 13px;
-      border: 0;
-      border-radius: 6px;
-      background: #7c3aed;
-      color: #ffffff;
-      cursor: pointer;
-
-      &.cancel { background: #e2e8f0; color: #475569; }
-      &:disabled { opacity: 0.45; cursor: not-allowed; }
-    }
-  }
-}
-
-.scoring_dialog_error {
-  margin-top: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
   padding: 8px 10px;
+  border: 1px solid #bbf7d0;
   border-radius: 6px;
-  background: #fef2f2;
-  color: #b91c1c;
+  background: #f0fdf4;
+  color: #047857;
   font-size: 12px;
-  word-break: break-word;
+  line-height: 1.5;
+  word-break: break-all;
+
+  &.error {
+    border-color: #fecaca;
+    background: #fef2f2;
+    color: #b91c1c;
+  }
+
+  button {
+    flex: 0 0 auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: currentColor;
+    cursor: pointer;
+  }
 }
 </style>

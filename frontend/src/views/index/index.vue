@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed, watch, defineAsyncComponent } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue';
 import ItemWrap from "@/components/item-wrap";
 // 第一页组件
 import LeftTop from "./left-top.vue";
@@ -27,27 +27,13 @@ import SecurityInsights from './security_insights.vue';
 import attack_pattern from './attack_pattern.vue';
 import knowledge_graph from './knowledge_graph.vue';
 
-const reportScoringEnabled = import.meta.env.VITE_ENABLE_REPORT_SCORING === 'true';
-const testModuleEnabled = import.meta.env.VITE_ENABLE_TEST_MODULE === 'true';
-const ReportScoring = reportScoringEnabled
-  ? defineAsyncComponent(() => import('./report_scoring.vue'))
-  : null;
-
 // 控制页面切换
 const currentPage = ref(1);
 const globalSessions = ref<Record<string, any[]>>({});
-const testSessions = ref<Record<string, any[]>>({});
 
 // 确保此处的 ID 与 second_right 智能体组件内的 id 保持一致
 const currentAgentId = ref("router_agent");
-const testAgentId = ref("attack_attribution");
 const isComponentsReady = ref(false);
-
-const testAgents = [
-  { id: 'attack_attribution', name: '攻击溯源智能体' },
-  { id: 'baseline_agent_simple', name: '基线智能体 Simple' },
-  { id: 'baseline_agent_plus', name: '基线智能体 Plus' },
-];
 
 // 侧边栏菜单配置（按安全运维工作流分组）
 const currentMenu = ref('ai-chat');
@@ -58,17 +44,6 @@ const sidebarGroups = [
       { key: 'ai-chat',    icon: '💬', label: 'AI 对话窗口' },
     ]
   },
-  ...(testModuleEnabled
-    ? [{
-        title: '测试',
-        items: [
-          { key: 'test-ai-chat', icon: '🧪', label: 'AI 对话窗口' },
-          ...(reportScoringEnabled
-            ? [{ key: 'test-report-scoring', icon: '🧮', label: '报告评分' }]
-            : []),
-        ],
-      }]
-    : []),
   {
     title: '告警与威胁',
     items: [
@@ -112,10 +87,6 @@ onMounted(() => {
   const saved = localStorage.getItem('wazuh_all_sessions');
   if (saved) {
     globalSessions.value = JSON.parse(saved);
-  }
-  const savedTest = localStorage.getItem('wazuh_test_sessions');
-  if (savedTest) {
-    testSessions.value = JSON.parse(savedTest);
   }
 
   // 监听来自 center-bottom 的跳转请求
@@ -165,10 +136,6 @@ onBeforeUnmount(() => {
 // 持久化全局会话数据（供 right-bottom 等跨组件读取）
 watch(globalSessions, (val) => {
   localStorage.setItem('wazuh_all_sessions', JSON.stringify(val));
-}, { deep: true });
-
-watch(testSessions, (val) => {
-  localStorage.setItem('wazuh_test_sessions', JSON.stringify(val));
 }, { deep: true });
 
 // 动态实时从当前的会话流中提取 attack_abstract 数据
@@ -232,24 +199,26 @@ const latestAttackSvgs = computed(() => {
       <button @click="currentPage = 2" :class="{ active: currentPage === 2 }">数智运维工作台</button>
     </div>
 
-    <div v-if="currentPage === 1 && isComponentsReady" class="index-box">
-      <div class="contetn_left">
-        <ItemWrap class="contetn_left-top contetn_lr-item" title="资产监控概览"><LeftTop /></ItemWrap>
-        <ItemWrap class="contetn_left-center contetn_lr-item" title="告警等级分布"><LeftCenter /></ItemWrap>
-        <ItemWrap class="contetn_left-bottom contetn_lr-item" title="实时告警事件" style="padding: 0 10px 16px 10px"><LeftBottom /></ItemWrap>
+    <template v-if="isComponentsReady">
+      <div v-show="currentPage === 1" class="index-box">
+        <div class="contetn_left">
+          <ItemWrap class="contetn_left-top contetn_lr-item" title="资产监控概览"><LeftTop /></ItemWrap>
+          <ItemWrap class="contetn_left-center contetn_lr-item" title="告警等级分布"><LeftCenter /></ItemWrap>
+          <ItemWrap class="contetn_left-bottom contetn_lr-item" title="实时告警事件" style="padding: 0 10px 16px 10px"><LeftBottom /></ItemWrap>
+        </div>
+        <div class="contetn_center">
+          <CenterMap class="contetn_center_top" title="网络拓扑监控" />
+          <ItemWrap class="contetn_center-bottom" title="规则风险分析"><CenterBottom /></ItemWrap>
+        </div>
+        <div class="contetn_right">
+          <ItemWrap class="contetn_left-bottom contetn_lr-item" title="告警趋势分析"><RightTop /></ItemWrap>
+          <ItemWrap class="contetn_left-bottom contetn_lr-item" title="高频告警排行" style="padding: 0 10px 16px 10px"><RightCenter /></ItemWrap>
+          <ItemWrap class="contetn_left-bottom contetn_lr-item" title="AI 会话监控"><RightBottom :sessions="globalSessions" :agent-id="currentAgentId" /></ItemWrap>
+        </div>
       </div>
-      <div class="contetn_center">
-        <CenterMap class="contetn_center_top" title="网络拓扑监控" />
-        <ItemWrap class="contetn_center-bottom" title="规则风险分析"><CenterBottom /></ItemWrap>
-      </div>
-      <div class="contetn_right">
-        <ItemWrap class="contetn_left-bottom contetn_lr-item" title="告警趋势分析"><RightTop /></ItemWrap>
-        <ItemWrap class="contetn_left-bottom contetn_lr-item" title="高频告警排行" style="padding: 0 10px 16px 10px"><RightCenter /></ItemWrap>
-        <ItemWrap class="contetn_left-bottom contetn_lr-item" title="AI 会话监控"><RightBottom :sessions="globalSessions" :agent-id="currentAgentId" /></ItemWrap>
-      </div>
-    </div>
+    </template>
 
-    <div v-else class="second-page-box">
+    <div v-show="currentPage === 2" class="second-page-box">
       <!-- 侧边栏导航 -->
       <div class="sidebar-wrapper">
         <div class="sidebar-header">
@@ -274,27 +243,17 @@ const latestAttackSvgs = computed(() => {
 
       <!-- 右侧内容区 -->
       <div class="main-content">
-        <template v-if="currentMenu === 'ai-chat'">
+        <!-- 聊天组件保持挂载，导航只改变可见性，避免中断正在读取的 SSE。 -->
+        <div v-show="currentMenu === 'ai-chat'" class="persistent-chat-view">
           <second_right
+            key="production-chat"
             v-model:sessions="globalSessions"
             v-model:agent-id="currentAgentId"
             :agent-options="[{ id: 'router_agent', name: '路由智能体' }]"
             storage-namespace="production"
           />
-        </template>
-        <template v-else-if="currentMenu === 'test-ai-chat' && testModuleEnabled">
-          <second_right
-            v-model:sessions="testSessions"
-            v-model:agent-id="testAgentId"
-            :agent-options="testAgents"
-            storage-namespace="test"
-            :enable-report-scoring-actions="reportScoringEnabled"
-          />
-        </template>
-        <template v-else-if="currentMenu === 'test-report-scoring' && testModuleEnabled && reportScoringEnabled && ReportScoring">
-          <component :is="ReportScoring" />
-        </template>
-        <template v-else-if="currentMenu === 'alerts'">
+        </div>
+        <template v-if="currentMenu === 'alerts'">
           <alerts_query :attack-abstract="latestAttackAbstract" />
         </template>
         <template v-else-if="currentMenu === 'archives'">
@@ -507,6 +466,11 @@ const latestAttackSvgs = computed(() => {
   :deep(> *) {
     height: 100%;
   }
+}
+
+.persistent-chat-view {
+  width: 100%;
+  height: 100%;
 }
 
 .page-controls {

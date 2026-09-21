@@ -52,7 +52,7 @@ const getWazuhAlerts = async () => {
     const levelOpt = levelOptions.find(o => o.key === state.selectedLevel);
     const levelCondition = levelOpt?.range
       ? { range: { "rule.level": { ...levelOpt.range } } }
-      : { range: { "rule.level": { "gte": 10 } } };
+      : { range: { "rule.level": { "gte": 6 } } };
     const res = await axios.post('/wazuh-indexer/wazuh-alerts-*/_search', {
       size: 50,
       sort: [{ "timestamp": "desc" }],
@@ -90,11 +90,17 @@ const changeTimeRange = (range: string) => {
 
 // ── 告警等级筛选 ──
 const levelOptions = [
-  { key: 'all', label: '全部等级', range: null },
-  { key: '10-11', label: '低危 10-11', range: { gte: 10, lte: 11 } },
-  { key: '12-13', label: '中危 12-13', range: { gte: 12, lte: 13 } },
-  { key: '14-15', label: '高危 14-15', range: { gte: 14, lte: 15 } },
+  { key: 'all', label: '全部', range: null },
+  { key: 'low', label: '低危', range: { gte: 6, lte: 9 } },
+  { key: 'medium', label: '中危', range: { gte: 10, lte: 12 } },
+  { key: 'high', label: '高危', range: { gte: 13, lte: 15 } },
 ];
+
+const getRecentAlertLevelColor = (level: number) => {
+  if (level >= 13) return '#f5023d';
+  if (level >= 10) return '#e3b337';
+  return '#31ABE3';
+};
 
 const changeLevelFilter = (level: string) => {
   state.selectedLevel = level;
@@ -357,7 +363,7 @@ onBeforeUnmount(() => {
             </span>
             <span
               class="text-center text-xs font-bold font-mono"
-              :style="{ color: item.rule.level >= 13 ? '#f5023d' : '#e3b337' }"
+              :style="{ color: getRecentAlertLevelColor(item.rule.level) }"
             >
               L{{ item.rule.level }}
             </span>

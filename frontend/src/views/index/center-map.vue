@@ -14,10 +14,10 @@
 
     <!-- 底部图例 -->
     <div class="legend">
-      <div class="item"><span class="box manager"></span> 管理中心</div>
-      <div class="item"><span class="box active"></span> 正常主机</div>
-      <div class="item"><span class="box threat"></span> 存在威胁的主机</div>
-      <div class="item"><span class="box offline"></span> 离线主机</div>
+      <div class="item"><span class="legend-symbol manager"><img :src="serverIcon" alt="" /></span> 管理中心</div>
+      <div class="item"><span class="legend-symbol active"><img :src="computerIcon" alt="" /></span> 在线主机</div>
+      <div class="item"><span class="legend-symbol threat"><img :src="computerIcon" alt="" /></span> 近30分钟有高等级告警</div>
+      <div class="item"><span class="legend-symbol offline"><img :src="computerIcon" alt="" /></span> 离线主机</div>
     </div>
 
     <!-- 加载遮罩 -->
@@ -29,6 +29,8 @@
 import { onMounted, onUnmounted, ref, nextTick } from 'vue';
 import { Graph } from '@antv/x6';
 import axios from 'axios';
+import serverIcon from '@/assets/img/topology/server.svg';
+import computerIcon from '@/assets/img/topology/computer.svg';
 
 // --- 配置区 ---
 const TOPOLOGY_API_URL = import.meta.env.VITE_TOPOLOGY_API_URL?.trim() || 'http://127.0.0.1:8000/api/topo';
@@ -42,24 +44,45 @@ const NODE_PADDING = 20;
 const MIN_NODE_WIDTH = 80;
 const MAX_NODE_WIDTH = 240;
 
-/** 根据文本行估算所需节点宽度，结果限制在 [minW, maxW] 之间 */
-const calcNodeWidth = (lines: string[], minW = MIN_NODE_WIDTH, maxW = MAX_NODE_WIDTH): number => {
-  const maxChars = Math.max(...lines.map(l => l.length));
-  return Math.max(minW, Math.min(maxW, Math.round(maxChars * CHAR_WIDTH + NODE_PADDING)));
+/** 根据 IP 长度估算节点宽度。 */
+const calcNodeWidth = (ip: string): number => {
+  return Math.max(MIN_NODE_WIDTH, Math.min(MAX_NODE_WIDTH, Math.round(ip.length * CHAR_WIDTH + NODE_PADDING)));
 };
 
-/** 节点宽度已达上限时，用省略号截断超长文本 */
-const truncateText = (lines: string[], maxW = MAX_NODE_WIDTH): string => {
+/** 节点宽度已达上限时，用省略号截断超长 IP。 */
+const truncateText = (ip: string, maxW = MAX_NODE_WIDTH): string => {
   const maxChars = Math.floor((maxW - NODE_PADDING) / CHAR_WIDTH);
-  return lines.map(line =>
-    line.length > maxChars ? line.slice(0, Math.max(maxChars - 1, 1)) + '…' : line
-  ).join('\n');
+  return ip.length > maxChars ? ip.slice(0, Math.max(maxChars - 1, 1)) + '…' : ip;
 };
 
-/** 根据节点背景色选择可读的文字颜色 */
-const labelColorFor = (hasThreat: boolean, status: string): string => {
-  if (hasThreat || status !== 'active') return '#ffffff'; // 红/灰背景 → 白色文字
-  return '#1f2937'; // 绿色背景 → 深色文字
+const NODE_HEIGHT = 96;
+
+/** 设备剪影为节点主体，圆形光环和状态灯表示运行状态。 */
+const addDeviceNode = (id: string, x: number, y: number, width: number, icon: string, ip: string, color: string) => {
+  const attrs = {
+    body: { cx: width / 2, cy: 32, r: 31, fill: '#ffffff', stroke: color, strokeWidth: 3 },
+    icon: { x: (width - 48) / 2, y: 8, width: 48, height: 48, xlinkHref: icon },
+    status: { cx: width / 2 + 25, cy: 12, r: 6, fill: color, stroke: '#ffffff', strokeWidth: 2 },
+    // X6 的 text 节点默认位于节点中心；这里的 x/y 是相对中心的偏移。
+    ipText: { text: ip, x: 0, y: 27, textAnchor: 'middle', dominantBaseline: 'middle', fill: '#1f2937', fontSize: 11, fontWeight: 600 },
+  };
+  const existing = graph!.getNodes().find(node => node.id === id);
+  if (existing) {
+    // 刷新状态和 IP，保留用户拖动后的坐标及原有节点视图。
+    if (existing.size().width !== width) existing.resize(width, NODE_HEIGHT);
+    existing.attr(attrs);
+    return;
+  }
+  graph!.addNode({
+    id, x, y, width, height: NODE_HEIGHT,
+    markup: [
+      { tagName: 'circle', selector: 'body' },
+      { tagName: 'image', selector: 'icon' },
+      { tagName: 'circle', selector: 'status' },
+      { tagName: 'text', selector: 'ipText' },
+    ],
+    attrs,
+  });
 };
 
 const containerRef = ref<HTMLElement | null>(null);
@@ -110,9 +133,9 @@ const fetchTopoData = async () => {
 // 3. 渲染逻辑
 const renderTopology = (agents: any[]) => {
   if (!graph) return;
-  graph.getNodes().forEach(node => graph!.removeNode(node));
-  graph.getEdges().forEach(edge => graph!.removeEdge(edge));
-  graph.clearCells();
+  const firstRender = graph.getNodes().length === 0;
+  const activeNodeIds = new Set<string>();
+  const activeEdgeIds = new Set<string>();
   // --- 布局参数 ---
   const centerX = containerRef.value?.clientWidth ? containerRef.value.clientWidth / 2 : 400;
   const startY = 80;
@@ -124,29 +147,18 @@ const renderTopology = (agents: any[]) => {
   const managerData = agents.find(a => a.ip === '127.0.0.1' || a.name.toLowerCase().includes('manager'));
   const managerId = 'manager-node';
 
-  const managerLabelLines = ['MANAGER', `${managerData?.name || 'Wazuh Server'}`];
-  const managerNodeWidth = calcNodeWidth(managerLabelLines);
-  const managerLabel = managerNodeWidth >= MAX_NODE_WIDTH ? truncateText(managerLabelLines) : managerLabelLines.join('\n');
+  const managerIp = String(managerData?.ip || '127.0.0.1');
+  const managerNodeWidth = calcNodeWidth(managerIp);
 
-  graph.addNode({
-    id: managerId,
-    x: centerX - managerNodeWidth / 2,
-    y: startY,
-    width: managerNodeWidth,
-    height: 60,
-    label: managerLabel,
-    attrs: {
-      body: { fill: '#1890ff', stroke: '#fff', strokeWidth: 2, rx: 10, ry: 10 },
-      label: { fill: '#ffffff', fontSize: 12, fontWeight: 'bold' }
-    }
-  });
+  addDeviceNode(managerId, centerX - managerNodeWidth / 2, startY, managerNodeWidth, serverIcon, truncateText(managerIp), '#1890ff');
+  activeNodeIds.add(managerId);
 
   // --- B. 绘制其他 Agents ---
   const otherAgents = agents.filter(a => a.ip !== '127.0.0.1' && !a.name.toLowerCase().includes('manager'));
 
   // 预计算所有节点的宽度，确保水平间距足够
-  const agentWidths = otherAgents.map(a => calcNodeWidth([a.name, a.ip]));
-  const maxAgentWidth = Math.max(...agentWidths);
+  const agentWidths = otherAgents.map(a => calcNodeWidth(String(a.ip || 'unknown')));
+  const maxAgentWidth = Math.max(0, ...agentWidths);
   const dynamicGapX = Math.max(gapX, maxAgentWidth + 30); // 节点边缘间至少保持 30px 间距
 
   // 计算总宽度以居中对齐
@@ -166,48 +178,35 @@ const renderTopology = (agents: any[]) => {
     }
 
     const nodeId = `agent-${agent.id}`;
+    const edgeId = `manager-to-${agent.id}`;
     const nodeWidth = agentWidths[index];
-    const displayLabel = nodeWidth >= MAX_NODE_WIDTH ? truncateText([agent.name, agent.ip]) : `${agent.name}\n${agent.ip}`;
+    const displayIp = truncateText(String(agent.ip || 'unknown'));
 
     // 添加节点
-    graph!.addNode({
-      id: nodeId,
-      x: startX + (index * dynamicGapX) - nodeWidth / 2,
-      y: agentY,
-      width: nodeWidth,
-      height: 45,
-      label: displayLabel,
-      attrs: {
-        body: {
-          fill: nodeColor,
-          stroke: hasThreat ? '#fffb8f' : '#fff',
-          strokeWidth: hasThreat ? 3 : 1,
-          rx: 5, ry: 5,
-        },
-        label: { fill: labelColorFor(hasThreat, status), fontSize: 10 }
-      }
-    });
+    addDeviceNode(nodeId, startX + (index * dynamicGapX) - nodeWidth / 2, agentY, nodeWidth, computerIcon, displayIp, nodeColor);
+    activeNodeIds.add(nodeId);
 
-    // 添加连接线
-    graph!.addEdge({
-      source: managerId,
-      target: nodeId,
-      connector: { name: 'rounded' },
-      attrs: {
-        line: {
-          stroke: hasThreat ? '#ff4d4f' : '#444',
-          strokeWidth: hasThreat ? 2 : 1,
-          targetMarker: 'classic',
-          dasharray: status !== 'active' ? '5 5' : '0', // 离线节点使用虚线
-        }
-      }
-    });
+    // 只更新连线样式，避免刷新时重复生成连线。
+    const line = {
+      stroke: hasThreat ? '#ff4d4f' : '#444',
+      strokeWidth: hasThreat ? 2 : 1,
+      targetMarker: 'classic',
+      dasharray: status !== 'active' ? '5 5' : '0', // 离线节点使用虚线
+    };
+    const existingEdge = graph!.getEdges().find(edge => edge.id === edgeId);
+    if (existingEdge) {
+      existingEdge.attr('line', line);
+    } else {
+      graph!.addEdge({ id: edgeId, source: managerId, target: nodeId, connector: { name: 'rounded' }, attrs: { line } });
+    }
+    activeEdgeIds.add(edgeId);
   });
 
-  // 自动调整视角
-  nextTick(() => {
-    graph?.centerContent();
-  });
+  graph.getEdges().filter(edge => !activeEdgeIds.has(edge.id)).forEach(edge => graph!.removeEdge(edge));
+  graph.getNodes().filter(node => !activeNodeIds.has(node.id)).forEach(node => graph!.removeNode(node));
+
+  // 仅首次载入时居中，定时刷新不改变用户调整过的画布视角和节点位置。
+  if (firstRender) nextTick(() => graph?.centerContent());
 };
 
 // --- 生命周期控制 ---
@@ -305,19 +304,26 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
-.legend .item { display: flex; align-items: center; }
+.legend .item { display: flex; align-items: center; white-space: nowrap; }
 
-.box {
-  width: 12px;
-  height: 12px;
-  margin-right: 6px;
-  border-radius: 2px;
+.legend-symbol {
+  width: 28px;
+  height: 28px;
+  margin-right: 7px;
+  border: 2px solid;
+  border-radius: 50%;
+  background: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
-.box.manager { background: #1890ff; }
-.box.active { background: #52c41a; }
-.box.threat { background: #ff4d4f; }
-.box.offline { background: #555; }
+.legend-symbol img { width: 19px; height: 19px; }
+.legend-symbol.manager { border-color: #1890ff; }
+.legend-symbol.active { border-color: #52c41a; }
+.legend-symbol.threat { border-color: #ff4d4f; }
+.legend-symbol.offline { border-color: #555; }
 
 .loading-mask {
   position: absolute;

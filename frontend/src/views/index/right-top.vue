@@ -82,7 +82,7 @@ const setOption = (xData: any[], yLow: any[], yMid: any[], yHigh: any[]) => {
       trigger: "axis",
       backgroundColor: "rgba(255,255,255,.95)",
       borderColor: "rgba(49, 171, 227, 0.3)",
-      textStyle: { color: "#FFF" },
+      textStyle: { color: "#1f2937" },
     },
     grid: {
       show: true, left: "10px", right: "30px", bottom: "10px", top: "32px", containLabel: true, borderColor: "#e5e7eb",

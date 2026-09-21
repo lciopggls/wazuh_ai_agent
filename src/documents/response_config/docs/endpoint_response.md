@@ -1,6 +1,6 @@
 # Windows Agent 进程终止与账户控制部署验证
 
-完整环境、Manager、Indexer 和后端部署顺序见 [主部署文档](../README.md)。本文分别说明
+完整环境、Manager、Indexer 和后端部署顺序见 [主部署文档](../../../../README.md)。本文分别说明
 进程响应和账户响应，但二者共用同一套 Agent 脚本、结果日志和 Manager 规则。
 
 本文部署两个仅供演示的 Windows Active Response 功能：
@@ -28,9 +28,7 @@ demo_user
 管理员 PowerShell 检查：
 
 ```powershell
-Get-CimInstance -ClassName Win32_UserAccount `
-  -Filter "LocalAccount=True AND Name='demo_user'" |
-Select-Object Name, Disabled, SID
+Get-CimInstance -ClassName Win32_UserAccount -Filter "LocalAccount=True AND Name='demo_user'" | Select-Object Name, Disabled, SID
 ```
 
 必须能看到一条本地账户记录。
@@ -89,9 +87,9 @@ if (-not (Test-Path $resultLog)) {
     New-Item -ItemType File -Path $resultLog -Force
 }
 
-Restart-Service -Name wazuh
+Restart-Service -Name wazuhsvc
 Start-Sleep -Seconds 15
-Get-Service -Name wazuh
+Get-Service -Name wazuhsvc
 ```
 
 预期服务状态为 `Running`。
@@ -123,17 +121,17 @@ Response 配置区域：
 
 ## 5. 安装 Manager 查询结果规则
 
-把 `../wazuh_manager/rules/manager-endpoint-response-rule.xml` 上传并复制为：
+把 `../wazuh_manager/rules/manager-endpoint-response-rule.xml` 复制到：
 
 ```text
-/var/ossec/etc/rules/wazuh_ai_endpoint_response.xml
+/var/ossec/etc/rules/manager-endpoint-response-rule.xml
 ```
 
 执行：
 
 ```bash
-sudo chown wazuh:wazuh /var/ossec/etc/rules/wazuh_ai_endpoint_response.xml
-sudo chmod 660 /var/ossec/etc/rules/wazuh_ai_endpoint_response.xml
+sudo chown wazuh:wazuh /var/ossec/etc/rules/manager-endpoint-response-rule.xml
+sudo chmod 660 /var/ossec/etc/rules/manager-endpoint-response-rule.xml
 sudo /var/ossec/bin/wazuh-analysisd -t
 ```
 
@@ -149,8 +147,7 @@ sudo systemctl status wazuh-manager --no-pager
 
 ## 6. 启动后端
 
-继续使用主部署文档中的 Indexer 直连配置；如果当前环境使用可选 SSH 隧道，则保持隧道
-窗口运行。不需要为端点响应增加其他端口。
+继续使用主部署文档中的 Indexer 直连配置，不需要为端点响应增加其他端口。
 
 停止旧进程，然后在项目根目录重新启动：
 
@@ -233,9 +230,7 @@ success（已验证成功）
 目标 Agent 交叉验证：
 
 ```powershell
-Get-CimInstance -ClassName Win32_UserAccount `
-  -Filter "LocalAccount=True AND Name='demo_user'" |
-Select-Object Name, Disabled, SID
+Get-CimInstance -ClassName Win32_UserAccount -Filter "LocalAccount=True AND Name='demo_user'" | Select-Object Name, Disabled, SID
 ```
 
 此时 `Disabled` 应为 `True`。重复禁用仍应返回 `success`，并说明原状态已经符合要求。
@@ -291,5 +286,5 @@ sudo grep 'wazuh_ai_endpoint_response' /var/ossec/logs/alerts/alerts.json | tail
 1. `endpoint-response-query.log` 是否生成了相同 `request_id` 的 JSON。
 2. Agent 的 `ossec.conf` 是否采集该日志，Wazuh Agent 是否为 `Running`。
 3. Manager 的规则 100211 是否命中。
-4. 后端是否能直连 `<INDEXER_IP>:9200`；使用隧道时确认 SSH 窗口是否仍在运行。
+4. 后端是否能直连 `<INDEXER_IP>:9200`。
 5. `.env` 中的 Indexer 主机、端口和账号是否仍然正确。

@@ -1,6 +1,6 @@
 # Windows Agent 入站 TCP 54321 封禁部署与验证
 
-完整环境、Manager、Indexer 和后端部署顺序见 [主部署文档](../README.md)。本文保留端口
+完整环境、Manager、Indexer 和后端部署顺序见 [主部署文档](../../../../README.md)。本文保留端口
 响应的完整配置、限制和专项验证步骤。
 
 该功能只用于展示，固定限制如下：
@@ -67,9 +67,9 @@ if (-not (Test-Path $queryLog)) {
     New-Item -ItemType File -Path $queryLog -Force
 }
 
-Restart-Service -Name wazuh
+Restart-Service -Name wazuhsvc
 Start-Sleep -Seconds 15
-Get-Service -Name wazuh
+Get-Service -Name wazuhsvc
 ```
 
 预期服务状态为 `Running`。
@@ -123,12 +123,17 @@ Get-Service -Name wazuh
 
 ## 4. 安装 Manager 查询规则
 
-复制规则：
+将 `../wazuh_manager/rules/manager-port-query-rule.xml` 复制到：
+
+```text
+/var/ossec/etc/rules/manager-port-query-rule.xml
+```
+
+然后执行：
 
 ```bash
-sudo cp /tmp/manager-port-query-rule.xml /var/ossec/etc/rules/demo_port_query.xml
-sudo chown wazuh:wazuh /var/ossec/etc/rules/demo_port_query.xml
-sudo chmod 660 /var/ossec/etc/rules/demo_port_query.xml
+sudo chown wazuh:wazuh /var/ossec/etc/rules/manager-port-query-rule.xml
+sudo chmod 660 /var/ossec/etc/rules/manager-port-query-rule.xml
 sudo /var/ossec/bin/wazuh-analysisd -t
 ```
 
@@ -146,12 +151,7 @@ sudo systemctl status wazuh-manager --no-pager
 在目标 Windows Agent 的管理员 PowerShell 中创建临时允许规则：
 
 ```powershell
-New-NetFirewallRule `
-  -DisplayName "Demo_Allow_In_TCP_54321" `
-  -Direction Inbound `
-  -Action Allow `
-  -Protocol TCP `
-  -LocalPort 54321
+New-NetFirewallRule -DisplayName "Demo_Allow_In_TCP_54321" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 54321
 ```
 
 随后启动临时 HTTP 服务：

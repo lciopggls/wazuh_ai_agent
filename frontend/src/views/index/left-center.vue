@@ -95,7 +95,7 @@ const setOption = () => {
       trigger: "item",
       backgroundColor: "rgba(255,255,255,.95)",
       borderColor: "rgba(49, 171, 227, 0.3)",
-      textStyle: { color: "#FFF" },
+      textStyle: { color: "#1f2937" },
     },
     series: [
       {

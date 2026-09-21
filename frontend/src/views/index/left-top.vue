@@ -32,7 +32,8 @@ const getWazuhData = async () => {
     const agentsRes = await axios.get('/wazuh-api/agents', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
-    const agents = agentsRes.data.data.affected_items;
+    // Wazuh 会在 /agents 中返回 ID 为 000 的 Manager；概览只统计受控主机。
+    const agents = agentsRes.data.data.affected_items.filter((a: { id: string }) => String(a.id) !== '000');
 
     // 3. 数据映射
     state.totalNum = agents.length;

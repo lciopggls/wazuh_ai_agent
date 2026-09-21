@@ -2,7 +2,7 @@
 
 事件响应智能体使用同一套 `block-ip` 脚本完成定时封禁、永久封禁、手动解封和规则记录。实现遵循 Wazuh 4.x Active Response 协议：Agent 通过 stdin 向脚本发送 JSON，定时封禁通过 `check_keys`/`continue` 握手去重，并在超时后用 `delete` 命令撤销。
 
-完整环境、Manager、Indexer 和后端部署顺序见 [主部署文档](../README.md)。本文只补充 IP
+完整环境、Manager、Indexer 和后端部署顺序见 [主部署文档](../../../../README.md)。本文只补充 IP
 响应的协议、查询链路和专项验证。
 
 官方协议说明：
@@ -29,7 +29,7 @@ C:\Program Files (x86)\ossec-agent\active-response\bin\block-ip.ps1
 部署后重启 Agent：
 
 ```powershell
-Restart-Service -Name wazuh
+Restart-Service -Name wazuhsvc
 ```
 
 ## 2. 在 Manager 注册命令
@@ -152,14 +152,14 @@ C:\Program Files (x86)\ossec-agent\ossec.conf
 将 `../wazuh_manager/rules/manager-query-rule.xml` 复制到 Manager：
 
 ```text
-/var/ossec/etc/rules/wazuh_ai_block_query.xml
+/var/ossec/etc/rules/manager-query-rule.xml
 ```
 
 然后执行：
 
 ```bash
-sudo chown wazuh:wazuh /var/ossec/etc/rules/wazuh_ai_block_query.xml
-sudo chmod 660 /var/ossec/etc/rules/wazuh_ai_block_query.xml
+sudo chown wazuh:wazuh /var/ossec/etc/rules/manager-query-rule.xml
+sudo chmod 660 /var/ossec/etc/rules/manager-query-rule.xml
 sudo /var/ossec/bin/wazuh-analysisd -t
 sudo systemctl restart wazuh-manager
 ```
@@ -180,7 +180,7 @@ Test-NetConnection <INDEXER_IP> -Port 9200
 curl.exe -k -u <INDEXER_USER> https://<INDEXER_IP>:9200
 ```
 
-直连失败或安全策略禁止开放 9200 时，再按照主部署文档使用本地 SSH 隧道。
+后端必须能够直连 `<INDEXER_IP>:9200`；如果连接失败，应检查网络、防火墙和索引服务配置。
 
 ## 4. 验证方法
 
