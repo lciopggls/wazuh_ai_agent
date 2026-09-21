@@ -20,7 +20,6 @@ coverage
 .env.local
 .env.*.local
 auto-imports.d.ts
-pnpm-workspace.yaml
 
 /cypress/videos/
 /cypress/screenshots/
