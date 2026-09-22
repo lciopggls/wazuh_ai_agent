@@ -10,7 +10,8 @@ What it installs
     3. NLP assets used by the knowledge-graph feature: spaCy + en_core_web_sm and
        the NLTK punkt / punkt_tab corpora (see README section 3.2).
     4. Config files copied from the examples when missing (.env,
-       frontend/.env.development) and the frontend pnpm dependencies.
+       frontend/.env.development), Node.js 22 and pnpm setup on Linux when
+       needed, and the frontend pnpm dependencies.
 
 Usage (run from the project root, with any Python >= 3.11)
     python install_deps.py                  # install everything into <project>/.venv
@@ -256,6 +257,91 @@ def find_pnpm() -> str | None:
     return None
 
 
+def node_is_compatible() -> bool:
+    """The frontend requires Node.js 20.11 or newer."""
+    version = capture(["node", "--version"])
+    if not version:
+        return False
+    try:
+        major, minor, *_ = (int(part) for part in version.lstrip("v").split("."))
+    except ValueError:
+        return False
+    return (major, minor) >= (20, 11)
+
+
+def ensure_pnpm(args: argparse.Namespace) -> str | None:
+    """Prepare a user-owned Node.js and pnpm on Linux when they are missing.
+
+    Use nvm in the user's home rather than changing the distribution's Node.js.
+    The current Python process gets the nvm Node directory added to PATH, so
+    pnpm is usable immediately without asking the user to reopen the shell.
+    """
+    pnpm = find_pnpm()
+    if pnpm and node_is_compatible():
+        return pnpm
+    if args.check:
+        log("would install Node.js 22 and enable pnpm if needed")
+        return None
+    if IS_WINDOWS:
+        log_error("automatic Node.js setup is supported on Linux; install Node.js 20.11+ and pnpm")
+        return None
+
+    nvm_dir = Path.home() / ".nvm"
+    nvm_script = nvm_dir / "nvm.sh"
+    if not nvm_script.is_file():
+        if nvm_dir.exists():
+            log_error(f"{nvm_dir} exists but nvm.sh is missing; inspect it before retrying")
+            return None
+        git = shutil.which("git")
+        if not git:
+            log_error("git is required to install nvm; install it with 'sudo apt install git'")
+            return None
+        log("installing nvm v0.40.8 in the current user's home directory")
+        if not run([git, "clone", "--depth", "1", "--branch", "v0.40.8",
+                    "https://github.com/nvm-sh/nvm.git", str(nvm_dir)], args,
+                   timeout=DOWNLOAD_TIMEOUT):
+            return None
+
+    # nvm is a shell function, so source it in bash and ask it for Node's bin
+    # directory. Do not source anything from the project repository.
+    bash = shutil.which("bash")
+    if not bash:
+        log_error("bash is required for nvm")
+        return None
+    script = 'source "$1" && nvm install 22 >/dev/null && nvm which 22'
+    log("installing or selecting Node.js 22 with nvm")
+    try:
+        result = subprocess.run(
+            [bash, "-c", script, "bash", str(nvm_script)],
+            capture_output=True, text=True, timeout=DOWNLOAD_TIMEOUT,
+            env=build_env(args.mirror, args.no_cache),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log_error(f"Node.js setup failed: {exc}")
+        return None
+    if result.returncode:
+        log_error(f"Node.js setup failed: {result.stderr.strip()}")
+        return None
+    node_path = Path(result.stdout.strip().splitlines()[-1])
+    if not node_path.is_file():
+        log_error("nvm did not return a usable Node.js executable")
+        return None
+    os.environ["PATH"] = str(node_path.parent) + os.pathsep + os.environ.get("PATH", "")
+    if not node_is_compatible():
+        log_error("Node.js 20.11+ is still unavailable after installation")
+        return None
+    corepack = shutil.which("corepack")
+    if not corepack:
+        log_error("corepack was not included with Node.js; install it and rerun")
+        return None
+    if not run([corepack, "enable"], args):
+        return None
+    pnpm = find_pnpm()
+    if not pnpm:
+        log_error("pnpm is unavailable after enabling Corepack")
+    return pnpm
+
+
 def read_declared_dependencies(with_dev: bool) -> list[str]:
     """Read dependencies from pyproject.toml so the lists never drift."""
     try:
@@ -398,8 +484,11 @@ def install_frontend(args: argparse.Namespace, pnpm: str | None) -> bool:
     if not FRONTEND_DIR.is_dir():
         log_warn("frontend directory not found, skipped")
         return True
+    if args.check and not pnpm:
+        log("would run pnpm install after Node.js and pnpm setup")
+        return True
     if not pnpm:
-        log_warn("pnpm not found; install Node.js 20.11+ and run 'corepack enable', then rerun")
+        log_error("pnpm is unavailable; automatic Node.js/Corepack setup did not complete")
         return False
     if run([pnpm, "install"], args, cwd=FRONTEND_DIR):
         return True
@@ -476,7 +565,7 @@ def main() -> int:
     uv = shutil.which("uv")
     pnpm = find_pnpm()
     log(f"uv: {uv or 'NOT FOUND'}")
-    log(f"pnpm: {pnpm or 'NOT FOUND'}")
+    log(f"pnpm: {pnpm or 'NOT FOUND (will set up automatically on Linux)'}")
     if not uv:
         log_warn("uv not found; falling back to pip (README 2.2.1: winget install --id astral-sh.uv -e)")
     if python_version_of(Path(sys.executable)) is None:
@@ -511,8 +600,10 @@ def main() -> int:
         copy_file_if_missing(FRONTEND_DIR / ".env.example", FRONTEND_DIR / ".env.development", args)
 
     log_step(6, total, steps[5])
-    if not args.skip_frontend and not install_frontend(args, pnpm):
-        FAILED.append("install frontend dependencies")
+    if not args.skip_frontend:
+        pnpm = ensure_pnpm(args)
+        if not install_frontend(args, pnpm):
+            FAILED.append("install frontend dependencies")
 
     return finish()
 
