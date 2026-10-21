@@ -1,0 +1,20 @@
+[Unit]
+Description=Wazuh AI frontend and API proxy on port 8112
+Wants=network-online.target wazuh-memory.service
+After=network-online.target wazuh-memory.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@FRONTEND_DIR@
+ExecStart=@NODE_EXEC@ node_modules/vite/bin/vite.js --host 0.0.0.0 --port 8112 --strictPort
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

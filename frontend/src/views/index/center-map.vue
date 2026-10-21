@@ -4,10 +4,13 @@
     <div class="header">
       <div class="title">网络拓扑监控</div>
       <div class="status-info">
-        <span class="dot active"></span> 运行中 (每30s刷新)
-        <button @click="fetchTopoData" class="refresh-btn">立即刷新</button>
+        <span class="dot" :class="{ active: !fetchError && lastUpdated }"></span>
+        <span :title="fetchError">{{ statusText }}</span>
+        <button @click="fetchTopoData" :disabled="loading" class="refresh-btn">立即刷新</button>
       </div>
     </div>
+
+    <div v-if="fetchError" class="fetch-error" role="alert">{{ fetchError }}{{ lastUpdated ? '（保留上次成功数据）' : '' }}</div>
 
     <!-- 图表容器 -->
     <div ref="containerRef" class="x6-graph"></div>
@@ -26,15 +29,13 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, nextTick } from 'vue';
+import { onMounted, onUnmounted, ref, computed, nextTick } from 'vue';
 import { Graph } from '@antv/x6';
-import axios from 'axios';
+import { fetchTopology, resolveManagerAddress, type TopologyAgent } from '@/api/topology';
 import serverIcon from '@/assets/img/topology/server.svg';
 import computerIcon from '@/assets/img/topology/computer.svg';
 
 // --- 配置区 ---
-const TOPOLOGY_API_URL = import.meta.env.VITE_TOPOLOGY_API_URL?.trim() || 'http://127.0.0.1:8000/api/topo';
-const TOPOLOGY_MOCK_URL = '/topology/agents_topo_data.json';
 const REFRESH_INTERVAL = 30000; // 30秒自动刷新一次
 
 // --- 文本与尺寸工具 ---
@@ -88,7 +89,12 @@ const addDeviceNode = (id: string, x: number, y: number, width: number, icon: st
 const containerRef = ref<HTMLElement | null>(null);
 const loading = ref(false);
 let graph: Graph | null = null;
-let timer: any = null;
+const fetchError = ref('');
+const lastUpdated = ref('');
+const statusText = computed(() => fetchError.value ? '刷新失败' : lastUpdated.value
+  ? '运行中 (每30s刷新，上次 ' + lastUpdated.value + ')' : '等待实时数据');
+let timer: ReturnType<typeof setInterval> | null = null;
+let requestController: AbortController | null = null;
 
 // 1. 初始化画布
 const initGraph = () => {
@@ -114,24 +120,32 @@ const fetchTopoData = async () => {
   if (loading.value) return;
   loading.value = true;
   
+  const controller = new AbortController();
+  requestController = controller;
   try {
-    const res = await axios.get(TOPOLOGY_API_URL);
-    renderTopology(res.data);
+    const agents = await fetchTopology({
+      username: import.meta.env.VITE_WAZUH_SERVER_API_USERNAME,
+      password: import.meta.env.VITE_WAZUH_SERVER_API_PASSWORD,
+      indexerUsername: import.meta.env.VITE_WAZUH_INDEXER_USER,
+      indexerPassword: import.meta.env.VITE_WAZUH_INDEXER_PASSWORD,
+    }, controller.signal);
+    if (controller.signal.aborted) return;
+    renderTopology(agents);
+    fetchError.value = '';
+    lastUpdated.value = new Date().toLocaleTimeString();
   } catch (err) {
-    console.warn('实时拓扑接口不可用，回退到内置示例数据。', err);
-    try {
-      const mockRes = await axios.get(TOPOLOGY_MOCK_URL);
-      renderTopology(mockRes.data);
-    } catch (mockErr) {
-      console.error("拓扑数据获取失败:", mockErr);
+    if (!controller.signal.aborted) {
+      fetchError.value = err instanceof Error ? err.message : '拓扑数据获取失败';
+      console.error('拓扑数据获取失败:', err);
     }
   } finally {
     loading.value = false;
+    requestController = null;
   }
 };
 
 // 3. 渲染逻辑
-const renderTopology = (agents: any[]) => {
+const renderTopology = (agents: TopologyAgent[]) => {
   if (!graph) return;
   const firstRender = graph.getNodes().length === 0;
   const activeNodeIds = new Set<string>();
@@ -143,18 +157,18 @@ const renderTopology = (agents: any[]) => {
   const gapX = 180; // 节点横向间距
 
   // --- A. 绘制 Manager 节点 ---
-  // 通常 127.0.0.1 或特定名称的是 Manager
-  const managerData = agents.find(a => a.ip === '127.0.0.1' || a.name.toLowerCase().includes('manager'));
+  // Wazuh 的 000 节点代表 Manager，不能按主机名称猜测。
+  const managerData = agents.find(a => a.id === '000');
   const managerId = 'manager-node';
 
-  const managerIp = String(managerData?.ip || '127.0.0.1');
+  const managerIp = resolveManagerAddress(managerData?.ip, import.meta.env.VITE_WAZUH_SERVER_API_HOST);
   const managerNodeWidth = calcNodeWidth(managerIp);
 
   addDeviceNode(managerId, centerX - managerNodeWidth / 2, startY, managerNodeWidth, serverIcon, truncateText(managerIp), '#1890ff');
   activeNodeIds.add(managerId);
 
   // --- B. 绘制其他 Agents ---
-  const otherAgents = agents.filter(a => a.ip !== '127.0.0.1' && !a.name.toLowerCase().includes('manager'));
+  const otherAgents = agents.filter(a => a.id !== '000');
 
   // 预计算所有节点的宽度，确保水平间距足够
   const agentWidths = otherAgents.map(a => calcNodeWidth(String(a.ip || 'unknown')));
@@ -221,6 +235,7 @@ onMounted(() => {
 onUnmounted(() => {
   // 组件销毁时必须清理定时器
   if (timer) clearInterval(timer);
+  requestController?.abort();
   if (graph) {graph.dispose();
               graph=null;
   }
@@ -228,6 +243,18 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.fetch-error {
+  position: absolute;
+  top: 64px;
+  left: 15px;
+  right: 15px;
+  z-index: 9;
+  padding: 8px 12px;
+  background: #fff1f0;
+  color: #a8071a;
+  border: 1px solid #ffa39e;
+  border-radius: 4px;
+}
 .topo-container {
   position: relative;
   width: 100%;

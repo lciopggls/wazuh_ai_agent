@@ -625,7 +625,6 @@ def finish() -> int:
     log_ok("all required dependencies are installed")
     log("next steps: fill in .env and frontend/.env.development (README 3.1), then start the services:")
     log("  uv run python -m src.service.memory")
-    log("  uv run wazuh-topology-api")
     log("  cd frontend && pnpm dev")
     log("note: 'uv sync' uninstalls the packages added in step 3 and step 4, because")
     log("      pyproject.toml does not declare them. 'uv run <cmd>' does not. If you ever")

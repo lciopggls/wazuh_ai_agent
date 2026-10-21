@@ -9,7 +9,8 @@
     "preview": "vite preview --port 4173",
     "test:chat-persistence": "node --test tests/chat-navigation-persistence.test.mjs",
     "build-only": "vite build",
-    "type-check": "vue-tsc --noEmit"
+    "type-check": "vue-tsc --noEmit",
+    "test:topology": "node --test tests/topology.test.mjs"
   },
   "dependencies": {
     "@antv/layout": "^1.2.14-beta.8",

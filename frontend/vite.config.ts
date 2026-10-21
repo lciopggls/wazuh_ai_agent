@@ -13,6 +13,7 @@ export default defineConfig(({ command, mode }: ConfigEnv): UserConfig => {
   const wazuhProtocol = env.VITE_WAZUH_SERVER_API_PROTOCOL || 'https'
   const wazuhHost = env.VITE_WAZUH_SERVER_API_HOST || '127.0.0.1'
   const wazuhPort = env.VITE_WAZUH_SERVER_API_PORT || '55000'
+  const wazuhIndexerHost = env.VITE_WAZUH_INDEXER_HOST || wazuhHost
   const wazuhIndexerPort = env.VITE_WAZUH_INDEXER_PORT || '9200'
   console.log(command, mode);
   return {
@@ -44,10 +45,18 @@ export default defineConfig(({ command, mode }: ConfigEnv): UserConfig => {
         },
         // Wazuh Indexer 代理
         '/wazuh-indexer': {
-          target: `${wazuhProtocol}://${wazuhHost}:${wazuhIndexerPort}`,
+          target: `${wazuhProtocol}://${wazuhIndexerHost}:${wazuhIndexerPort}`,
           changeOrigin: true,
           secure: false,
           rewrite: (path) => path.replace(/^\/wazuh-indexer/, '')
+        },
+        // 对话记忆、流式响应、报告和知识图谱服务。浏览器统一访问前端地址。
+        '/soc-api': {
+          target: 'http://127.0.0.1:8001',
+          changeOrigin: true,
+          timeout: 0,
+          proxyTimeout: 0,
+          rewrite: (path) => path.replace(/^\/soc-api/, '')
         },
         // AI 智能体 Agent 代理
         '/agent-api': {

@@ -241,11 +241,11 @@ pnpm.cmd install
 notepad .env.development
 ```
 
-前端默认地址为 `http://127.0.0.1:8112`。
+前端默认地址为 `http://127.0.0.1:8112`。其他电脑访问 `http://<运行前端的服务器IP>:8112`；前端和 8001 对话服务在同一台服务器启动，对话请求由前端 `/soc-api` 代理转发。
 
 ## 2.3 后续启动
 
-每次启动项目时分别打开三个 PowerShell 窗口。
+每次启动项目时分别打开两个 PowerShell 窗口。
 
 窗口一：启动对话服务。
 
@@ -254,14 +254,7 @@ Set-Location "<项目根目录>"
 uv run python -m src.service.memory
 ```
 
-窗口二：启动拓扑服务。
-
-```powershell
-Set-Location "<项目根目录>"
-uv run wazuh-topology-api
-```
-
-窗口三：启动前端。
+窗口二：启动前端。
 
 ```powershell
 Set-Location "<项目根目录>\frontend"
@@ -273,8 +266,9 @@ pnpm.cmd dev
 | 服务 | 地址 |
 | --- | --- |
 | 对话服务 | `http://127.0.0.1:8001` |
-| 拓扑服务 | `http://127.0.0.1:8000/api/topo` |
 | 前端 | `http://127.0.0.1:8112` |
+
+麒麟服务器 / Linux 虚拟机如需开机自动启动这两项服务，参见 [systemd 部署说明](deploy/systemd/README.md)。
 
 ## 2.4 可选：启动图工作流调试服务
 
@@ -301,8 +295,7 @@ uv run langgraph dev
 前端配置文件：`<项目根目录>\frontend\.env.development`
 
 - `VITE_WAZUH_SERVER_API_*`：与后端对应的中心服务端 API 配置；
-- `VITE_WAZUH_INDEXER_*`：前端需要使用的索引服务配置；
-- `VITE_TOPOLOGY_API_URL`：保持为拓扑服务地址，默认是 `http://127.0.0.1:8000/api/topo`。
+- `VITE_WAZUH_INDEXER_*`：前端需要使用的索引服务配置，`VITE_WAZUH_INDEXER_HOST` 可选，默认使用 Wazuh Server 主机地址。
 
 ## 3.2 知识图谱扩展
 
@@ -396,7 +389,7 @@ pnpm.cmd install
 
 - 根目录 `.env` 是否存在，模型服务配置是否完整；
 - 中心服务端 API 和索引服务地址、端口、账号密码是否正确；
-- 8001 或 8000 端口是否已被其他进程占用。
+- 8001 端口是否已被其他进程占用。
 
 如果启动日志出现编码错误或中文乱码，可在当前 PowerShell 中启用 Python UTF-8 模式后重新启动对应服务：
 
@@ -408,7 +401,7 @@ $env:PYTHONUTF8 = "1"
 
 ## 4.3 前端无法访问后端
 
-检查三个服务是否都已启动，并确认 `frontend\.env.development` 中的 `VITE_TOPOLOGY_API_URL` 与拓扑服务地址一致。
+检查对话服务和前端是否都已启动。拓扑组件通过前端已有的 `/wazuh-api` 和 `/wazuh-indexer` 代理查询实时数据，请确认前端 Wazuh 配置、凭据和网络连通性。
 
 ## 4.4 采集客户端没有数据
 
@@ -435,6 +428,6 @@ uv run black <修改的Python文件路径>
 
 - `src/agents/`：智能体实现；
 - `src/wazuh_api/`：中心服务端 API 和索引服务 API 封装；
-- `src/service/`：对话服务和拓扑服务；
+- `src/service/`：对话服务；
 - `frontend/`：前端项目；
 - `src/documents/response_config/`：事件响应配置文档。

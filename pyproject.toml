@@ -29,9 +29,6 @@ dependencies = [
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 
-[project.scripts]
-wazuh-topology-api = "service.topology_service:main"
-
 [tool.hatch.build.targets.sdist]
 include = [
   "src/*",

@@ -24,7 +24,7 @@ function isAttributionReportMessage(role: unknown, node: unknown, content: strin
 async function saveChatReport(payload: {
   content: string;
 }): Promise<{ filepath: string; filename: string }> {
-  const response = await fetch("http://127.0.0.1:8001/api/report/save", {
+  const response = await fetch("/soc-api/api/report/save", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -407,7 +407,7 @@ const handleSend = async () => {
   let lineBuffer = '';
 
   try {
-    const response = await fetch('http://127.0.0.1:8001/api/chat/stream', {
+    const response = await fetch('/soc-api/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
